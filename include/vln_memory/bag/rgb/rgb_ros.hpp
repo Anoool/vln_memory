@@ -2,7 +2,7 @@
 
 #include <sensor_msgs/msg/image.hpp>
 
-#include "vln_memory/rgb.hpp"
+#include "vln_memory/bag/rgb/rgb.hpp"
 
 namespace vln_memory
 {

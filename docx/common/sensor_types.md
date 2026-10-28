@@ -1,4 +1,6 @@
-# sensor_types.hpp：跨模块采样时间
+# sensor_types.hpp：采样时间与图像网格
+
+头文件位于 include/vln_memory/bag/common/sensor_types.hpp，属于观测准备层的共享类型。
 
 ## 作用
 
@@ -19,3 +21,17 @@ struct SensorStamp {
 - 当前 decodeRgb 负责检查纳秒字段；本文件是无隐藏处理的数据类型，不提供未经定义的时间换算。
 
 RGB 输入与输出都直接使用此类型。后续模块按同一约定接入即可。
+
+## ImageGeometry：公开图像网格
+
+```cpp
+struct ImageGeometry {
+  std::uint32_t width;
+  std::uint32_t height;
+  std::string frame_id;
+};
+```
+
+宽高与光学帧用于模块间核对布局；此类型不包含内参、时刻或几何注册证明。bag 层可以从 RGB 的公开输出构造 ImageGeometry{rgb.width, rgb.height, rgb.frame_id}，交给 checkDepthRgbAlignment 检查。
+
+该类型拥有 frame_id 字符串，不借用来源消息。它是纯数据契约，不让 Depth 依赖 RGB 内部实现；后续 CameraInfo 也可以使用它检查图像布局。详细规则见 [Depth 模块](../modules/depth/depth.md)。

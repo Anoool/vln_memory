@@ -1,4 +1,4 @@
-#include "vln_memory/rgb.hpp"
+#include "vln_memory/bag/rgb/rgb.hpp"
 
 #include <algorithm>
 #include <cstdint>

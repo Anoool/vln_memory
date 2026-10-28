@@ -1,6 +1,6 @@
 # rgb_ros.cpp / rgb_ros.hpp：ROS Image 适配
 
-源码：[rgb_ros.cpp](../../../src/rgb_ros.cpp)，头文件：[rgb_ros.hpp](../../../include/vln_memory/rgb_ros.hpp)。
+源码：[rgb_ros.cpp](../../../src/bag/rgb/rgb_ros.cpp)，头文件：[rgb_ros.hpp](../../../include/vln_memory/bag/rgb/rgb_ros.hpp)。
 
 ## 实施前规划与自审
 
@@ -27,7 +27,7 @@ bag 模块取得已反序列化的 Image 后直接调用。本接口与 decodeRg
 ## 如何接入
 
 ```cpp
-#include <vln_memory/rgb_ros.hpp>
+#include <vln_memory/bag/rgb/rgb_ros.hpp>
 
 vln_memory::RgbResult processRgbMessage(const sensor_msgs::msg::Image & image)
 {
@@ -47,4 +47,4 @@ target_link_libraries(my_bag_reader PUBLIC vln_memory::vln_memory_rgb_ros)
 
 与核心一致：未支持编码返回 unsupported_encoding；空 frame_id 和零时间戳原样保留，能否定位由后续 TF/组装层判断。当前仅支持未压缩 Image。
 
-真实 ROS 消息测试位于 `test/test_rgb_ros.cpp`，执行方式见 [适配测试说明](tests/test_rgb_ros.md)，实际结果见 [RGB 验证记录](rgb.md#实施与验证记录)。缺少 ROS 环境时，不用仿造消息头冒充真实 ROS 集成测试。
+真实 ROS 消息测试位于 `test/bag/rgb/test_rgb_ros.cpp`，执行方式见 [适配测试说明](tests/test_rgb_ros.md)，实际结果见 [RGB 验证记录](rgb.md#实施与验证记录)。缺少 ROS 环境时，不用仿造消息头冒充真实 ROS 集成测试。

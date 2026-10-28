@@ -1,18 +1,51 @@
-# vln_memory 五模块框架
+# 当前源码组织与观测准备层 bag
 
-## 模块职责与接口方向
+整个系统的目标、后续各层和实施顺序见 [系统整体规划](system_plan.md)。**当前只在开发观测准备层 bag，RGB 与 Depth 是该层的两个子模块。**
+
+## 源码目录约定
+
+```text
+include/vln_memory/
+└── bag/
+    ├── common/sensor_types.hpp
+    ├── rgb/rgb.hpp
+    ├── rgb/rgb_ros.hpp
+    ├── depth/depth.hpp
+    └── depth/depth_ros.hpp
+src/
+└── bag/
+    ├── rgb/rgb.cpp
+    ├── rgb/rgb_ros.cpp
+    ├── depth/depth.cpp
+    └── depth/depth_ros.cpp
+test/
+├── bag/
+│   ├── rgb/test_rgb.cpp
+│   ├── rgb/test_rgb_ros.cpp
+│   ├── depth/test_depth.cpp
+│   └── depth/test_depth_ros.cpp
+└── install_consumer/
+```
+
+- include、src、模块测试按“层/模块”对应，头文件安装后保留同样路径。
+- bag/common 只放观测准备层共用类型；没有实现文件时不创建 src/bag/common 空目录。
+- 后续本层分别添加 bag/camera_info、bag/tf、bag/builder；最后一个是 bag 读取和组装入口，避免 bag/bag 的重复含义。
+- 记忆、构建、插件和 Viewer 层开始实现时才添加同级目录，不提前生成空类。
+- 函数签名、vln_memory 命名空间和已导出库目标保持，公开 include 路径使用新分类。
+
+## 本层五个模块的职责与接口方向
 
 | 模块 | 输入 | 输出 | 状态 |
 | --- | --- | --- | --- |
 | RGB | 原始图像字段或 ROS Image | 独立持有像素的标准 rgb8 帧，或结构化错误 | 已实现 |
-| Depth | 深度图像及明确单位 | 米制深度与质量信息 | 后续实现 |
+| Depth | 深度图像、明确单位与注册声明 | 米制深度、质量及 RGB 网格检查 | 已实现 |
 | CameraInfo | CameraInfo 及时间关联信息 | 可追溯标定与相机模型 | 后续实现 |
 | TF | TF/TFStatic 及查询时刻 | map 中的历史相机/底盘位姿 | 后续实现 |
-| bag | bag 文件及提取配置 | 组合 Observation、媒体与 JSONL 报告 | 后续实现 |
+| bag 读取与组装（builder） | bag 文件及提取配置 | 组合 Observation、媒体与 JSONL 报告 | 后续实现 |
 
 五模块属于同一个 vln_memory 包。bag 负责反序列化、跨消息同步、来源 ID、PNG/NPY 保存和 JSONL 组装，调用前四个数据处理模块；前四模块不反向依赖 bag，也不相互读取对方的内部状态。
 
-跨模块时间使用 [SensorStamp](../common/sensor_types.md)，保留原始整数采样时间；来源时钟、map 基准和观测组合由 bag 层负责。
+跨模块时间与图像网格使用 [共享数据类型](../common/sensor_types.md)，保留原始整数采样时间；来源时钟、map 基准和观测组合由 bag 层负责。
 
 ## 当前 RGB 调用链
 
@@ -23,6 +56,16 @@ ROS Image -> decodeRosRgb -> RgbImageView -> decodeRgb -> RgbFrame / RgbErrorCod
 - 接口、实现规划和验证记录放在 [RGB 模块说明](../modules/rgb/rgb.md)。
 - 构建目标与导出方式见 [CMakeLists 说明](CMakeLists.md)。
 
+## 当前 Depth 调用链
+
+ROS Image -> decodeRosDepth -> DepthImageView + DepthOptions -> decodeDepth -> DepthFrame
+
+- 16UC1/32FC1 编码只说明数值类型，单位与 optical_z 必须显式指定。
+- 输入单位、过滤范围、无效值原因和注册声明保留在输出中。
+- ImageGeometry 让 Depth 检查实际配对 RGB 网格，无需链接 RGB 实现。
+- 不以相同尺寸推断注册，不承担标定、时间同步或未对齐重投影。
+- 实施计划、接口、示例及验证记录见 [Depth 模块](../modules/depth/depth.md)。
+
 ## 开发与人工审阅约定
 
 1. 先规划一个小模块的输入、输出、职责、错误和依赖，再自审是否满足整体框架。
@@ -31,6 +74,7 @@ ROS Image -> decodeRosRgb -> RgbImageView -> decodeRgb -> RgbFrame / RgbErrorCod
 4. 完成后通读公开头、实现、构建设置及示例，检查与其他模块的接口是否一致。
 5. 执行与改动范围匹配的验证；真实依赖缺失时明确记为未执行。
 6. 同名 Markdown 跟随模块分类，头文件和同名源文件合并说明；测试说明归入模块的 tests/。
+7. 使用本地 Git 保存基线；新增模块及其配套修改放在 codex/模块分支，完成后 git add，供用户审阅后合并。构建、安装与测试输出保持在忽略的 build/ 内。
 
 ## 文档组织规则
 
@@ -41,3 +85,11 @@ ROS Image -> decodeRosRgb -> RgbImageView -> decodeRgb -> RgbFrame / RgbErrorCod
 - docx/README.md：唯一总导航，后续增加模块时同步更新。
 
 完整分类导航见 [文档首页](../README.md)。
+
+## 本次目录整理复核
+
+2026-10-28：迁移 13 个头文件、实现和模块测试，比较了 16 个 C++ 文件的词法内容，除公开头文件路径外没有行为变更。同步更新 CMake、安装路径、消费者和同名说明。
+
+从全新构建/安装目录验证：无 ROS 核心 2/2、真实 Humble 4/4 测试通过；核心与 ROS 安装后的独立消费者均通过，新安装中没有旧平铺头文件。RGB/Depth 的完整文档示例编译运行通过，76 个本地链接及章节引用有效。整体系统规划与当前 bag 层的实现状态已分别列明。
+
+变更与既有 Depth 实现一起暂存于 codex/depth-module，供用户审阅后决定提交与合并。

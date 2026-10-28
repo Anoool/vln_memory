@@ -25,7 +25,7 @@
 ```bash
 g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
   -fsanitize=address,undefined -fno-omit-frame-pointer -g \
-  -Iinclude src/rgb.cpp test/test_rgb.cpp -o build/standalone/test_rgb_sanitized
+  -Iinclude src/bag/rgb/rgb.cpp test/bag/rgb/test_rgb.cpp -o build/standalone/test_rgb_sanitized
 ASAN_OPTIONS=detect_leaks=1 ./build/standalone/test_rgb_sanitized
 ```
 

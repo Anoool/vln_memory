@@ -2,7 +2,7 @@
 
 ## 本文件完成什么
 
-源码：[rgb.cpp](../../../src/rgb.cpp)，公开接口：[rgb.hpp](../../../include/vln_memory/rgb.hpp)。
+源码：[rgb.cpp](../../../src/bag/rgb/rgb.cpp)，公开接口：[rgb.hpp](../../../include/vln_memory/bag/rgb/rgb.hpp)。
 
 本模块接收一张未压缩图像的字段和只读像素视图，检查输入并输出独立持有的紧密 rgb8 帧。适用于后续 bag 提取、PNG 保存、深度同步及模型图片输入前的数据准备。
 
@@ -70,7 +70,7 @@ mono8 输出保留灰度信息，但不产生本不存在的颜色。
 ## 使用示例
 
 ```cpp
-#include <vln_memory/rgb.hpp>
+#include <vln_memory/bag/rgb/rgb.hpp>
 #include <iostream>
 #include <utility>
 #include <vector>
@@ -141,7 +141,7 @@ int main()
 | 安装后独立 find_package 消费者，构建并运行 | 通过 |
 | docx/modules/rgb/rgb.md 的完整 C++ 使用示例 | 编译并运行通过 |
 | package.xml XML 解析、文件结尾与源码同名文档检查 | 通过 |
-| ROS 2 Humble/ament 构建与真实 Image 适配测试 | 未执行：当前 WSL 未提供 ROS 开发环境 |
+| ROS 2 Humble/ament 构建与真实 Image 适配测试 | 初版未执行；Depth 集成阶段已在真实 Humble 环境通过，见下方补充 |
 
 Windows 构建工具不支持以 UNC 为链接工作目录，验证构建改在本任务本地临时目录执行；这不是 RGB 代码错误。源码位于 /home/dev/agent/vln_memory，Linux 核心验证位于本包 build/standalone。未以仿造 ROS 头文件替代真实集成验证。
 
@@ -159,3 +159,9 @@ Windows 构建工具不支持以 UNC 为链接工作目录，验证构建改在�
 - 严格 C++17 语法检查通过；33 个本地文档链接与章节引用、源码同名说明覆盖和旧路径检查通过。
 
 分类导航见 [文档首页](../../README.md)，整体开发约定见 [项目架构](../../project/architecture.md)。
+
+## Depth 集成阶段补充
+
+2026-10-28，环境已具备真实 ROS 2 Humble。新增 Depth 的严格构建中同时编译并运行了 rgb_core 与 rgb_ros_adapter，两项均通过；安装后 RGB 消费者也通过。此前“环境未提供”的文字仅记录初版验证边界。共享 SensorStamp 保持原样，新增 ImageGeometry；RGB 转换源码没有修改。
+
+参见 [Depth 集成验证](../depth/depth.md#验证结果)。
