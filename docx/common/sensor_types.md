@@ -4,7 +4,7 @@
 
 ## 作用
 
-定义 `vln_memory::SensorStamp`，供 RGB、后续 Depth/CameraInfo/TF 和 bag 组装共用，避免各模块自行定义不同的时间结构。
+定义 `vln_memory::SensorStamp`，供 RGB、Depth、CameraInfo、后续 TF 和 bag 组装共用，避免各模块自行定义不同的时间结构。
 
 ```cpp
 struct SensorStamp {
@@ -18,7 +18,7 @@ struct SensorStamp {
 - 保留 ROS sec/nanosec，不用浮点秒关联消息，避免精度损失。
 - sec 可为负数，nanosec 应位于 [0, 1e9)；零时间不是自动错误。
 - 本类型不代表 UTC，也不包含 bag_id 或 clock_id。bag 模块在观测来源中维护时钟域，不能跨时钟直接比较。
-- 当前 decodeRgb 负责检查纳秒字段；本文件是无隐藏处理的数据类型，不提供未经定义的时间换算。
+- RGB、Depth、CameraInfo 各自校验纳秒字段。本文件只定义数据；显式时钟关系下的时间检查见 [sensor_time](sensor_time.md)。
 
 RGB 输入与输出都直接使用此类型。后续模块按同一约定接入即可。
 
@@ -34,4 +34,4 @@ struct ImageGeometry {
 
 宽高与光学帧用于模块间核对布局；此类型不包含内参、时刻或几何注册证明。bag 层可以从 RGB 的公开输出构造 ImageGeometry{rgb.width, rgb.height, rgb.frame_id}，交给 checkDepthRgbAlignment 检查。
 
-该类型拥有 frame_id 字符串，不借用来源消息。它是纯数据契约，不让 Depth 依赖 RGB 内部实现；后续 CameraInfo 也可以使用它检查图像布局。详细规则见 [Depth 模块](../modules/depth/depth.md)。
+该类型拥有 frame_id 字符串，不借用来源消息。它是纯数据契约，不让 Depth 依赖 RGB 内部实现；CameraInfo 也使用它检查图像布局。详细规则见 [Depth 模块](../modules/depth/depth.md)。

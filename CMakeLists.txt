@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(vln_memory VERSION 0.1.0 LANGUAGES CXX)
 
-# 默认作为 ROS 2 包构建；关闭后可独立验证 RGB/Depth 核心。
-option(VLN_MEMORY_ENABLE_ROS "Build the ROS 2 Image adapters and ament package" ON)
+# 默认作为 ROS 2 包构建；关闭后可独立验证 RGB/Depth/CameraInfo 核心。
+option(VLN_MEMORY_ENABLE_ROS "Build the ROS 2 sensor adapters and ament package" ON)
 
 # 核心库公开 C++17 和头文件路径，使下游只链接目标即可使用接口。
 add_library(vln_memory_rgb SHARED src/bag/rgb/rgb.cpp)
@@ -24,7 +24,22 @@ target_include_directories(vln_memory_depth PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_depth PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-set(memory_export_targets vln_memory_rgb vln_memory_depth)
+# 时间检查可独立给 RGB-D/TF 配对调用，CameraInfo 公开传递这个依赖。
+add_library(vln_memory_sensor_time SHARED src/bag/common/sensor_time.cpp)
+add_library(vln_memory::vln_memory_sensor_time ALIAS vln_memory_sensor_time)
+target_compile_features(vln_memory_sensor_time PUBLIC cxx_std_17)
+target_include_directories(vln_memory_sensor_time PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+add_library(vln_memory_camera_info SHARED src/bag/camera_info/camera_info.cpp)
+add_library(vln_memory::vln_memory_camera_info ALIAS vln_memory_camera_info)
+target_link_libraries(vln_memory_camera_info PUBLIC vln_memory_sensor_time)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_sensor_time PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(vln_memory_camera_info PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+set(memory_export_targets vln_memory_rgb vln_memory_depth
+  vln_memory_sensor_time vln_memory_camera_info)
 
 if(VLN_MEMORY_ENABLE_ROS)
   find_package(ament_cmake REQUIRED)
@@ -43,7 +58,15 @@ if(VLN_MEMORY_ENABLE_ROS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vln_memory_depth_ros PRIVATE -Wall -Wextra -Wpedantic)
   endif()
-  list(APPEND memory_export_targets vln_memory_rgb_ros vln_memory_depth_ros)
+  add_library(vln_memory_camera_info_ros SHARED src/bag/camera_info/camera_info_ros.cpp)
+  add_library(vln_memory::vln_memory_camera_info_ros ALIAS vln_memory_camera_info_ros)
+  target_link_libraries(vln_memory_camera_info_ros PUBLIC vln_memory_camera_info)
+  ament_target_dependencies(vln_memory_camera_info_ros PUBLIC sensor_msgs)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vln_memory_camera_info_ros PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  list(APPEND memory_export_targets vln_memory_rgb_ros vln_memory_depth_ros
+    vln_memory_camera_info_ros)
 endif()
 
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
@@ -55,7 +78,16 @@ if(BUILD_TESTING)
   add_executable(test_depth test/bag/depth/test_depth.cpp)
   target_link_libraries(test_depth PRIVATE vln_memory_depth)
   add_test(NAME depth_core COMMAND test_depth)
+  add_executable(test_sensor_time test/bag/common/test_sensor_time.cpp)
+  target_link_libraries(test_sensor_time PRIVATE vln_memory_sensor_time)
+  add_test(NAME sensor_time_core COMMAND test_sensor_time)
+  add_executable(test_camera_info test/bag/camera_info/test_camera_info.cpp)
+  target_link_libraries(test_camera_info PRIVATE vln_memory_camera_info)
+  add_test(NAME camera_info_core COMMAND test_camera_info)
   if(VLN_MEMORY_ENABLE_ROS)
+    add_executable(test_camera_info_ros test/bag/camera_info/test_camera_info_ros.cpp)
+    target_link_libraries(test_camera_info_ros PRIVATE vln_memory_camera_info_ros)
+    add_test(NAME camera_info_ros_adapter COMMAND test_camera_info_ros)
     add_executable(test_rgb_ros test/bag/rgb/test_rgb_ros.cpp)
     target_link_libraries(test_rgb_ros PRIVATE vln_memory_rgb_ros)
     add_test(NAME rgb_ros_adapter COMMAND test_rgb_ros)
@@ -72,12 +104,17 @@ install(TARGETS ${memory_export_targets}
   RUNTIME DESTINATION bin)
 # 安装时保留层/模块路径，下游 include 与源码中的公开路径保持一致。
 install(FILES include/vln_memory/bag/common/sensor_types.hpp
+  include/vln_memory/bag/common/sensor_time.hpp
   DESTINATION include/vln_memory/bag/common)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)
 install(FILES include/vln_memory/bag/depth/depth.hpp
   DESTINATION include/vln_memory/bag/depth)
+install(FILES include/vln_memory/bag/camera_info/camera_info.hpp
+  DESTINATION include/vln_memory/bag/camera_info)
 if(VLN_MEMORY_ENABLE_ROS)
+  install(FILES include/vln_memory/bag/camera_info/camera_info_ros.hpp
+    DESTINATION include/vln_memory/bag/camera_info)
   install(FILES include/vln_memory/bag/rgb/rgb_ros.hpp
     DESTINATION include/vln_memory/bag/rgb)
   install(FILES include/vln_memory/bag/depth/depth_ros.hpp

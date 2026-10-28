@@ -2,7 +2,7 @@
 
 更新：2026-10-28。本文保存整个系统的目标、边界和分步实现顺序。它是设计规划，不能将未来模块视为已经实现。
 
-**当前开发范围：观测准备层 bag。已实现 RGB 与 Depth 处理；CameraInfo、历史 TF、bag 读取/同步/导出尚待实现。**现有源码和测试的分类见 [当前架构](architecture.md)，各模块详细接口见 [文档导航](../README.md)。
+**当前开发范围：观测准备层 bag。已实现 RGB、Depth、CameraInfo 与候选时间检查；历史 TF、bag 读取/自动配对/导出尚待实现。**现有源码和测试的分类见 [当前架构](architecture.md)，各模块详细接口见 [文档导航](../README.md)。
 
 ## 1. 系统目标与数据流
 
@@ -25,7 +25,7 @@ ROS 2 bag
 
 | 层 | 主要职责 | 当前状态 |
 | --- | --- | --- |
-| bag：观测准备 | 传感器消息处理、时间匹配、标定/TF、媒体和 JSONL 导出 | 正在开发；RGB/Depth 已实现 |
+| bag：观测准备 | 传感器消息处理、时间匹配、标定/TF、媒体和 JSONL 导出 | 正在开发；RGB/Depth/CameraInfo 已实现 |
 | memory：记忆核心 | 几何、实体/区域/关系、查询、修改、工作库、快照 | 规划 |
 | engine：离线构建 | 上下文组织、模型会话、工具分发、进度与恢复 | 规划 |
 | plugins：Agent 接入 | 将只读记忆查询接入现有 ToolManager | 规划 |
@@ -42,11 +42,11 @@ ROS 2 bag
 | --- | --- | --- | --- | --- |
 | RGB | 原始图像字段 / ROS Image | 标准 rgb8、采样身份与错误 | bag/rgb | 已实现 |
 | Depth | Image、显式单位/深度含义、注册声明 | 米制 float32、质量、RGB 网格检查 | bag/depth | 已实现 |
-| CameraInfo | 标定消息与采样时间 | 可追溯相机模型、有效标定关联 | bag/camera_info | 待实现 |
+| CameraInfo | 标定消息、真实 topic、图像绑定/时间策略 | 完整标定与图像尺寸/frame/时间检查 | bag/camera_info | 已实现 |
 | TF | TF/TFStatic 与采样时刻 | map 中的相机、底盘位姿及依据 | bag/tf | 待实现 |
 | builder | bag、提取配置及以上四模块 | 完整 Observation、证据和报告 | bag/builder | 待实现 |
 
-SensorStamp、ImageGeometry 位于 bag/common。它们是观测准备层共用类型，不提前承担未来 Entity、Relation 等业务。
+SensorStamp、ImageGeometry 以及显式时钟关系的候选时差检查位于 bag/common。它们是观测准备层共用类型，不提前承担未来 Entity、Relation 等业务。
 
 ### 3.1 RGB 与 Depth 的已实现边界
 
@@ -57,13 +57,15 @@ SensorStamp、ImageGeometry 位于 bag/common。它们是观测准备层共用�
 
 详细说明：[RGB](../modules/rgb/rgb.md)、[Depth](../modules/depth/depth.md)。
 
-### 3.2 CameraInfo 与 TF 的目标
+### 3.2 CameraInfo 已实现范围与 TF 后续目标
 
-- CameraInfo 保留 header、K/D/R/P、畸变模型、ROI、binning；匹配图像尺寸与对应的原始/校正相机模型。
-- 固定标定可按明确规则复用；动态变化按时间有效区间匹配，不能整包取最后一条。
+- CameraInfo 保留真实 topic、header、K/D/R/P、畸变模型、ROI、binning，校验完整标定、显式光学 frame 和图像尺寸。raw/rectified 必须声明；校正 ROI 需要后续几何计算时明确返回不支持。
+- 固定标定可按显式策略和依据复用；逐帧标定核验同一时钟与时间容差。自动选消息、动态标定有效区间由后续 builder 实现，不能整包取最后一条。
 - TF 按采样时间处理 map<-body、body<-camera_optical 及组合变换，支持静态与动态链。
 - 历史查询使用索引/分块窗口，不依赖默认短时 Buffer 覆盖整包，不用 latest 填历史位姿。
 - 缺失变换、外推超限、重定位跳变等形成明确报告，不写入假位置。
+
+CameraInfo 详细规划与接口见 [模块说明](../modules/camera_info/camera_info.md)。公共时差检查不自动改变任何时间；采用哪个时刻、写入与在线控制规则见 [时间约定](../common/sensor_time.md)。
 
 ### 3.3 BagBuilder 的目标流程
 
@@ -81,10 +83,10 @@ SensorStamp、ImageGeometry 位于 bag/common。它们是观测准备层共用�
 一条观测对应一组明确配对的原始 RGB-D，各张图保留独立时间。主要字段：
 
 - id、schema_version、clock_id、map_id、frame_id、geometry_revision；
-- rgb_stamp、depth_stamp，媒体相对路径、尺寸与原始格式；
+- 以 rgb_stamp 为观测索引，分别保留 rgb_stamp、depth_stamp、CameraInfo 原始 stamp 与 bag 接收时间；媒体相对路径、尺寸与原始格式；
 - camera_model、intrinsics、完整 CameraInfo 引用；
 - depth_unit=m、depth_convention=optical_z；
-- camera_pose_map、body_pose_map，quaternion_xyzw；
+- RGB 与 Depth 各自采样时刻的 camera_pose_map；RGB 索引时刻的 body_pose_map，quaternion_xyzw；明确标记每个位姿的查询时刻，不能把一个模糊的 camera_pose_map 复用于两个时刻；
 - bag 来源、源消息 ID、同步时差和有效深度比例。
 
 缺深度、标定或位姿的记录保留证据进入 pending，不以原点或单位旋转补齐。纯观测数据集还不是语义记忆，不提前生成 memory_version。
