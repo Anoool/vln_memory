@@ -1,8 +1,8 @@
 # VLN 空间语义记忆系统整体规划
 
-更新：2026-10-28。本文保存整个系统的目标、边界和分步实现顺序。它是设计规划，不能将未来模块视为已经实现。
+更新：2026-10-29。本文保存整个系统的目标、边界和分步实现顺序。它是设计规划，不能将未来模块视为已经实现。
 
-**当前开发范围：观测准备层 bag。已实现 RGB、Depth、CameraInfo 与候选时间检查；历史 TF、bag 读取/自动配对/导出尚待实现。**现有源码和测试的分类见 [当前架构](architecture.md)，各模块详细接口见 [文档导航](../README.md)。
+**当前开发范围：观测准备层 bag。已实现 RGB、Depth、CameraInfo、TF 链/历史覆盖索引与候选时间检查；TF 位姿求解、bag 读取/自动配对/导出尚待实现。**现有源码和测试的分类见 [当前架构](architecture.md)，各模块详细接口见 [文档导航](../README.md)。
 
 ## 1. 系统目标与数据流
 
@@ -25,7 +25,7 @@ ROS 2 bag
 
 | 层 | 主要职责 | 当前状态 |
 | --- | --- | --- |
-| bag：观测准备 | 传感器消息处理、时间匹配、标定/TF、媒体和 JSONL 导出 | 正在开发；RGB/Depth/CameraInfo 已实现 |
+| bag：观测准备 | 传感器消息处理、时间匹配、标定/TF、媒体和 JSONL 导出 | 正在开发；RGB/Depth/CameraInfo 已实现，TF 链/覆盖已实现 |
 | memory：记忆核心 | 几何、实体/区域/关系、查询、修改、工作库、快照 | 规划 |
 | engine：离线构建 | 上下文组织、模型会话、工具分发、进度与恢复 | 规划 |
 | plugins：Agent 接入 | 将只读记忆查询接入现有 ToolManager | 规划 |
@@ -43,7 +43,7 @@ ROS 2 bag
 | RGB | 原始图像字段 / ROS Image | 标准 rgb8、采样身份与错误 | bag/rgb | 已实现 |
 | Depth | Image、显式单位/深度含义、注册声明 | 米制 float32、质量、RGB 网格检查 | bag/depth | 已实现 |
 | CameraInfo | 标定消息、真实 topic、图像绑定/时间策略 | 完整标定与图像尺寸/frame/时间检查 | bag/camera_info | 已实现 |
-| TF | TF/TFStatic 与采样时刻 | map 中的相机、底盘位姿及依据 | bag/tf | 待实现 |
+| TF | TF/TFStatic、clock/segment 与采样时刻 | 链、时间覆盖与历史样本依据；后续求解 map 位姿 | bag/tf | 链/覆盖已实现；位姿求解后续 |
 | builder | bag、提取配置及以上四模块 | 完整 Observation、证据和报告 | bag/builder | 待实现 |
 
 SensorStamp、ImageGeometry 以及显式时钟关系的候选时差检查位于 bag/common。它们是观测准备层共用类型，不提前承担未来 Entity、Relation 等业务。
@@ -57,15 +57,15 @@ SensorStamp、ImageGeometry 以及显式时钟关系的候选时差检查位于 
 
 详细说明：[RGB](../modules/rgb/rgb.md)、[Depth](../modules/depth/depth.md)。
 
-### 3.2 CameraInfo 已实现范围与 TF 后续目标
+### 3.2 CameraInfo 与 TF 当前范围和后续目标
 
 - CameraInfo 保留真实 topic、header、K/D/R/P、畸变模型、ROI、binning，校验完整标定、显式光学 frame 和图像尺寸。raw/rectified 必须声明；校正 ROI 需要后续几何计算时明确返回不支持。
 - 固定标定可按显式策略和依据复用；逐帧标定核验同一时钟与时间容差。自动选消息、动态标定有效区间由后续 builder 实现，不能整包取最后一条。
-- TF 按采样时间处理 map<-body、body<-camera_optical 及组合变换，支持静态与动态链。
-- 历史查询使用索引/分块窗口，不依赖默认短时 Buffer 覆盖整包，不用 latest 填历史位姿。
-- 缺失变换、外推超限、重定位跳变等形成明确报告，不写入假位置。
+- TF 已按采样时间检查 map<-body、body<-camera_optical 等配置链，支持静态/动态混合链，返回精确或插值前后样本；变换插值/求逆/组合的数值求解尚待实现。
+- 当前使用有边/样本上限的数据段内存历史索引，保留所有接受样本，不依赖默认短时 Buffer。链覆盖按动态区间交集并保留大间隔空洞，不用 latest 填历史记录；分块/磁盘索引后续由 builder 扩展。
+- 缺链、断树、拓扑/值冲突、时间超界/空洞已返回结构化错误；重定位跳变检测、自动分段和 JSONL 报告留给后续实现，不把采样间隔合格当作无跳变证明。
 
-CameraInfo 详细规划与接口见 [模块说明](../modules/camera_info/camera_info.md)。公共时差检查不自动改变任何时间；采用哪个时刻、写入与在线控制规则见 [时间约定](../common/sensor_time.md)。
+CameraInfo 详细规划与接口见 [模块说明](../modules/camera_info/camera_info.md)，TF 见 [链与时间覆盖索引](../modules/tf/tf.md)。公共时差检查不自动改变任何时间；采用哪个时刻、写入与在线控制规则见 [时间约定](../common/sensor_time.md)。
 
 ### 3.3 BagBuilder 的目标流程
 
@@ -176,29 +176,37 @@ Viewer 初期只读快照；人工名称、别名和备注通过受控标注入�
 
 ```text
 include/vln_memory/bag/
-  common/sensor_types.hpp
+  common/sensor_types.hpp, sensor_time.hpp
   rgb/rgb.hpp, rgb_ros.hpp
   depth/depth.hpp, depth_ros.hpp
+  camera_info/camera_info.hpp, camera_info_ros.hpp
+  tf/tf.hpp, tf_ros.hpp
 src/bag/
+  common/sensor_time.cpp
   rgb/rgb.cpp, rgb_ros.cpp
   depth/depth.cpp, depth_ros.cpp
+  camera_info/camera_info.cpp, camera_info_ros.cpp
+  tf/tf.cpp, tf_ros.cpp
 test/bag/
+  common/test_sensor_time.cpp
   rgb/test_rgb.cpp, test_rgb_ros.cpp
   depth/test_depth.cpp, test_depth_ros.cpp
+  camera_info/test_camera_info.cpp, test_camera_info_ros.cpp
+  tf/test_tf.cpp, test_tf_ros.cpp
 ```
 
-后续 CameraInfo、TF、builder 分别在 bag/camera_info、bag/tf、bag/builder 增加真实实现。记忆核心、构建、插件、Viewer 层开始实现时，才建立 memory、engine、plugins、viewer 等同级源码目录；命令行参数组装再放 apps。
+CameraInfo 与 TF 链/覆盖已有真实实现；后续 builder 位于 bag/builder，TF 位姿求解在既有 bag/tf 按需要补充。记忆核心、构建、插件、Viewer 层开始实现时，才建立 memory、engine、plugins、viewer 等同级源码目录；命令行参数组装再放 apps。
 
 include 与 src 使用相同层/模块布局；导出的头文件保持该目录结构。现有函数、命名空间和库目标保持，调用方更新 include 路径。安装后独立消费者用来检查实际公开接口。
 
-文档入口为 docx/README.md：project 保存系统目标与目录/构建约定；common 保存共享类型说明；modules/rgb、modules/depth 保存当前 bag 子模块的同名代码说明，tests/ 保存测试说明。未来新层的文档再按真实模块扩展，不生成空文档。
+文档入口为 docx/README.md：project 保存系统目标与目录/构建约定；common 保存共享类型说明；modules/rgb、modules/depth、modules/camera_info、modules/tf 保存当前 bag 子模块的同名代码说明，tests/ 保存测试说明。未来新层的文档再按真实模块扩展，不生成空文档。
 
 ## 9. 分步实施与验收
 
 | 阶段 | 交付 | 验收 | 状态 |
 | --- | --- | --- | --- |
 | bag-1 | RGB、Depth 核心与真实 ROS 适配 | 已知数据、格式/单位/对齐边界、安装消费者 | 已完成 |
-| bag-2 | CameraInfo 与历史 TF | 标定匹配、已知变换、缺失/超限/跳变报告 | 下一阶段 |
+| bag-2 | CameraInfo 与历史 TF | 标定匹配、链/覆盖、位姿求解、缺失/超限/跳变报告 | 标定及 TF 链/覆盖已实现；几何求解/跳变报告待补 |
 | bag-3 | bag 读取、同步、证据和 Observation JSONL | 短真实 bag、引用完整、统计一致、可回查落点 | 待实现 |
 | memory-1 | 几何、实体/区域、工作库与只读查询 | 投影、同物体多视图、同类实例区分 | 待实现 |
 | engine-1 | 工具构建、批次终态与恢复 | 提交后中断不重复、轮数耗尽不误报成功 | 待实现 |
@@ -206,3 +214,8 @@ include 与 src 使用相同层/模块布局；导出的头文件保持该目录
 | review | 完整纠错、标注和 Viewer | merge/split 引用修复、人工信息保留、证据联动 | 待实现 |
 
 优先完善当前 bag 层，不并行搭建未用到的其他层空壳。每个小模块遵循“规划与自审 -> 实现与注释 -> 针对性验证 -> 整体通读 -> 分类同名说明 -> Git 暂存审阅”。已有修改留在 codex/ 分支，合并由用户审阅后决定。
+
+
+## 10. 当前层源码验收记录
+
+2026-10-29 重新按实际代码核查：当前是消息处理与检查库，尚未形成 rosbag→同步 RGB-D/标定/历史位姿/关键帧→Observation 文件的完整流程。逐项状态与可复现问题见 [审查报告](../reviews/observation_preparation_audit.md)，真实参数、返回值及提供文件见 [集中接口手册](../interfaces/observation_preparation_api.md)。

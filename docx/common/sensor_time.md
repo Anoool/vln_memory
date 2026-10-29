@@ -2,7 +2,7 @@
 
 ## 1. 规划与职责
 
-RGB/Depth 已保留整数 SensorStamp。此公共文件只补充相同时钟下的时间差检查，供 CameraInfo 和未来 builder/TF 使用；不实现消息队列、时钟校正、控制器或 bag 导出。先定义时钟关系、符号和容差，再实现无浮点比较，自审 int32 秒全范围的溢出边界。
+RGB/Depth 已保留整数 SensorStamp。此公共文件只补充相同时钟下的时间差检查，供 CameraInfo 和后续 builder 的候选消息比较使用，不实现消息队列、时钟校正、控制器或 bag 导出。TF 索引独立采用同一 SensorStamp 与显式时钟/段 ID。先定义时钟关系、符号和容差，再实现无浮点比较，自审 int32 秒全范围的溢出边界。
 
 头文件：include/vln_memory/bag/common/sensor_time.hpp。实现：src/bag/common/sensor_time.cpp。目标：vln_memory::vln_memory_sensor_time；CameraInfo 核心 PUBLIC 链接它。
 
@@ -57,7 +57,7 @@ stamp 始终用 {sec,nanosec} 整数对象；若保存绝对 int64 纳秒，写�
 
 header 时间缺失、时钟域不明或超差时默认进入 pending。确有驱动配置证明只能采用 bag 时间时，应作为显式替代策略保存原时间、替代依据、降级质量和受影响的 TF 语义，不在模块内静默回退。
 
-零采样时间可表示，但 tf2 的 time=0 有 latest 哨兵含义。未来 TF 层必须区分“真实零时刻历史查询”和“请求 latest”，无法准确查询时报告不支持，不能直接透传成 latest。
+零采样时间可表示，但 tf2 的 time=0 有 latest 哨兵含义。当前 [TfIndex](../modules/tf/tf.md) 直接按整数索引查询真实零时刻，不调用 latest；后续几何求解若接入 tf2 Buffer，仍必须处理这个差异，不能直接透传成 latest。
 
 ## 6. 示例
 

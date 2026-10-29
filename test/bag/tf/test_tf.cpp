@@ -1,0 +1,267 @@
+#include "vln_memory/bag/tf/tf.hpp"
+
+#include <algorithm>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <random>
+#include <set>
+#include <stdexcept>
+#include <string>
+
+namespace
+{
+using namespace vln_memory;
+const TfScope scope{"ros_clock_epoch_1", "map_session_1"};
+
+void expect(bool value, const std::string & reason)
+{
+  if (!value) {throw std::runtime_error(reason);}
+}
+
+TfTransform sample(
+  const std::string & parent, const std::string & child, SensorStamp stamp = {},
+  TfKind kind = TfKind::dynamic)
+{
+  TfTransform result;
+  result.parent_frame = parent;
+  result.child_frame = child;
+  result.stamp = stamp;
+  result.kind = kind;
+  result.source = {kind == TfKind::dynamic ? "/tf" : "/tf_static", "bag_1_message_1", 0};
+  return result;
+}
+
+void add(TfIndex & index, const TfTransform & transform)
+{
+  const auto inserted = index.insert(transform);
+  expect(inserted.accepted(), inserted.message);
+}
+
+void testTopologyAndOwnership()
+{
+  TfIndex index(scope);
+  auto fixed = sample("base", "camera", {50, 0}, TfKind::static_transform);
+  fixed.translation_m = {0.1, 0.2, 0.3};
+  add(index, fixed);
+  fixed.translation_m[0] = 999;
+  fixed.child_frame = "changed";
+  add(index, sample("map", "odom", {1, 0}));
+  add(index, sample("odom", "base", {1, 0}));
+  const auto chain = index.inspectChain("map", "camera", {});
+  expect(chain.chainExists() && chain.frames == std::vector<std::string>{"camera", "base", "odom", "map"},
+    "TF chain direction or frames are incorrect");
+  expect(chain.edges.size() == 3 && !chain.edges[0].inverted && !chain.edges[2].inverted,
+    "Child->parent path should use original T_parent_child");
+  const auto reverse = index.inspectChain("camera", "map", {});
+  expect(reverse.chainExists() && reverse.edges[0].inverted && reverse.edges[2].inverted,
+    "Parent->child edges must request inversion");
+  add(index, sample("base", "depth", {}, TfKind::static_transform));
+  const auto sibling = index.inspectChain("depth", "camera", {});
+  expect(sibling.frames == std::vector<std::string>{"camera", "base", "depth"} &&
+    !sibling.edges[0].inverted && sibling.edges[1].inverted, "Nearest common ancestor path failed");
+  const auto selected = index.checkTime("base", "camera", {1, 0}, {scope, {0}});
+  expect(selected.covered() && selected.edges[0].before.translation_m[0] == 0.1 &&
+    selected.edges[0].before.stamp.sec == 50, "Static TF was aliased or given a synthetic timestamp");
+  expect(index.inspectChain("unknown", "camera", {}).code == TfChainCode::unknown_frame,
+    "Missing frame was considered connected");
+  expect(index.inspectChain("/map", "camera", {}).code == TfChainCode::invalid_frame,
+    "Leading slash was silently normalized");
+  add(index, sample("other_root", "other_leaf"));
+  expect(index.inspectChain("other_root", "camera", {}).code == TfChainCode::disconnected,
+    "Disconnected trees were connected by an invented transform");
+  const auto identity = index.inspectChain("camera", "camera", {});
+  expect(identity.chainExists() && identity.edges.empty() &&
+    identity.coverage_status == TfCoverageStatus::static_only, "Known-frame identity chain failed");
+}
+
+void testCoverage()
+{
+  TfIndex index(scope);
+  // 乱序插入：map->odom 的 [1,3] 与 [10,12] 中间有洞，第二条动态边覆盖 [2,11]。
+  for (const auto sec : {12, 1, 10, 3}) {add(index, sample("map", "odom", {sec, 0}));}
+  for (int sec = 2; sec <= 11; ++sec) {add(index, sample("odom", "base", {sec, 0}));}
+  add(index, sample("base", "camera", {}, TfKind::static_transform));
+  const TfCoverageOptions policy{2000000000LL};
+  const auto report = index.inspectChain("map", "camera", policy);
+  expect(report.chainExists() && report.coverage_status == TfCoverageStatus::available &&
+    report.intervals.size() == 2, "Common coverage must preserve internal gaps");
+  expect(report.intervals[0].start.sec == 2 && report.intervals[0].end.sec == 3 &&
+    report.intervals[1].start.sec == 10 && report.intervals[1].end.sec == 11,
+    "Dynamic edge interval intersection is incorrect");
+  const auto exact = index.checkTime("map", "camera", {3, 0}, {scope, policy});
+  expect(exact.covered(), "Exact sample failed at an interval boundary");
+  const auto between = index.checkTime("map", "camera", {2, 500000000}, {scope, policy});
+  expect(between.covered() && between.edges.size() == 3 && between.edges[2].after &&
+    between.edges[2].before.stamp.sec == 1 && between.edges[2].after->stamp.sec == 3,
+    "Interpolation sample selection lost brackets or path order");
+  const auto hole = index.checkTime("map", "camera", {5, 0}, {scope, policy});
+  expect(hole.code == TfTimeCode::gap_too_large && hole.failed_frame == "odom" && hole.edges.empty(),
+    "A time within the raw envelope but inside a hole was accepted");
+  expect(index.checkTime("map", "camera", {0, 0}, {scope, policy}).code == TfTimeCode::outside_range,
+    "Past extrapolation was accepted");
+  expect(index.checkTime("map", "camera", {13, 0}, {scope, policy}).code == TfTimeCode::outside_range,
+    "Future extrapolation was accepted");
+  expect(index.checkTime("map", "camera", {2, 500000000}, {scope, {0}}).code == TfTimeCode::gap_too_large,
+    "Zero gap must mean exact samples only");
+  expect(index.inspectChain("map", "camera", {-1}).code == TfChainCode::invalid_options,
+    "Negative interpolation gap was accepted");
+  expect(index.checkTime("map", "camera", {}, {{"other_clock", scope.segment_id}, policy}).code ==
+    TfTimeCode::clock_mismatch, "Different clocks were mixed");
+  expect(index.checkTime("map", "camera", {}, {{scope.clock_id, "other_segment"}, policy}).code ==
+    TfTimeCode::segment_mismatch, "Different map/clock segments were mixed");
+  expect(index.checkTime("map", "camera", {}, {}).code == TfTimeCode::invalid_scope,
+    "Unknown clock and segment were inferred");
+  expect(index.checkTime("map", "camera", {0, 1000000000U}, {scope, policy}).code == TfTimeCode::invalid_stamp,
+    "Malformed query stamp was accepted");
+
+  TfIndex no_overlap(scope);
+  add(no_overlap, sample("map", "base", {1, 0}));
+  add(no_overlap, sample("base", "camera", {2, 0}));
+  const auto disconnected_time = no_overlap.inspectChain("map", "camera", policy);
+  expect(disconnected_time.chainExists() && disconnected_time.coverage_status == TfCoverageStatus::no_common_time &&
+    disconnected_time.intervals.empty(), "Topology existence was confused with time availability");
+  TfIndex fixed(scope);
+  add(fixed, sample("base", "camera", {100, 0}, TfKind::static_transform));
+  const auto fixed_report = fixed.inspectChain("base", "camera", {});
+  expect(fixed_report.coverage_status == TfCoverageStatus::static_only && fixed_report.intervals.empty() &&
+    !fixed_report.edges[0].dynamic_bounds, "Static TF must not get a false dynamic time range");
+  expect(fixed.checkTime("base", "camera", {-200, 0}, {scope, {0}}).covered(),
+    "Static TF should not require matching its publication stamp");
+}
+
+void testConflictsAndLimits()
+{
+  for (const auto conflict_kind : {0, 1, 2, 3, 4}) {
+    TfIndex index(scope);
+    const auto kind = conflict_kind == 2 ? TfKind::static_transform : TfKind::dynamic;
+    auto first = sample("map", "base", {}, kind);
+    add(index, first);
+    auto contradictory = first;
+    TfInsertCode expected = TfInsertCode::duplicate_stamp_conflict;
+    if (conflict_kind == 0) {contradictory.parent_frame = "other"; expected = TfInsertCode::parent_conflict;}
+    if (conflict_kind == 1) {contradictory.kind = TfKind::static_transform; expected = TfInsertCode::kind_conflict;}
+    if (conflict_kind == 2) {contradictory.translation_m[0] = 1; expected = TfInsertCode::static_conflict;}
+    if (conflict_kind == 3) {contradictory.translation_m[0] = 1;}
+    if (conflict_kind == 4) {contradictory = sample("base", "map"); expected = TfInsertCode::cycle_detected;}
+    expect(index.insert(contradictory).code == expected, "TF contradiction was silently overwritten");
+    const auto blocked = index.inspectChain("map", "base", {});
+    expect(blocked.code == TfChainCode::topology_conflict &&
+      blocked.failed_frame == (conflict_kind == 4 ? "map" : "base"),
+      "Rejected contradictory TF left the old version usable or lost the conflicting frame");
+    add(index, sample("separate_root", "separate_leaf", {}, TfKind::static_transform));
+    expect(index.inspectChain("separate_root", "separate_leaf", {}).chainExists(),
+      "A conflict disabled an unrelated tree");
+  }
+  TfIndex duplicate(scope);
+  auto transform = sample("base", "camera", {8, 0}, TfKind::static_transform);
+  add(duplicate, transform);
+  transform.stamp = {99, 0}; transform.rotation_xyzw[3] = -1;
+  expect(duplicate.insert(transform).code == TfInsertCode::duplicate && duplicate.sampleCount() == 1,
+    "Equivalent repeated static broadcasts expanded the index");
+  TfIndex limited(scope, {1, 1});
+  add(limited, sample("map", "base"));
+  expect(limited.insert(sample("map", "base")).code == TfInsertCode::duplicate,
+    "Duplicate at resource limit should remain accepted");
+  expect(limited.insert(sample("map", "base", {1, 0})).code == TfInsertCode::limit_exceeded &&
+    limited.sampleCount() == 1, "Sample limit failure changed the accepted index");
+  expect(limited.insert(sample("base", "camera")).code == TfInsertCode::limit_exceeded &&
+    limited.edgeCount() == 1, "Edge limit failure changed topology");
+  TfIndex invalid_scope({});
+  expect(invalid_scope.insert(sample("map", "base")).code == TfInsertCode::invalid_scope,
+    "Index accepted an unspecified time context");
+  TfIndex invalid_limits(scope, {0, 1});
+  expect(invalid_limits.insert(sample("map", "base")).code == TfInsertCode::invalid_limits,
+    "Zero resource limit was accepted");
+}
+
+void testInvalidDataAndTimeExtremes()
+{
+  TfIndex index(scope);
+  auto transform = sample("map", "camera");
+  const auto rejects = [&index](const TfTransform & input, TfInsertCode expected) {
+      const auto result = index.insert(input);
+      expect(result.code == expected && !result.accepted() && !result.message.empty(),
+        std::string("Expected ") + tfInsertCodeName(expected));
+      expect(index.sampleCount() == 0, "Invalid input mutated the index");
+    };
+  transform.child_frame = "map"; rejects(transform, TfInsertCode::self_transform);
+  transform = sample("map", "camera"); transform.parent_frame = "/map";
+  rejects(transform, TfInsertCode::invalid_frame);
+  transform = sample("map", "camera"); transform.stamp.nanosec = 1000000000U;
+  rejects(transform, TfInsertCode::invalid_stamp);
+  transform = sample("map", "camera"); transform.translation_m[0] = std::numeric_limits<double>::infinity();
+  rejects(transform, TfInsertCode::invalid_translation);
+  transform = sample("map", "camera"); transform.rotation_xyzw = {0, 0, 0, 0};
+  rejects(transform, TfInsertCode::invalid_quaternion);
+  transform = sample("map", "camera"); transform.rotation_xyzw[0] = std::numeric_limits<double>::quiet_NaN();
+  rejects(transform, TfInsertCode::invalid_quaternion);
+  transform = sample("map", "camera"); transform.source.message_id.clear();
+  rejects(transform, TfInsertCode::missing_provenance);
+  transform = sample("map", "camera"); transform.kind = static_cast<TfKind>(99);
+  rejects(transform, TfInsertCode::invalid_kind);
+
+  add(index, sample("map", "camera", {0, 0}));
+  add(index, sample("map", "camera", {20, 0}));
+  const auto zero = index.checkTime("map", "camera", {}, {scope, {0}});
+  expect(zero.covered() && zero.edges[0].before.stamp.sec == 0 && !zero.edges[0].after,
+    "Actual zero time was confused with latest or long history was discarded");
+  TfIndex extremes(scope);
+  add(extremes, sample("map", "camera", {std::numeric_limits<std::int32_t>::min(), 0}));
+  add(extremes, sample("map", "camera", {std::numeric_limits<std::int32_t>::max(), 999999999U}));
+  const TfCoverageOptions largest{std::numeric_limits<std::int64_t>::max()};
+  expect(extremes.inspectChain("map", "camera", largest).intervals.size() == 1 &&
+    extremes.checkTime("map", "camera", {-1, 500000000}, {scope, largest}).covered(),
+    "Integer TF timestamps overflowed across full int32 seconds range");
+}
+
+/** 独立的离散时间 oracle，不使用区间合并算法生成预期结果。 */
+bool oracle(const std::set<std::uint32_t> & times, std::uint32_t t, std::uint32_t max_gap)
+{
+  if (times.count(t) != 0) {return true;}
+  const auto next = times.lower_bound(t);
+  return next != times.begin() && next != times.end() && *next - *std::prev(next) <= max_gap;
+}
+
+void testGeneratedIntervals()
+{
+  std::mt19937 random(20261029U);
+  for (std::size_t trial = 0; trial < 200; ++trial) {
+    TfIndex index(scope);
+    std::set<std::uint32_t> a;
+    std::set<std::uint32_t> b;
+    for (std::size_t i = 0; i < 8; ++i) {
+      a.insert(static_cast<std::uint32_t>(random() % 31U));
+      b.insert(static_cast<std::uint32_t>(random() % 31U));
+    }
+    for (const auto t : a) {add(index, sample("map", "base", {0, t}));}
+    for (const auto t : b) {add(index, sample("base", "camera", {0, t}));}
+    const auto max_gap = static_cast<std::uint32_t>(random() % 12U);
+    const auto report = index.inspectChain("map", "camera", {max_gap});
+    for (std::uint32_t t = 0; t <= 32; ++t) {
+      const bool expected = oracle(a, t, max_gap) && oracle(b, t, max_gap);
+      const bool contained = std::any_of(report.intervals.begin(), report.intervals.end(),
+        [t](const TfTimeInterval & interval) {return t >= interval.start.nanosec && t <= interval.end.nanosec;});
+      const bool selected = index.checkTime("map", "camera", {0, t}, {scope, {max_gap}}).covered();
+      expect(contained == expected && selected == expected,
+        "Generated sample oracle disagrees with chain intervals or point-time selection");
+    }
+  }
+}
+}  // namespace
+
+int main()
+{
+  try {
+    testTopologyAndOwnership();
+    testCoverage();
+    testConflictsAndLimits();
+    testInvalidDataAndTimeExtremes();
+    testGeneratedIntervals();
+    std::cout << "TF topology, coverage, source selection and 200 generated interval cases: passed\n";
+    return 0;
+  } catch (const std::exception & e) {
+    std::cerr << e.what() << '\n';
+    return 1;
+  }
+}

@@ -73,7 +73,7 @@ struct CameraImageReference
 
 /**
  * @brief 明确的流绑定，禁止从 topic 名称、相同尺寸或 frame 后缀猜测相机关系。
- * @note optical_frame 必须来自设备配置/URDF 的光学帧声明；实际坐标轴由 TF 层核实。
+ * @note optical_frame 必须来自设备配置/URDF 的光学帧声明；坐标轴/外参须结合设备配置、URDF 和 TF 核查。
  *       basis 记录配置/标定版本依据；static_calibration 时还需证明该数据段内固定。
  */
 struct CameraInfoBinding

@@ -24,3 +24,11 @@ if(TARGET vln_memory::vln_memory_camera_info_ros)
   add_executable(camera_info_ros_consumer ../bag/camera_info/test_camera_info_ros.cpp)
   target_link_libraries(camera_info_ros_consumer PRIVATE vln_memory::vln_memory_camera_info_ros)
 endif()
+
+add_executable(tf_consumer tf_consumer.cpp)
+target_link_libraries(tf_consumer PRIVATE vln_memory::vln_memory_tf
+  vln_memory::vln_memory_rgb vln_memory::vln_memory_depth)
+if(TARGET vln_memory::vln_memory_tf_ros)
+  add_executable(tf_ros_consumer tf_ros_consumer.cpp)
+  target_link_libraries(tf_ros_consumer PRIVATE vln_memory::vln_memory_tf_ros)
+endif()

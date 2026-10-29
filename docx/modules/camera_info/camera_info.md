@@ -71,7 +71,7 @@ CameraInfoMatchResult 返回 matched()、稳定 code/message、标定细分 cali
 
 CameraInfoBinding 必须明确 camera_info_topic、image_topic、optical_frame、basis 和 image_domain(raw/rectified)。binding 是设备配置的声明，检查器核对实际话题与图像元数据。一个 CameraInfo 可为多个流使用，但每个流都必须单独建立明确绑定。
 
-frame 名不必带 optical 后缀，也不能仅凭后缀证明光学轴。相机 frame 与图像 frame 必须都等于配置中的 optical_frame；相机 link/body frame 不能不经变换冒充光学 frame。实际轴与外参的核查由后续 TF 模块承担。
+frame 名不必带 optical 后缀，也不能仅凭后缀证明光学轴。相机 frame 与图像 frame 必须都等于配置中的 optical_frame；相机 link/body frame 不能不经变换冒充光学 frame。实际轴与外参必须结合设备配置、URDF 和 TF 核查；TF 链连通和四元数有效本身不能证明物理安装正确。
 
 例如标定网格 640x480，ROI=(100,60,320,240)，binning=(2,3)，期望图像是 160x80。输出保留原始 K/P，不输出可直接用于该裁剪图像的“有效内参”；后续几何模块必须结合 ROI/binning 调整主点、焦距，原始图还需按畸变模型处理。不能把完整分辨率 K 直接用于 ROI 图像反投影。
 

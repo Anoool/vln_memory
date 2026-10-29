@@ -2,7 +2,7 @@
 
 ## 实施前规划与自审
 
-TF、builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo 核心、公共时间检查及各自 ROS 适配。两条构建路径复用同一核心源文件和测试，避免出现测试版本与正式版本行为不同。
+builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo/TF 核心、公共时间检查及各自 ROS 适配。两条构建路径复用同一核心源文件和测试，避免出现测试版本与正式版本行为不同。
 
 ## 目标与选项
 
@@ -18,6 +18,10 @@ TF、builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo 核
 | test_sensor_time | 公共时间边界/时钟关系测试 |
 | test_camera_info | 标定、ROI/binning、流绑定、时间策略测试 |
 | test_camera_info_ros | 真实 ROS CameraInfo 映射与所有权测试 |
+| vln_memory_tf | 无 ROS 的历史索引、坐标链和时间覆盖检查 |
+| vln_memory_tf_ros | 真实 TFMessage 接入，传递 tf2_msgs/geometry_msgs |
+| test_tf | 拓扑、区间交集、冲突及生成用例 |
+| test_tf_ros | 真实消息字段/来源/话题，原生 tf2 语义对照 |
 | test_rgb | 始终可构建的核心行为测试 |
 | test_depth | 单位、数值类型、大小端、统计和注册声明测试 |
 | test_depth_ros | 真实 Image 深度适配测试 |
@@ -27,7 +31,7 @@ TF、builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo 核
 
 安装后导出核心目标 `vln_memory::vln_memory_rgb`、`vln_memory::vln_memory_depth`，以及启用 ROS 时的 `vln_memory::vln_memory_rgb_ros`、`vln_memory::vln_memory_depth_ros`。无 ROS 路径使用 `cmake/vln_memoryConfig.cmake.in` 生成包配置供 find_package 使用。ROS 路径由 ament 生成配置，公开 sensor_msgs 依赖。
 
-`package.xml` 声明 ament_cmake 和 sensor_msgs；未引入 vln_agent、模型、TF 或数据库依赖。README 和 docx 说明随包安装。
+`package.xml` 声明 ament_cmake、sensor_msgs、tf2_msgs、geometry_msgs，tf2 为测试依赖；未引入 vln_agent、模型或数据库依赖。README 和 docx 说明随包安装。
 
 操作命令见 [项目 README](../../README.md)。RGB 的源码、测试、安装与下游消费验证情况见 [RGB 验证记录](../modules/rgb/rgb.md#实施与验证记录)。
 
@@ -46,3 +50,9 @@ Depth 和真实 Humble 安装后的下游验证见 [Depth 验证记录](../modul
 新增安装路径为 include/vln_memory/bag/common/sensor_time.hpp、bag/camera_info/camera_info.hpp；ROS 模式额外安装 camera_info_ros.hpp。核心测试总数 4，真实 ROS 模式总数 7。独立安装项目编译运行 camera_info_consumer，ROS 模式额外以同一真实消息测试源码构建 camera_info_ros_consumer。
 
 没有引入新第三方依赖。详细使用见 [CameraInfo 核心](../modules/camera_info/camera_info.md) 与 [公共时间](../common/sensor_time.md)。
+
+## TF 新增目标与导出
+
+vln_memory::vln_memory_tf 显式公开 C++17/include，不依赖 ROS；vln_memory::vln_memory_tf_ros PUBLIC 链接核心，并传递 tf2_msgs、geometry_msgs。tf2 仅在 ROS+BUILD_TESTING 时查找用于对照测试，关闭测试的生产包不需要 tf2 库。
+
+公开头按 bag/tf/tf.hpp 和 tf_ros.hpp 安装；无 ROS 模式不安装适配头。完整核心测试总数 5，真实 ROS 模式总数 9；新增独立下游 tf_consumer、tf_ros_consumer。详情见 [TF 核心](../modules/tf/tf.md) 和 [ROS 适配](../modules/tf/tf_ros.md)。
