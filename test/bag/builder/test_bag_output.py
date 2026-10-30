@@ -75,11 +75,23 @@ def check_dataset(root):
         assert pair["depth_message_id"] in message_ids
         assert pair["depth_message_id"] not in used_depth
         used_depth.add(pair["depth_message_id"])
+        assert pair["exact"] is True
+        assert pair["delta_ns"] == "0"
+        assert pair["rgb_stamp"] == pair["depth_stamp"]
+        assert pair["policy"] == "exact_header_one_to_one_v1"
+        assert pair["capture_sync_status"] == "unknown"
+
     manifest = read_json(root / "bag_manifest.json")
     for relative in manifest["files"]:
         assert (root / relative).is_file()
     assert manifest["artifact_kind"] == "bag_preparation"
     assert not manifest["pose_computed"]
+    assert manifest["effective_options"]["sync_tolerance_ns"] == "0"
+    summary = read_json(root / "reports/summary.json")
+    assert summary["exact_pairs"] == summary["pairs"]
+    assert summary["approximate_pairs"] == 0
+    assert summary["valid_time_rgb"] == summary["pairs"] + summary["unmatched_rgb"]
+    assert summary["valid_time_depth"] == summary["pairs"] + summary["unused_depth"]
 
 
 def main():

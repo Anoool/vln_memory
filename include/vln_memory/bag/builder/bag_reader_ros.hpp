@@ -30,7 +30,10 @@ struct BagScan
   std::size_t tf_duplicates{0};
 };
 
-/** @brief 同步借用 Image 仅在回调期间有效；nullptr 表示首遍反序列化失败。 */
+/**
+ * @brief 借用原始/解压 Image 仅在回调期间有效；nullptr 表示 CDR 或负载解码失败。
+ * @note 查看 record.deserialization_error 与 payload_error_code 区分错误；后者仍可有真实 header。
+ */
 using BagImageConsumer = std::function<void (const BagImageRecord &, const sensor_msgs::msg::Image *)>;
 
 /** @brief 扫描所有配置消息、保存原始 CDR/标定/TF，返回拥有型索引；失败抛 BagBuildError。 */

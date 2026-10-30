@@ -25,7 +25,7 @@ RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测
 
 TF 位于本层 tf，bag 读取与准备组装位于 builder，薄入口位于 src/apps。其他系统层暂不生成空目录。
 
-## BagBuilder 第一版运行
+## BagBuilder 零容差版本运行
 
 先修改 [config/vln_memory.yaml](config/vln_memory.yaml) 的真实话题、光学 frame、深度单位/注册及同钟分段依据。第一版只支持一个明确段的未压缩 SQLite ROS 2 bag；目录读取 metadata 的全部分卷，单独 .db3 明确标记单文件范围。
 
@@ -37,7 +37,7 @@ ros2 run vln_memory bag_builder --config config/vln_memory.yaml \
   --bag /absolute/path/recording --output /absolute/path/new_dataset
 ```
 
-输出必须是新目录。返回 completed_with_issues 表示数据集完整写出但有坏帧/未配对/缺几何依据，应检查 reports 和 prepared_pairs。完整文件树及包外调用见 [接口手册](docx/interfaces/bag_builder_api.md)，每个文件职责见 [BagBuilder](docx/modules/bag/bag_builder.md)。样例配置仅为格式示例，不能证明设备单位或硬件同步。
+RGB-D 的 sync_tolerance_ns 必须为 0，非零配置直接拒绝。支持原 Image、JPEG RGB8/BGR8 和 16UC1 compressedDepth PNG，其他压缩编码明确报告未支持。输出必须是新目录。返回 completed_with_issues 表示数据集完整写出但有坏帧/未配对/缺几何依据，应检查 reports 和 prepared_pairs。完整文件树及包外调用见 [接口手册](docx/interfaces/bag_builder_api.md)，每个文件职责见 [BagBuilder](docx/modules/bag/bag_builder.md)。样例配置仅为格式示例，不能证明设备单位或硬件同步。timestamp_match_status=no_exact_pairs 时保留提取证据但没有严格 RGB-D；本轮实际结果见 [零容差验收](docx/reviews/rgbd_zero_tolerance_verification.md)。
 
 ## 当前接口
 
@@ -104,7 +104,7 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 
 ## Git 审阅
 
-本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；TF/核查基线已保存为 e607c97；当前 BagBuilder 在 codex/bag-builder-v1，基线/配对/提取分步保存，本轮不合并主分支。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
+本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；TF/核查基线已保存为 e607c97；第一版保留 bag-builder-v1 标签；当前零容差修复在 codex/rgbd-zero-tolerance，规划/实现/验收分步保存，不合并主分支。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
 
 ```bash
 git status --short --branch

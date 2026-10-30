@@ -107,8 +107,17 @@ if(VLN_MEMORY_ENABLE_ROS)
   find_package(yaml-cpp REQUIRED)
   find_package(OpenSSL REQUIRED)
   find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
+  find_package(cv_bridge REQUIRED)
+  find_package(compressed_depth_image_transport REQUIRED)
+  # Humble 2.5.5 未导出可链接 target；从包前缀定位，避免写死发行版路径。
+  get_filename_component(depth_codec_prefix "${compressed_depth_image_transport_DIR}/../../.." ABSOLUTE)
+  find_library(memory_depth_codec NAMES compressed_depth_image_transport
+    HINTS "${depth_codec_prefix}/lib" REQUIRED)
+  find_path(memory_depth_codec_include compressed_depth_image_transport/codec.h
+    HINTS "${depth_codec_prefix}/include" REQUIRED)
   add_library(vln_memory_bag_builder SHARED
     src/bag/builder/bag_config.cpp
+    src/bag/builder/image_decoder_ros.cpp
     src/bag/builder/bag_reader_ros.cpp
     src/bag/builder/media_writer.cpp
     src/bag/builder/jsonl_writer.cpp
@@ -117,9 +126,9 @@ if(VLN_MEMORY_ENABLE_ROS)
   target_link_libraries(vln_memory_bag_builder PUBLIC
     vln_memory_rgb_ros vln_memory_depth_ros vln_memory_camera_info_ros vln_memory_tf_ros
     vln_memory_rgbd_sync vln_memory_camera_info_index nlohmann_json::nlohmann_json
-    PRIVATE yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS})
-  target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
-  ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp rcutils)
+    PRIVATE yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
+  target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
+  ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp rcutils cv_bridge)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vln_memory_bag_builder PRIVATE -Wall -Wextra -Wpedantic)
   endif()
@@ -164,9 +173,13 @@ if(BUILD_TESTING)
     # tf2 只用于真实 ROS 对照测试，当前索引/适配库不依赖其缓存。
     find_package(tf2 REQUIRED)
     find_package(rmw REQUIRED)
+    add_executable(test_image_decoder_ros test/bag/builder/test_image_decoder_ros.cpp)
+    target_link_libraries(test_image_decoder_ros PRIVATE vln_memory_bag_builder ${OpenCV_LIBS} ${memory_depth_codec})
+    target_include_directories(test_image_decoder_ros SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
+    add_test(NAME image_decoder_ros COMMAND test_image_decoder_ros)
     add_executable(test_bag_builder test/bag/builder/test_bag_builder.cpp)
-    target_link_libraries(test_bag_builder PRIVATE vln_memory_bag_builder yaml-cpp ${OpenCV_LIBS})
-    target_include_directories(test_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(test_bag_builder PRIVATE vln_memory_bag_builder yaml-cpp ${OpenCV_LIBS} ${memory_depth_codec})
+    target_include_directories(test_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
     add_test(NAME bag_builder_ros COMMAND test_bag_builder ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
     set_tests_properties(bag_builder_ros PROPERTIES FIXTURES_SETUP bag_builder_dataset)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -220,6 +233,7 @@ if(VLN_MEMORY_ENABLE_ROS)
   install(FILES
     include/vln_memory/bag/builder/bag_config.hpp
     include/vln_memory/bag/builder/bag_reader_ros.hpp
+    include/vln_memory/bag/builder/image_decoder_ros.hpp
     include/vln_memory/bag/builder/media_writer.hpp
     include/vln_memory/bag/builder/jsonl_writer.hpp
     include/vln_memory/bag/builder/bag_builder.hpp
@@ -239,7 +253,7 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(VLN_MEMORY_ENABLE_ROS)
   ament_export_targets(export_vln_memory HAS_LIBRARY_TARGET)
-  ament_export_dependencies(sensor_msgs tf2_msgs geometry_msgs rosbag2_cpp rosbag2_storage rclcpp rcutils nlohmann_json)
+  ament_export_dependencies(sensor_msgs tf2_msgs geometry_msgs rosbag2_cpp rosbag2_storage rclcpp rcutils nlohmann_json cv_bridge)
   ament_package()
 else()
   include(CMakePackageConfigHelpers)

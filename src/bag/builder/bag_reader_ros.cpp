@@ -24,6 +24,7 @@
 #include <tf2_msgs/msg/tf_message.hpp>
 
 #include "vln_memory/bag/builder/jsonl_writer.hpp"
+#include "vln_memory/bag/builder/image_decoder_ros.hpp"
 #include "vln_memory/bag/camera_info/camera_info_ros.hpp"
 #include "vln_memory/bag/tf/tf_ros.hpp"
 
@@ -232,7 +233,11 @@ void inspectTopics(const BagBuildOptions & options, const Reader & reader, BagSc
     if (!present.insert(value.name).second) {throw BagBuildError("invalid_metadata", "Duplicate topic name");}
     const auto selected = expected.find(value.name);
     if (selected != expected.end()) {
-      if (selected->second != value.type || value.serialization_format != "cdr") {
+      const bool image_topic = value.name == options.rgb_camera.image_topic ||
+        value.name == options.depth_camera.image_topic;
+      bool correct_type = selected->second == value.type;
+      if (image_topic && value.type == "sensor_msgs/msg/CompressedImage") {correct_type = true;}
+      if (!correct_type || value.serialization_format != "cdr") {
         throw BagBuildError("topic_type_mismatch", "Type/serialization mismatch for " + value.name);
       }
       if (topic.message_count > options.max_messages - selected_count) {
@@ -272,6 +277,7 @@ std::optional<Message> deserialize(const RawMessage & raw, std::string & error)
     throw;
   } catch (const std::exception & exception) {
     error = exception.what();
+    if (error.empty()) {error = "Message deserialization failed";}
     rcutils_reset_error();
   }
   return std::nullopt;
@@ -359,28 +365,64 @@ void checkImageOrder(
   if (found == high_water.end() || time_ns > found->second) {high_water[image.source.topic] = time_ns;}
 }
 
-/** @brief Image 首遍仅保存拥有型布局/身份；无像素转换，失败也保留一条图像记录。 */
+/** @brief 复制真实消息 header；即使压缩负载损坏，仍可保留有效采样时刻。 */
+void copyImageHeader(const std_msgs::msg::Header & header, BagImageRecord & record)
+{
+  record.stamp = {header.stamp.sec, header.stamp.nanosec};
+  record.frame_id = header.frame_id;
+}
+
+/** @brief 原始 Image 只保存布局，反序列化缓冲在本函数退出时释放。 */
+void indexRawImage(const RawMessage & raw, BagImageRecord & record)
+{
+  const auto image = deserialize<sensor_msgs::msg::Image>(raw, record.deserialization_error);
+  if (!image) {return;}
+  copyImageHeader(image->header, record);
+  record.width = image->width;
+  record.height = image->height;
+  record.encoding = image->encoding;
+  record.step = image->step;
+  record.is_bigendian = image->is_bigendian;
+  record.data_bytes = image->data.size();
+}
+
+/** @brief 首遍仅预检压缩头尺寸/预算，不解压；负载错误与 CDR 错误分开保存。 */
+void indexCompressedImage(const RawMessage & raw, BagImageRecord & record, const BagBuildOptions & options)
+{
+  const auto image = deserialize<sensor_msgs::msg::CompressedImage>(raw, record.deserialization_error);
+  if (!image) {return;}
+  copyImageHeader(image->header, record);
+  record.compressed_format = image->format;
+  record.data_bytes = image->data.size();
+  const bool depth_stream = record.source.topic == options.depth_camera.image_topic;
+  const auto role = depth_stream ? BagImageRole::depth : BagImageRole::rgb;
+  const auto max_pixels = depth_stream ? options.depth_limits.max_pixels : options.rgb_limits.max_pixels;
+  const auto max_bytes = depth_stream ? options.depth_limits.max_input_bytes : options.rgb_limits.max_input_bytes;
+  const auto info = inspectCompressedImage(*image, role, max_pixels, max_bytes);
+  record.width = info.width;
+  record.height = info.height;
+  record.encoding = info.encoding;
+  if (!info.ok()) {
+    record.payload_error_code = info.code;
+    record.payload_error = info.message;
+  }
+}
+
+/** @brief 两种消息共享原始 header 和来源索引；坏 CDR 不冒充零时刻图像。 */
 void indexImage(
-  const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
+  const RawMessage & raw, const BagMessageRef & source, const std::string & message_type, BagScan & scan,
   const BagBuildOptions & options, std::map<std::string, std::int64_t> & high_water)
 {
   if (scan.images.size() >= options.max_frames) {throw BagBuildError("limit_exceeded", "Image index limit exceeded");}
   BagImageRecord record;
   record.source = source;
-  const auto image = deserialize<sensor_msgs::msg::Image>(raw, record.deserialization_error);
-  if (!image) {
-    addIssue(scan, source, "deserialize", "deserialize_failed", record.deserialization_error);
-  } else {
-    record.stamp = {image->header.stamp.sec, image->header.stamp.nanosec};
-    record.frame_id = image->header.frame_id;
-    record.width = image->width;
-    record.height = image->height;
-    record.encoding = image->encoding;
-    record.step = image->step;
-    record.is_bigendian = image->is_bigendian;
-    record.data_bytes = image->data.size();
-    checkImageOrder(record, high_water, options);
+  record.message_type = message_type;
+  if (message_type == "sensor_msgs/msg/CompressedImage") {indexCompressedImage(raw, record, options);} else {
+    indexRawImage(raw, record);
   }
+  if (!record.deserialization_error.empty()) {
+    addIssue(scan, source, "deserialize", "deserialize_failed", record.deserialization_error);
+  } else {checkImageOrder(record, high_water, options);}
   scan.images.push_back(std::move(record));
 }
 
@@ -505,7 +547,7 @@ void scanMessages(const BagBuildOptions & options, Reader & reader, BagScan & sc
     ++scan.topics[cursor.topics.at(source.topic)].scanned_count;
     scan.messages.push_back(source);
     if (source.topic == options.rgb_camera.image_topic || source.topic == options.depth_camera.image_topic) {
-      indexImage(*raw, source, scan, options, high_water);
+      indexImage(*raw, source, scan.topics[cursor.topics.at(source.topic)].type, scan, options, high_water);
     } else if (source.topic == options.tf_topic || source.topic == options.tf_static_topic) {
       indexTf(*raw, source, scan, options, output);
     } else {indexCameraInfo(*raw, source, scan, options, output);}
@@ -526,6 +568,25 @@ void checkSameSource(const BagMessageRef & expected, const BagMessageRef & actua
   {
     throw BagBuildError("source_changed", "Source sequence/content changed between passes");
   }
+}
+
+/** @brief 第二遍逐帧解压；借用指针仅在 consumer 内有效，失败保留 header/来源。 */
+void consumeCompressedImage(
+  const RawMessage & raw, BagImageRecord record, const BagBuildOptions & options, const BagImageConsumer & consumer)
+{
+  std::string error;
+  const auto message = deserialize<sensor_msgs::msg::CompressedImage>(raw, error);
+  if (!message) {throw BagBuildError("source_changed", "Previously readable CompressedImage failed: " + error);}
+  const bool depth_stream = record.source.topic == options.depth_camera.image_topic;
+  const auto role = depth_stream ? BagImageRole::depth : BagImageRole::rgb;
+  const auto max_pixels = depth_stream ? options.depth_limits.max_pixels : options.rgb_limits.max_pixels;
+  const auto max_bytes = depth_stream ? options.depth_limits.max_input_bytes : options.rgb_limits.max_input_bytes;
+  const auto decoded = decodeCompressedImage(*message, role, max_pixels, max_bytes);
+  if (!decoded.ok()) {
+    record.payload_error_code = decoded.code;
+    record.payload_error = decoded.message;
+  }
+  consumer(record, decoded.image.get());
 }
 
 /** @brief 跨阶段快速核对大小/日志/metadata；最终再用完整 SHA 校验所有字节。 */
@@ -580,7 +641,7 @@ BagScan scanBag(const BagBuildOptions & options, OutputFiles & output)
   return scan;
 }
 
-/** @brief 第二遍只临时解码当前 Image；首遍坏 CDR 用 nullptr 回调，后续不静默重配。 */
+/** @brief 第二遍只临时解码当前图像；坏 CDR/负载用 nullptr 回调，不静默改配。 */
 void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer)
 {
   if (!consumer) {throw BagBuildError("invalid_consumer", "Image consumer is required");}
@@ -601,7 +662,14 @@ void readBagImages(const BagBuildOptions & options, const BagScan & scan, const 
       throw BagBuildError("source_changed", "Image index does not match source sequence");
     }
     const auto & record = scan.images[image_index++];
-    if (!record.deserialization_error.empty()) {consumer(record, nullptr); continue;}
+    if (!record.deserialization_error.empty() || !record.payload_error_code.empty()) {
+      consumer(record, nullptr);
+      continue;
+    }
+    if (record.message_type == "sensor_msgs/msg/CompressedImage") {
+      consumeCompressedImage(*raw, record, options, consumer);
+      continue;
+    }
     std::string error;
     const auto image = deserialize<sensor_msgs::msg::Image>(*raw, error);
     if (!image) {throw BagBuildError("source_changed", "Previously readable Image failed: " + error);}

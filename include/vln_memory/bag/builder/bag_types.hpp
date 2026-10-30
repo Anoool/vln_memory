@@ -52,6 +52,11 @@ struct BagImageRecord
   std::uint8_t is_bigendian{0};
   std::size_t data_bytes{0};
   std::string deserialization_error;
+  // 压缩消息没有原始 step；布局由编码头检查得到，原 format/CDR 单独保留。
+  std::string message_type{"sensor_msgs/msg/Image"};
+  std::string compressed_format;
+  std::string payload_error_code;
+  std::string payload_error;
 };
 
 /** @brief 一个实际存储分卷及其内容指纹，文件顺序取自 bag 元数据。 */
@@ -94,6 +99,8 @@ struct BagBuildResult
   std::string message;
   std::string output_directory;
   std::string work_directory;
+  // 提取成功与 header 匹配分开；本字段不代表设备曝光同步。
+  std::string timestamp_match_status{"not_checked"};
   std::size_t rgb_frames{0};
   std::size_t depth_frames{0};
   std::size_t decoded_frames{0};

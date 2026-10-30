@@ -9,7 +9,7 @@ bag:
   clock_basis: "请填写设备与 TF 使用同一时间域的采集依据"
   segment_id: recording_segment_1
   segment_basis: "请填写本段没有时钟重启、TF 重置或静态标定变化的依据"
-  sync_tolerance_ns: 0             # 默认严格相等；根据实际采集明确设置近似容差。
+  sync_tolerance_ns: 0             # 必须为 0，只接受原始 header 完全相等；非零配置会拒绝。
   tf_max_gap_ns: 0                 # 0 只接受精确动态 TF；与 RGB-D 容差独立。
   max_header_reorder_ns: 0         # 图像超出该回退量会终止，不跨未知 epoch 排序。
   map_frame: map

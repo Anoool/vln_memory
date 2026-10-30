@@ -12,10 +12,10 @@ depth 明确 input_unit=meters/millimeters、convention=optical_z；alignment=un
 
 ## 独立阈值与上限
 
-sync_tolerance_ns 是两图差，标定 max_delta_ns 是图像与标定差，tf_max_gap_ns 是 TF 相邻端点最大间隔，均为非负整数纳秒，0 表示严格/精确。不得因匹配率低自动放宽。
+sync_tolerance_ns 必须为 0，只接受两图原始 header 相等；YAML 加载与 C++ API 均拒绝非零。标定 max_delta_ns 是图像与标定差，tf_max_gap_ns 是 TF 相邻端点最大间隔，二者仍为独立非负整数纳秒阈值，不随 RGB-D 匹配率自动改变。
 
 min_valid_depth_ratio 在 [0,1]，全无效深度始终失败。limits 各项必须正数；max_tf_entries 限制原始 TF 条目（含重复），max_tf_samples 限制索引唯一样本，max_output_bytes 计原始 CDR、标准图像和文本总字节。
 
 ## 格式与使用
 
-目前仅未压缩 SQLite ROS 2 bag；CompressedImage、MCAP、ROS 1 和自动跨段处理不支持。示例单位/容差不是设备事实，使用前按真实录制配置填写。
+目前仅未压缩 SQLite ROS 2 bag；支持原 Image 及白名单压缩图像，详见 [压缩适配](../modules/bag/image_decoder_ros.md)。MCAP、ROS 1 和自动跨段处理不支持。示例单位/时钟声明不是设备事实，使用前按真实录制配置填写；输出预算包含标准 float32 NPY，实际大小可能显著超过压缩 bag。

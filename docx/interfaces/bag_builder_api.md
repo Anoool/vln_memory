@@ -1,4 +1,4 @@
-# BagBuilder 第一版接口与文件契约
+# BagBuilder 接口与文件契约（零容差版本）
 
 日期：2026-10-30。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
 
@@ -53,11 +53,11 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 | clock/segment | 单个明确同钟段和采集依据；不自动对齐时钟/跨 epoch 排序；允许重排量由 max_header_reorder_ns 声明 |
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
 | depth | DepthOptions：米/毫米、optical_z、范围、注册状态/依据及声明网格；不从编码或尺寸猜测 |
-| sync_tolerance_ns | 非负 int64 纳秒；0 精确，一对一/单调最近候选 |
+| sync_tolerance_ns | 必须为 0；YAML 加载及 C++ API 均拒绝非零，只接受原始 header 完全相等，一对一使用 |
 | tf_max_gap_ns | 非负 int64 纳秒；0 只接受动态精确点；各图使用自身采样时刻 |
 | limits | 分别限制消息/图像/标定/TF 条目与样本、序列化单消息、像素/源图像字节、全部输出字节 |
 
-BagScan 拥有小元数据/TF 历史。CameraInfoIndex 借用其 records，不可在使用中修改。BagImageConsumer 收到 const Image* 只在回调内有效，不能缓存；nullptr 表示原始 CDR 无法解析。标准帧由既有解码模块拥有，写出后释放。
+BagScan 拥有小元数据/TF 历史。CameraInfoIndex 借用其 records，不可在使用中修改。BagImageConsumer 收到 const Image* 只在回调内有效，不能缓存；nullptr 表示 CDR 或压缩负载无法解析；用 deserialization_error/payload_error_code 区分，负载坏时仍可有真实 header。标准帧由既有解码模块拥有，写出后释放。
 
 ## 4. 返回与错误
 
@@ -73,7 +73,7 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | --- | --- | --- |
 | bag_manifest.json | 数据集类型、完成状态、bag_id、源分卷/指纹、话题清单、有效配置、TF 覆盖、文件清单 | 先确认 artifact_kind=bag_preparation；不等同正式 memory manifest |
 | messages.jsonl | 每条配置消息的身份/记录时间/序号/摘要/原始 CDR 路径 | message_id 是所有其他来源引用的根，包括坏 CDR 和空 TFMessage |
-| frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像；source_data_bytes 为源像素字节数，numeric_quality_passed 只表示数值质量 |
+| frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像；source_data_bytes 为源 Image 像素或 CompressedImage 负载字节数，numeric_quality_passed 只表示数值质量 |
 | rgbd_pairs.jsonl | 一对两图 ID/原始 stamp/有符号 delta_ns、标定 ID、策略、准备状态及原因 | pair_id；frames 中各自查询端点仍为自身采样时刻 |
 | camera_info.jsonl | 每条原始完整 K/D/R/P/ROI/binning 和来源/校验结果 | calibration_id=来源 message_id，重复广播来源不合并消失 |
 | tf.jsonl | 每条 TransformStamped 原始父子/时间/几何/来源条目/insert_code | source.message_id + transform_index；静态与动态显式区分 |
@@ -99,3 +99,19 @@ prepared_for_geometry 要求两图解码、各自标定、各自 map 相机 TF �
 注册配置须使 RGB/Depth 的 optical_frame 与声明目标一致；共享 CameraInfo 只接受明确的 aligned_to_rgb 声明。manifest 保留独立的全部资源阈值，容量以十进制字符串存储。
 
 第一版实际测试/安装/内存检查边界及可查看样例见 [验收记录](../reviews/bag_builder_v1_verification.md)。
+
+## 8. 零容差版本新增/收紧的契约
+
+manifest 的 builder_version=2；JSON schema 仍为 bag_preparation/1，本次为附加字段，历史第一版验收记录保持原义。BagBuilder 拒绝非零容差，独立通用 pairRgbDepth API 的参数保留兼容，生产 builder 固定调用 max_delta_ns=0 并校验 exact_count/max_abs_delta_ns 不变量。
+
+支持 Image 和声明过的 CompressedImage（JPEG RGB8/BGR8、16UC1 compressedDepth PNG）；输入白名单、预算、错误及拥有型结果详见 [image_decoder_ros](../modules/bag/image_decoder_ros.md)。压缩消息首遍不解压像素，第二遍仍逐帧处理。
+
+BagImageRecord 增加 message_type、compressed_format、payload_error_code/payload_error。frames.jsonl 增加 source_message_type、source_format；压缩消息的 source_step/source_is_bigendian 为 null，因为原消息没有这些字段。source_encoding 表示交给核心的中间 Image 编码，压缩源声明以 source_format 为准。坏压缩体保留 metadata_available=true 和真实 stamp；坏 CDR 才没有可用 header。
+
+BagBuildResult 增加 timestamp_match_status：not_checked（尚未配对）、empty_stream（有效 header 流为空）、no_exact_pairs、partial、all_paired。最后两项只针对有效时间索引，仍需检查坏帧/质量；不表示图像、几何或物理同步全部合格。
+
+CLI、manifest、summary 明确 timestamp_match_policy=exact_header_one_to_one_v1、timestamp_match_status 和 capture_sync_status=unknown。每条 pair 必须 delta_ns="0"、exact=true，两个原始 stamp 相等，捕获同步证据仍为 unknown。零配对时保留完整提取结果和未配对清单，整体可 completed_with_issues，附 no_exact_rgbd_pairs；消费者不能只用 result.ok() 判断有可用严格 RGB-D。
+
+真实重跑、旧结果清理和剩余问题见 [零容差验收](../reviews/rgbd_zero_tolerance_verification.md)。
+
+本次公开结构 BagImageRecord/BagBuildResult 新增成员，C++ 下游必须重新编译，不能将旧二进制与新库混用；本轮独立安装前缀避免覆盖第一版。零配对时 max_abs_delta_ns="0" 是空统计默认值，必须结合 pairs 和 timestamp_match_status 判断，不能据此声称测得时差为零。

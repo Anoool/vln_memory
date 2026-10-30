@@ -19,3 +19,7 @@ tfTimeJson 的 covered 仅说明原始端点可用，明确 pose_computed=false�
 ## 使用与验证
 
 与同一 OutputFiles 共享预算，close 成功后才允许发布目录。独立 Python 读取并验证原始证据摘要、时间、引用和重复导出一致性，见 [输出验证](tests/test_bag_output.md)。
+
+## 严格时间与压缩来源
+
+当前 BagBuilder 写出的 pair 只含原始同刻两图，delta_ns 为字符串 "0"；summary/manifest 的同步状态与提取状态分开。frames 增加源消息类型/format，压缩源没有 source_step/source_is_bigendian，写 null；坏负载仍可 metadata_available=true。底层 stamp/整数序号序列化规则不变。

@@ -21,3 +21,7 @@ max_messages/max_frames/max_calibrations/max_tf_entries/max_serialized_bytes/max
 配置示例见 [vln_memory.yaml](../../config/vln_memory.md)。固定标定策略需要段内不变依据；近似同步容差必须按实际采集填写。原始/已注册深度要选正确的 CameraInfo，不能从编码猜毫米或从宽高猜注册。
 
 额外配置约束：尺寸按非负十进制解析再检查 uint32 范围；已注册声明必须与 RGB/Depth 两个光学 frame 一致；未注册 Depth 不允许静默共用 RGB CameraInfo。
+
+## 零容差约束
+
+sync_tolerance_ns 保留字段但仅允许 0，YAML 加载和 validateBagBuildOptions/buildBag 的 C++ 入口都拒绝非零；没有自动回退。CameraInfo max_delta_ns 和 tf_max_gap_ns 独立，不因此锁为零。配置只声明单位与时钟依据，不能由帧率或设备名猜测。

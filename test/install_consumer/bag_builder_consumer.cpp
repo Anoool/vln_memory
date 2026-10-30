@@ -1,4 +1,5 @@
 #include "vln_memory/bag/builder/bag_builder.hpp"
+#include "vln_memory/bag/builder/image_decoder_ros.hpp"
 
 #include <iostream>
 
@@ -13,6 +14,10 @@ int main(int argc, char ** argv)
     if (!result.ok()) {return 1;}
     return 0;
   }
+  sensor_msgs::msg::CompressedImage unsupported;
+  const auto decoded = vln_memory::decodeCompressedImage(
+    unsupported, vln_memory::BagImageRole::rgb, 16, 128);
+  if (decoded.ok() || decoded.code != "unsupported_compressed_format") {return 1;}
   const auto result = vln_memory::buildBag({});
   if (result.ok() || result.code != "invalid_config") {return 1;}
   return 0;

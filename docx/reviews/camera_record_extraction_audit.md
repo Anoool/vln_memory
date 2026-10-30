@@ -1,4 +1,5 @@
 # camera_record：真实 rosbag 提取与问题分析
+> 历史记录：本文针对 e14efd2 第一版。用户随后要求清理旧提取数据并重跑；旧 build/camera-record-audit-20261030 已删除，输入保留至新目录。当前修复与新证据见 [零容差验收](rgbd_zero_tolerance_verification.md)，本文旧日志路径不再作为现存文件入口。
 
 日期：2026-10-30。设备由用户确认为 Intel RealSense D435i。核查基线为 `e14efd2` / `bag-builder-v1`，本报告保存在 `codex/camera-record-audit`。本轮只做实际提取、核查和修复方案，没有修改产品源码、原 bag 或正式配置。
 

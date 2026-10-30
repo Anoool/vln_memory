@@ -21,3 +21,9 @@
 输出集合、参数格式和示例见 [接口文档](../../interfaces/bag_builder_api.md)；命令见 [CLI](bag_builder_main.md)，配置见 [配置说明](../../config/vln_memory.md)。测试见 [集成验证](tests/test_bag_builder.md)。
 
 审查更新：坏帧及数值质量不通过会有独立 pending 行；文件发布用 Linux renameat2(RENAME_NOREPLACE)，即使并发出现空目录也拒绝覆盖。numeric_quality_passed 不表示标定/TF/物理注册已经通过。
+
+## 零容差版本
+
+配置和 C++ API 只接受 sync_tolerance_ns=0；synchronize 固定传 0，并检查所有返回对均精确。writePairs 的 exact=true、delta_ns="0"，策略为 exact_header_one_to_one_v1；schema 仍为 bag_preparation/1，manifest builder_version=2。
+
+原始/压缩两种图像都复用既有核心；坏压缩体保留 header 及错误，未配对媒体仍导出。timestamp_match_status 与 capture_sync_status 分别表示消息匹配和采集证据，后者当前保持 unknown。零配对完整提取会附 no_exact_rgbd_pairs，不能当作可用 RGB-D 数据集。详见 [验收](../../reviews/rgbd_zero_tolerance_verification.md)。

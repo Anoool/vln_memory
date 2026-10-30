@@ -18,3 +18,7 @@ ros2 run vln_memory bag_builder --config /absolute/path/vln_memory.yaml \
 显示 status/code/message/output_directory/work_directory、图像/配对/问题数量。成功（包含 completed_with_issues）退出 0；构建失败退出 1；参数/加载错误退出 2。不要只凭退出 0 推断配对全部可用，应检查 prepared_pairs 与报告。
 
 命令存在 rosbag2 日志，不能把全部 stdout 当一份纯 JSON。C++/其他模块应直接调用 buildBag 或读取文件契约。
+
+## 零容差版本输出
+
+CLI JSON 增加 timestamp_match_policy=exact_header_one_to_one_v1、timestamp_match_status、capture_sync_status=unknown。no_exact_pairs 表示没有相等 header 的对；exit 0 仍仅代表提取完整发布，可带问题。非零 RGB-D 容差在 YAML 加载时拒绝，不会悄悄改成 0 或近似配对。

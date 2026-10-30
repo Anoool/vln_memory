@@ -12,6 +12,8 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <cv_bridge/cv_bridge.h>
+#include <compressed_depth_image_transport/codec.h>
 #include <rclcpp/serialization.hpp>
 #include <rcutils/error_handling.h>
 #include <rosbag2_cpp/writer.hpp>
@@ -24,7 +26,10 @@ namespace
 namespace fs = std::filesystem;
 using namespace vln_memory;
 using Json = nlohmann::json;
-enum class FixtureKind {normal, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth};
+enum class FixtureKind {
+  normal, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
+  compressed, mixed_compressed, bad_compressed, offset_depth
+};
 
 /** @brief Release 同样检查测试条件，失败描述实际不符合的契约。 */
 void expect(bool condition, const std::string & message)
@@ -43,7 +48,7 @@ BagBuildOptions fixtureOptions(const fs::path & input, const fs::path & output)
   options.clock_basis = "Generated messages use the same declared sensor clock";
   options.segment_id = "fixture_segment";
   options.segment_basis = "Single fixture epoch, no resets";
-  options.sync_tolerance_ns = 5000000;
+  options.sync_tolerance_ns = 0;
   options.tf_max_gap_ns = 6000000000LL;
   options.body_frame = "base";
   options.rgb_camera.image_topic = "/rgb";
@@ -159,13 +164,43 @@ void writeMessage(
   writeBytes(writer, topic, record_ns, bytes.buffer, bytes.buffer_length);
 }
 
+/** @brief 通过标准编码器写压缩或原 Image，损坏负载仍保留可读的 ROS header。 */
+void writeFixtureImage(
+  rosbag2_cpp::Writer & writer, const std::string & topic, std::int64_t record_ns,
+  const sensor_msgs::msg::Image & image, FixtureKind kind)
+{
+  bool compressed = kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed;
+  if (kind == FixtureKind::mixed_compressed && topic == "/depth") {compressed = true;}
+  if (!compressed) {writeMessage(writer, topic, record_ns, image); return;}
+  sensor_msgs::msg::CompressedImage message;
+  if (topic == "/depth") {
+    const auto encoded = compressed_depth_image_transport::encodeCompressedDepthImage(image, 10, 100, 1);
+    expect(encoded != nullptr, "Fixture depth compression failed");
+    message = *encoded;
+  } else {
+    message.header = image.header;
+    message.format = "bgr8; jpeg compressed bgr8";
+    const auto pixels = cv_bridge::toCvCopy(image, "bgr8");
+    expect(cv::imencode(".jpg", pixels->image, message.data), "Fixture JPEG compression failed");
+    if (kind == FixtureKind::bad_compressed && image.header.stamp.sec == 10) {message.data.resize(3);}
+  }
+  writeMessage(writer, topic, record_ns, message);
+}
+
 /** @brief 创建固定话题清单，未选择的大消息只用于强制 SQLite 分卷和 inventory 核查。 */
 void createTopics(rosbag2_cpp::Writer & writer, FixtureKind kind)
 {
   std::string rgb_type = "sensor_msgs/msg/Image";
-  if (kind == FixtureKind::wrong_type) {rgb_type = "sensor_msgs/msg/CompressedImage";}
+  if (kind == FixtureKind::wrong_type) {rgb_type = "std_msgs/msg/String";}
+  if (kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed) {
+    rgb_type = "sensor_msgs/msg/CompressedImage";
+  }
+  std::string depth_type = "sensor_msgs/msg/Image";
+  if (kind == FixtureKind::compressed || kind == FixtureKind::mixed_compressed || kind == FixtureKind::bad_compressed) {
+    depth_type = "sensor_msgs/msg/CompressedImage";
+  }
   writer.create_topic({"/rgb", rgb_type, "cdr", ""});
-  writer.create_topic({"/depth", "sensor_msgs/msg/Image", "cdr", ""});
+  writer.create_topic({"/depth", depth_type, "cdr", ""});
   writer.create_topic({"/rgb_info", "sensor_msgs/msg/CameraInfo", "cdr", ""});
   writer.create_topic({"/depth_info", "sensor_msgs/msg/CameraInfo", "cdr", ""});
   writer.create_topic({"/tf", "tf2_msgs/msg/TFMessage", "cdr", ""});
@@ -183,7 +218,7 @@ void createFixture(const fs::path & path, FixtureKind kind)
   storage.max_bagfile_size = 200000;
   writer.open(storage);
   createTopics(writer, kind);
-  writeMessage(writer, "/rgb", -1000000000LL, rgb(10));
+  writeFixtureImage(writer, "/rgb", -1000000000LL, rgb(10), kind);
   auto noise = rgb(10);
   noise.data.resize(1000000, 0);
   writeMessage(writer, "/not_selected", -999999999LL, noise);
@@ -191,13 +226,15 @@ void createFixture(const fs::path & path, FixtureKind kind)
   writeMessage(writer, "/depth_info", 0, calibration());
   std::uint16_t first = 1000;
   if (kind == FixtureKind::invalid_depth) {first = 0;}
-  writeMessage(writer, "/depth", 1000000000LL, depth(10, 4000000, first, 0));
-  writeMessage(writer, "/rgb", 2000000000LL, rgb(11));
+  std::uint32_t offset_ns = 0;
+  if (kind == FixtureKind::offset_depth) {offset_ns = 1;}
+  writeFixtureImage(writer, "/depth", 1000000000LL, depth(10, offset_ns, first, 0), kind);
+  writeFixtureImage(writer, "/rgb", 2000000000LL, rgb(11), kind);
   if (kind == FixtureKind::invalid_depth) {
-    writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 0, 0));
-  } else {writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 2000, 3000));}
-  writeMessage(writer, "/rgb", 3000000000LL, rgb(12));
-  writeMessage(writer, "/depth", 4000000000LL, depth(14, 0, 0, 0));
+    writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 0, 0), kind);
+  } else {writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 2000, 3000), kind);}
+  writeFixtureImage(writer, "/rgb", 3000000000LL, rgb(12), kind);
+  writeFixtureImage(writer, "/depth", 4000000000LL, depth(14, 0, 0, 0), kind);
   const std::array<std::uint8_t, 4> bad_cdr{0xff, 0xff, 0xff, 0xff};
   writeBytes(writer, "/rgb", 5000000000LL, bad_cdr.data(), bad_cdr.size());
   tf2_msgs::msg::TFMessage fixed;
@@ -273,8 +310,8 @@ void checkNormal(const fs::path & output, const BagBuildResult & result)
   expect(summary.at("tf_duplicates") == 1 && summary.at("tf_unique_samples") == 3, "TF duplicate provenance wrong");
   const auto pairs = readLines(output / "rgbd_pairs.jsonl");
   expect(
-    pairs[0].at("delta_ns") == "4000000" && pairs[1].at("delta_ns") == "-4000000",
-    "Header time pairing used record time or wrong sign");
+    pairs[0].at("delta_ns") == "0" && pairs[1].at("delta_ns") == "0",
+    "Strict header pairing used record time or accepted unequal stamps");
 }
 
 /** @brief 生成可直接运行 CLI 的示例配置，不把生成 bag 或证据加入 Git。 */
@@ -290,7 +327,7 @@ void writeFixtureConfig(const fs::path & path, const BagBuildOptions & options)
   bag["segment_id"] = options.segment_id;
   bag["segment_basis"] = options.segment_basis;
   bag["body_frame"] = "base";
-  bag["sync_tolerance_ns"] = 5000000;
+  bag["sync_tolerance_ns"] = 0;
   bag["tf_max_gap_ns"] = 6000000000LL;
   for (const auto * name : {"rgb", "depth"}) {
     auto camera = bag[std::string(name) + "_camera"];
@@ -320,6 +357,10 @@ void configCases(const fs::path & root, const fs::path & config)
 {
   auto options = loadBagBuildOptions(config.string());
   expect(validateBagBuildOptions(options).empty(), "Fixture YAML not usable");
+  auto nonzero = options;
+  nonzero.sync_tolerance_ns = 1;
+  const auto refused = buildBag(nonzero);
+  expect(!refused.ok() && refused.code == "invalid_config", "Nonzero tolerance accepted through C++ API");
   auto conflicting = options;
   conflicting.depth.rgb_grid.frame_id = "different_optical_frame";
   expect(!validateBagBuildOptions(conflicting).empty(), "Conflicting registration configuration accepted");
@@ -328,12 +369,13 @@ void configCases(const fs::path & root, const fs::path & config)
   conflicting.depth.alignment = DepthAlignment::unknown;
   conflicting.depth.rgb_grid = {};
   expect(!validateBagBuildOptions(conflicting).empty(), "Unregistered depth silently shared RGB calibration");
-  for (const auto * variant : {"unknown", "negative", "negative_grid", "duplicate"}) {
+  for (const auto * variant : {"unknown", "negative", "negative_grid", "duplicate", "nonzero_sync"}) {
     const auto path = root / (std::string(variant) + ".yaml");
     auto yaml = YAML::LoadFile(config.string());
     if (std::string(variant) == "unknown") {yaml["bag"]["typo"] = true;} else if (std::string(variant) == "negative") {
       yaml["bag"]["limits"]["max_frames"] = -1;
     } else if (std::string(variant) == "negative_grid") {yaml["bag"]["depth"]["rgb_width"] = -1;}
+    else if (std::string(variant) == "nonzero_sync") {yaml["bag"]["sync_tolerance_ns"] = 1;}
     std::ofstream output(path);
     if (std::string(variant) == "duplicate") {output << "bag:\n  input: a\n  input: b\n";} else {output << yaml;}
     output.close();
@@ -368,6 +410,40 @@ void failureAndQualityCases(const fs::path & root)
       expect(result.ok() && result.prepared_pairs == 0 && result.pairs == 2, "Quality/conflict did not gate pairs");
       const auto pairs = readLines(output / "rgbd_pairs.jsonl");
       expect(pairs[0].at("status") == "pending", "Bad pair marked prepared");
+    }
+  }
+}
+
+/** @brief 精确/相差 1ns、压缩/混合输入和坏压缩体都保持同一零容差契约。 */
+void strictCompressedCases(const fs::path & root)
+{
+  const std::vector<std::pair<FixtureKind, std::string>> variants{
+    {FixtureKind::compressed, "compressed"}, {FixtureKind::mixed_compressed, "mixed"},
+    {FixtureKind::bad_compressed, "bad_compressed"}, {FixtureKind::offset_depth, "offset_1ns"}};
+  for (const auto & variant : variants) {
+    const auto input = root / (variant.second + "_bag");
+    const auto output = root / (variant.second + "_out");
+    createFixture(input, variant.first);
+    const auto result = buildBag(fixtureOptions(input, output));
+    expect(result.ok(), "Strict/compressed fixture failed: " + result.message);
+    const auto summary = readJson(output / "reports/summary.json");
+    expect(summary.at("approximate_pairs") == 0, "Approximate pair escaped strict builder");
+    expect(summary.at("capture_sync_status") == "unknown", "Unproven exposure sync claimed");
+    if (variant.first == FixtureKind::offset_depth) {
+      expect(result.pairs == 0 && result.decoded_frames == 6, "1ns mismatch passed or lost unpaired media");
+      expect(result.timestamp_match_status == "no_exact_pairs", "No-pair status missing");
+    } else {
+      expect(result.pairs == 2, "Strict compressed pairs missing");
+      for (const auto & pair : readLines(output / "rgbd_pairs.jsonl")) {
+        expect(pair.at("delta_ns") == "0" && pair.at("exact") == true, "Non-exact pair published");
+      }
+    }
+    if (variant.first == FixtureKind::bad_compressed) {
+      expect(result.decoded_frames == 5 && result.prepared_pairs == 1, "Bad payload was silently replaced");
+      const auto frames = readLines(output / "frames.jsonl");
+      expect(frames[0].at("metadata_available") == true && frames[0].at("stamp").at("sec") == 10,
+        "Bad compressed body erased original header");
+      expect(frames[0].at("decode_code") == "invalid_compressed_payload", "Payload error confused with CDR");
     }
   }
 }
@@ -428,6 +504,7 @@ void integrationCases(const fs::path & root)
   configCases(root, root / "demo_config.yaml");
   failureAndQualityCases(root);
   sourceChangeCase(root);
+  strictCompressedCases(root);
 }
 }
 

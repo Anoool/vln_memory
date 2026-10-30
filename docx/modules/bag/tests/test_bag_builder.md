@@ -13,3 +13,9 @@ RGB 行填充/色彩、uint16 毫米转换、NaN/全无效、RGB-D 正负 4ms �
 每次在 build 下独立 test_artifacts/run_<计时值> 创建录包和数据集，latest.txt 指向最近成功用例。demo_config.yaml 可直接运行 CLI，输出应选新的目录。生成物不入 Git。
 
 这些是磁盘格式/库的构造回归，不是实际设备录制；未验证物理同步、标定精度或 map 数值位姿。
+
+## 零容差版本回归
+
+当前主 fixture 的两对 header 已改为精确相等，旧 ±4ms 是第一版历史用例。新增相差 1ns 全拒绝、JPEG+compressedDepth、原 RGB+压缩 Depth 混合流、坏压缩体保留 header/固定配对、非零 YAML 与 C++ API 拒绝。错误类型 fixture 改为非图像消息，CompressedImage 已是受支持类型。
+
+测试同时验证所有近似配对数为 0、原始媒体保留、物理同步 unknown。独立 NumPy 校验检查两图原 stamp 完全相等及两流计数守恒；新增 [压缩适配测试](test_image_decoder_ros.md)。真实数据与构造数据分别见 [验收](../../../reviews/rgbd_zero_tolerance_verification.md)。

@@ -74,3 +74,7 @@ vln_memory::vln_memory_tf 显式公开 C++17/include，不依赖 ROS；vln_memor
 现有核心仍可 VLN_MEMORY_ENABLE_ROS=OFF 构建；第一版共有 8 个核心、14 个 ROS 构建 CTest。test/install_consumer 只查安装包：核心 6 个消费者、ROS 10 个；完整 builder 消费者还可传 YAML 与新输出目录实际处理 bag。
 
 实际接口和参数见 [BagBuilder](../interfaces/bag_builder_api.md)，验证范围见 [验收记录](../reviews/bag_builder_v1_verification.md)。
+
+## 零容差压缩输入接入
+
+ROS builder 新增 image_decoder_ros.cpp，使用 cv_bridge 和 compressed_depth_image_transport。Humble 2.5.5 未导出 codec 链接 target，从其已找到的包前缀定位头/库，不写死 /opt/ros/humble。新增 image_decoder_ros 测试，公开新头并验证安装后消费者；无 ROS 核心目标不增加这些依赖。

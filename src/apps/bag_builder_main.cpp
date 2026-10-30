@@ -38,7 +38,9 @@ int main(int argc, char ** argv)
       {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
       {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},
       {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
-      {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count}};
+      {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
+      {"timestamp_match_policy", "exact_header_one_to_one_v1"},
+      {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"}};
     std::cout << report.dump(2) << '\n';
     if (!result.ok()) {return 1;}
     return 0;

@@ -68,6 +68,24 @@ void knownAnswers()
   expect(result.ok() && result.report->pairs.empty(), "Empty streams should return report");
 }
 
+/** @brief 零容差仍接受真实零时刻；重复同刻消息按来源一对一，未知时钟不凭相等放行。 */
+void strictEquality()
+{
+  const auto rgb = stream("rgb", {0, 5, 5, 7});
+  const auto depth = stream("depth", {0, 5, 7});
+  const auto exact = pairRgbDepth(rgb, depth, options(0));
+  expect(exact.ok() && exact.report->pairs.size() == 3, "Exact/duplicate stamp matching failed");
+  expect(exact.report->exact_count == 3 && exact.report->max_abs_delta_ns == 0, "Nonzero strict delta");
+  expect(exact.report->unmatched_rgb.size() == 1 && exact.report->unused_depth.empty(), "Depth reused");
+  expect(exact.report->pairs.front().rgb.stamp.nanosec == 0, "Real zero timestamp was discarded");
+  auto unknown = options(0);
+  unknown.clock_relation = SensorClockRelation::unknown;
+  expect(!pairRgbDepth(rgb, depth, unknown).ok(), "Equal timestamps proved an unknown clock");
+  auto other_clock = depth;
+  other_clock.clock_id = "other_clock";
+  expect(!pairRgbDepth(rgb, other_clock, options(0)).ok(), "Cross-clock exact stamps accepted");
+}
+
 /** @brief 验证坏引用、资源限制、不同域及完整 ROS 时间边界。 */
 void inputBoundaries()
 {
@@ -169,6 +187,7 @@ int main()
 {
   try {
     knownAnswers();
+    strictEquality();
     inputBoundaries();
     generatedCases();
     std::cout << "RGB-D sync: 600 oracle cases and boundaries passed\n";
