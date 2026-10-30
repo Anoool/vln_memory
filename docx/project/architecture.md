@@ -1,12 +1,12 @@
 # 当前源码组织与观测准备层 bag
 
-整个系统的目标、后续各层和实施顺序见 [系统整体规划](system_plan.md)。**当前只在开发观测准备层 bag，RGB、Depth、CameraInfo 已实现，第四个 TF 模块已实现链/覆盖索引。**
+当前最终交付范围是原设计第 1、2 部分，逐条进度见 [范围对照](sections_1_2_scope.md)，实施顺序见 [收敛后的系统规划](system_plan.md)。**当前只在开发观测准备层 bag，RGB、Depth、CameraInfo 已实现，第四个 TF 模块已实现链/覆盖索引。**
 
 ## 源码目录约定
 
 ```text
 include/vln_memory/bag/
-├── common/{sensor_types,sensor_time}.hpp
+├── common/{sensor_names,sensor_types,sensor_time}.hpp
 ├── rgb/{rgb,rgb_ros}.hpp
 ├── depth/{depth,depth_ros}.hpp
 ├── camera_info/{camera_info,camera_info_ros}.hpp
@@ -29,7 +29,7 @@ test/
 - include、src、模块测试按“层/模块”对应，头文件安装后保留同样路径。
 - bag/common 放观测准备层共用类型和无 ROS 时间检查；不放相机业务、ROS 订阅或未来实体类型。
 - 后续本层添加 bag/builder；最后一个是 bag 读取和组装入口，避免 bag/bag 的重复含义。
-- 记忆、构建、插件和 Viewer 层开始实现时才添加同级目录，不提前生成空类。
+- 原文第 1、2 部分要求的记忆、构建和 Viewer 在真实实现时才添加同级目录；独立在线查询 plugins 暂不开发，不提前生成空类。
 - 函数签名、vln_memory 命名空间和已导出库目标保持，公开 include 路径使用新分类。
 
 ## 本层五个模块的职责与接口方向
@@ -131,3 +131,8 @@ TFMessage + 实际 topic/message_id -> ingestRosTf -> TfIndex::insert
 严格编译下核心 5/5、真实 Humble 9/9、全部安装消费者、两个完整文档示例、TF 的 ASan/UBSan/泄漏检查通过；133 个本地链接/章节和所有 C++ 同名分类文档检查通过。测试数据为构造消息，尚未用实际 bag 核查设备的真实链与时间覆盖。
 
 CameraInfo 基线在原分支本地提交 d9b030b；TF 与配套修改位于 codex/tf-module，完成后 git add，未自动合并 main。位姿求解、跳变检测、bag 自动分段和 JSONL 仍待后续实现。
+
+
+## 共享名称修复与注释
+
+当前 F5 来源话题校验问题已通过 common/sensor_names 统一修复，生产头/实现均已补清楚职责与边界注释；后续功能状态保持。见 [实施记录](sensor_validation_comments_plan.md)。

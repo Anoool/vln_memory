@@ -9,6 +9,11 @@
 
 #include "vln_memory/bag/tf/tf.hpp"
 
+/**
+ * @file
+ * ROS TF 边界：实际话题决定动态/静态语义，逐条 TransformStamped 送入索引。
+ * 条目可部分成功，调用者必须处理 issues 并保留源消息，不能只看 processed。
+ */
 namespace vln_memory
 {
 
@@ -39,9 +44,11 @@ struct TfMessageReport
   std::size_t inserted{0};
   std::size_t duplicates{0};
   std::vector<TfMessageIssue> issues;
+  /** @brief processed 且没有 issues 才表示全部条目通过；空消息是合法零条处理。 */
   bool ok() const noexcept {return code == TfMessageCode::processed && issues.empty();}
 };
 
+/** @brief 返回稳定静态状态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfMessageCodeName(TfMessageCode code) noexcept;
 
 /**

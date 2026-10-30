@@ -42,7 +42,7 @@ TfChainReport inspectChain(target, source, TfCoverageOptions);
 TfTimeCheck checkTime(target, source, SensorStamp, TfTimeOptions);
 ```
 
-后三个是 TfIndex 的公开方法。TfTransform 持有 kind、parent_frame、child_frame、原始 stamp、translation_m、rotation_xyzw 和 TfSource(topic,message_id,transform_index)。接收左值复制、接收右值可移动，索引不会借用源消息。
+后三个是 TfIndex 的公开方法。TfTransform 持有 kind、parent_frame、child_frame、原始 stamp、translation_m、rotation_xyzw 和顶层来源字段 source_topic/source_message_id/source_transform_index。接收左值复制、接收右值可移动，索引不会借用源消息。
 
 | 接口 | 实际用途 | 调用者必须检查 |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ TfTimeCheck checkTime(target, source, SensorStamp, TfTimeOptions);
 | checkTime | 按指定采样时间检验链并选择精确/插值端点 | covered()；失败 frame 与具体 code |
 | scope/edgeCount/sampleCount | 查看上下文与唯一数据规模 | ID 是调用者声明，不是从消息推断 |
 
-TfChainReport 保存 scope、target/source、失败 frame、source→target 的 frames、每条父子边的 kind/inverted/sample_count/dynamic_bounds、coverage_status、intervals。dynamic_bounds 是首末包络，不能代替 intervals。
+TfChainReport 保存 clock_id/segment_id、target/source、失败 frame、source→target 的 frames、每条父子边的 kind/inverted/sample_count/dynamic_bounds、coverage_status、intervals。dynamic_bounds 是首末包络，不能代替 intervals。
 
 TfTimeCheck 保存原始查询 stamp、chain_code、失败 frame、路径和 TfSelectedEdge。每条 selected edge 包含 inverted、before、可选 after：
 
@@ -140,24 +140,30 @@ int main()
   fixed.parent_frame = "base";
   fixed.child_frame = "camera_optical";
   fixed.stamp = {99, 0};
-  fixed.source = {"/tf_static", "bag:message:0", 0};
+  fixed.source_topic = "/tf_static";
+  fixed.source_message_id = "bag:message:0";
   if (!index.insert(fixed).accepted()) {return 1;}
 
   TfTransform dynamic;
   dynamic.parent_frame = "map";
   dynamic.child_frame = "base";
   dynamic.stamp = {1, 0};
-  dynamic.source = {"/tf", "bag:message:1", 0};
+  dynamic.source_topic = "/tf";
+  dynamic.source_message_id = "bag:message:1";
   if (!index.insert(dynamic).accepted()) {return 1;}
   dynamic.stamp = {3, 0};
-  dynamic.source.message_id = "bag:message:2";
+  dynamic.source_message_id = "bag:message:2";
   if (!index.insert(dynamic).accepted()) {return 1;}
 
   // 2 秒只为演示；实际间隔阈值应结合 TF 发布周期与运动设置。
   const TfCoverageOptions policy{2000000000LL};
   const auto chain = index.inspectChain("map", "camera_optical", policy);
   if (!chain.chainExists() || chain.coverage_status != TfCoverageStatus::available) {return 1;}
-  const auto query = index.checkTime("map", "camera_optical", {2, 0}, {scope, policy});
+  TfTimeOptions options;
+  options.clock_id = scope.clock_id;
+  options.segment_id = scope.segment_id;
+  options.max_interpolation_gap_ns = policy.max_interpolation_gap_ns;
+  const auto query = index.checkTime("map", "camera_optical", {2, 0}, options);
   if (!query.covered()) {std::cerr << query.message; return 1;}
   std::cout << chain.intervals[0].start.sec << ".." << chain.intervals[0].end.sec
             << "; edges=" << query.edges.size() << '\n';
@@ -185,3 +191,25 @@ find_package(vln_memory CONFIG REQUIRED)，链接 vln_memory::vln_memory_tf；RO
 - [Humble tf2 BufferCore](https://github.com/ros2/geometry2/blob/humble/tf2/src/buffer_core.cpp)：查询坐标链、插入校验及历史时间查询行为。
 - [Humble tf2 TimeCache](https://github.com/ros2/geometry2/blob/humble/tf2/src/cache.cpp)：动态缓存、边界、插值与 time=0 的 latest 行为。
 - [Humble tf2 StaticCache](https://github.com/ros2/geometry2/blob/humble/tf2/src/static_cache.cpp)：静态几何不受动态采样时段限制。本索引额外保留原始静态时间，并对互相矛盾的重复静态消息报告错误。
+
+
+## 2026-10-29 修复与注释复核
+
+来源话题改用完整公共校验；补明静态/同刻去重、闭区间交集、精确端点优先及 covered 与数值位姿的区别。 话题格式统一最长 247 字节。具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+## 12. 2026-10-30 可读性重构与字段迁移
+
+依据 AGENTS.md，来源、查询配置和报告上下文改为扁平字段，内部边历史移出类内定义。函数签名和错误枚举保持；下表属于公开 C++ 字段/布局调整，下游须迁移并重新编译，不提供重复兼容字段。
+
+| 原写法 | 当前写法 |
+| --- | --- |
+| transform.source.topic | transform.source_topic |
+| transform.source.message_id | transform.source_message_id |
+| transform.source.transform_index | transform.source_transform_index |
+| options.scope.clock_id / options.scope.segment_id | options.clock_id / options.segment_id |
+| options.coverage.max_interpolation_gap_ns | options.max_interpolation_gap_ns |
+| report.scope.clock_id / report.scope.segment_id | report.clock_id / report.segment_id |
+
+TfSource 已移除；TfScope 保留用于构造索引及 scope()。SensorStamp、TfTimeInterval、optional 动态包络以及 before/after 原始样本继续表达各自含义，不展开为易失配的重复字段。
+
+人工审阅可按 insert（输入/冲突/资源/写入）、findChain（两端/祖先/共同祖先/方向）、inspectChain（单边区间/交集）、checkTime（配置/链/端点）顺序阅读。辅助函数注明前置条件、所有权、单位和失败边界。实施与验证见 [TF 可读性整理](../../project/tf_readability_plan.md)。

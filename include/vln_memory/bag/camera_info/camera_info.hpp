@@ -8,6 +8,11 @@
 
 #include "vln_memory/bag/common/sensor_time.hpp"
 
+/**
+ * @file
+ * CameraInfo 契约：保留完整来源标定，再验证它与指定图像候选的绑定。
+ * 校验结果是模型/元数据的一致性，不包含标定版本检索、去畸变或有效内参求解。
+ */
 namespace vln_memory
 {
 
@@ -57,39 +62,45 @@ struct CameraInfoResult
   CameraInfoErrorCode code{CameraInfoErrorCode::none};
   std::string message;
   std::optional<CameraInfoData> info;
-  bool ok() const noexcept {return code == CameraInfoErrorCode::none && info.has_value();}
+  /** @brief 仅完整校验通过且存在拥有型标定时返回 true，不代表物理精度已验证。 */
+  bool ok() const noexcept
+  {
+    return code == CameraInfoErrorCode::none && info.has_value();
+  }
 };
 
 enum class CameraImageDomain {unspecified, raw, rectified};
 enum class CameraInfoTimePolicy {synchronized, static_calibration};
 
-/** @brief 配对所需的图像元数据，可直接从 RgbFrame/DepthFrame 和 bag topic 构造。 */
+/**
+ * @brief 指定图像的扁平元数据；由 RgbFrame/DepthFrame 的公开字段和真实话题逐项填写。
+ * @note 独立持有字符串，stamp 保留原始采样时刻；不引用源图像或复制像素。
+ */
 struct CameraImageReference
 {
   std::string topic;
-  ImageGeometry geometry;
+  std::uint32_t width{0};
+  std::uint32_t height{0};
+  std::string frame_id;
   SensorStamp stamp;
 };
 
 /**
- * @brief 明确的流绑定，禁止从 topic 名称、相同尺寸或 frame 后缀猜测相机关系。
- * @note optical_frame 必须来自设备配置/URDF 的光学帧声明；坐标轴/外参须结合设备配置、URDF 和 TF 核查。
- *       basis 记录配置/标定版本依据；static_calibration 时还需证明该数据段内固定。
+ * @brief 标定与图像的显式匹配配置；绑定和时间参数直接位于同一层。
+ * @note optical_frame 由设备配置/URDF 声明，名称不证明实际光学轴或安装方向。
+ *       binding_basis 记录配置/标定依据；固定策略还须证明该段内模型/ROI/binning 不变。
  */
-struct CameraInfoBinding
+struct CameraInfoMatchOptions
 {
   std::string camera_info_topic;
   std::string image_topic;
   std::string optical_frame;
-  std::string basis;
+  std::string binding_basis;
   CameraImageDomain image_domain{CameraImageDomain::unspecified};
-};
-
-struct CameraInfoMatchOptions
-{
-  CameraInfoBinding binding;
   CameraInfoTimePolicy time_policy{CameraInfoTimePolicy::synchronized};
-  SensorTimeOptions time;
+  SensorClockRelation clock_relation{SensorClockRelation::unknown};
+  // 非负整数纳秒，0 表示严格相等；固定标定策略不检查采样时差。
+  std::int64_t max_delta_ns{0};
 };
 
 enum class CameraInfoMatchCode
@@ -109,10 +120,16 @@ struct CameraInfoMatchResult
   // 固定标定策略不比较采样时差，timing 为空；这不表示两条消息时间相同。
   std::optional<SensorTimeCheck> timing;
   bool used_static_calibration{false};
-  bool matched() const noexcept {return code == CameraInfoMatchCode::matched;}
+  /** @brief 只确认指定候选的关联条件通过，不代表已生成有效内参或完成深度注册。 */
+  bool matched() const noexcept
+  {
+    return code == CameraInfoMatchCode::matched;
+  }
 };
 
+/** @brief 返回标定错误的稳定静态名称；未知枚举返回 unknown，无所有权转移。 */
 const char * cameraInfoErrorCodeName(CameraInfoErrorCode code) noexcept;
+/** @brief 返回匹配状态的稳定静态名称；未知枚举返回 unknown，无所有权转移。 */
 const char * cameraInfoMatchCodeName(CameraInfoMatchCode code) noexcept;
 
 /**

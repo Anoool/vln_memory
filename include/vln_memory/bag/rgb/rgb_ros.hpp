@@ -4,6 +4,11 @@
 
 #include "vln_memory/bag/rgb/rgb.hpp"
 
+/**
+ * @file
+ * ROS RGB 边界：接收已经反序列化的 Image，映射到无 ROS 核心。
+ * 数据校验集中在 decodeRgb；此层不打开 bag，也不重复实现通道转换。
+ */
 namespace vln_memory
 {
 

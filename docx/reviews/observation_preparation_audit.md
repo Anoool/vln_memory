@@ -1,6 +1,6 @@
 # 观测准备层源码核查与能力汇总
 
-日期：2026-10-29。审查对象为当前工作树，分支 codex/tf-module，包含此前已暂存的 TF 开发结果；不能只按 HEAD 判断。具体字段和参数见 [接口手册](../interfaces/observation_preparation_api.md)。
+日期：2026-10-29。审查对象为当前工作树，分支 codex/tf-module，包含此前已暂存的 TF 开发结果；不能只按 HEAD 判断。第 1–9 节保留首次核查记录（其中 F5 标记后续修复状态），当前修复结果见第 10 节。具体字段和参数见 [接口手册](../interfaces/observation_preparation_api.md)。
 
 ## 1. 结论与审查方法
 
@@ -45,7 +45,7 @@
 
 ### F3：历史 map 位姿没有计算（P1，功能未交付）
 
-[tf.hpp](../../include/vln_memory/bag/tf/tf.hpp) 的 TfSelectedEdge/TfTimeCheck 和 [tf.cpp](../../src/bag/tf/tf.cpp) 的 checkTime（272 行起）只复制静态/精确样本或插值端点。没有求解后的 position/quaternion，没有旋转插值、逆变换和链组合。
+[tf.hpp](../../include/vln_memory/bag/tf/tf.hpp) 的 TfSelectedEdge/TfTimeCheck 和 [tf.cpp](../../src/bag/tf/tf.cpp) 的 checkTime只复制静态/精确样本或插值端点。没有求解后的 position/quaternion，没有旋转插值、逆变换和链组合。
 
 后续应按明确方向计算 T_target_source，并验证已知旋转/平移、反向链、跨零时刻和两个图像采样时刻。小时间间隔不能代替重定位跳变检查。
 
@@ -53,13 +53,13 @@
 
 没有关键帧策略、稳定 observation_id/来源关联、媒体保存与引用、JSONL/manifest/质量报告。即便四模块手动组合成功，也不会产生这些文件。后续还应定义可恢复性、半成品处理和文件引用完整性验收。
 
-### F5：直接 TF 核心与 ROS 入口的话题校验不一致（P2，可复现，未修复）
+### F5：直接 TF 核心与 ROS 入口的话题校验不一致（P2，后续已修复）
 
-[tf.cpp](../../src/bag/tf/tf.cpp) 的 validate（约 81 行）只检查 source.topic 长度>=2、首字符 / 及非空 message_id。实际复现：TfIndex::insert 接受 source.topic="/bad topic"。
+首次核查时，[tf.cpp](../../src/bag/tf/tf.cpp) 的 validate 只检查 source.topic 长度>=2、首字符 / 及非空 message_id。实际复现：TfIndex::insert 接受 source.topic="/bad topic"。
 
-[tf_ros.cpp](../../src/bag/tf/tf_ros.cpp) 的 binding 校验更严格，拒绝含空格的配置话题。常规 ROS 接入路径有这道保护，但公开核心可独立调用，来源格式约束并不一致。影响为来源记录可能不合法；不是已经复现的坐标运算错误。建议后续统一/复用话题语法校验并加入核心回归；本次未静默改写接口行为。
+[tf_ros.cpp](../../src/bag/tf/tf_ros.cpp) 的 binding 校验更严格，拒绝含空格的配置话题。常规 ROS 接入路径有这道保护，但公开核心可独立调用，来源格式约束并不一致。影响为来源记录可能不合法；不是已经复现的坐标运算错误。首次核查建议统一/复用话题语法校验并加入核心回归；后续已按该建议完成修复，见第 10 节。
 
-最小独立复现（当前打印 inserted，说明核心接受了非法来源话题）：
+最小独立复现（修复前打印 inserted；当前应打印 missing_provenance，且索引仍为空）：
 
 ```cpp
 #include <vln_memory/bag/tf/tf.hpp>
@@ -72,7 +72,8 @@ int main()
   TfTransform sample;
   sample.parent_frame = "map";
   sample.child_frame = "base";
-  sample.source = {"/bad topic", "bag:message:1", 0};
+  sample.source_topic = "/bad topic";
+  sample.source_message_id = "bag:message:1";
   std::cout << tfInsertCodeName(index.insert(sample).code) << '\n';
   return 0;
 }
@@ -149,3 +150,12 @@ CameraInfo 的 static_calibration 仅凭显式策略与 basis 接受固定段声
 ## 9. 文档与变更复核
 
 集中接口手册的完整 C++/CMake 示例已按安装后目标严格编译运行，输出 10; delta_ns=5000000。F5 最小复现从本文提取编译运行，输出 inserted，问题仍未修复。全库 178 个本地链接/章节引用检查通过。核查前后 36 个运行源码/公开头/测试/构建文件 SHA-256 完全一致；此次没有修改运行时或测试逻辑。
+
+
+## 10. 后续修复与注释整理
+
+F5 已修复：common/sensor_names.hpp 定义统一校验，TF 核心、ROS binding、CameraInfo 复用。非法来源返回既有结构化错误，不改变索引；Humble 247 字节限制统一应用，合法 remap/隐藏话题保留支持。新增公共回归、核心失败不变性检查、真实 RMW 对照。接口与约束见 [sensor_names](../common/sensor_names.md)。
+
+RGB/Depth、CameraInfo、TF、公共类型/时间及 ROS 适配的 19 个生产文件已补职责与关键边界注释；保留用户新增的信息头/时间戳解释，展开已有长分支和部分消费者的多语句赋值。新增 .editorconfig 统一 UTF-8、LF、两空格和行尾设置；它是编辑器约定，不是完整 C++ 格式化/lint 检查器。
+
+F1–F4 是后续功能交付项，F6 是组装门控前置要求，仍保持原状态；不通过改变解码成功语义伪装它们已经完成。首次核查的源码指纹与旧测试数量属于历史证据；本次修复后的验证另行记录在 [实施记录](../project/sensor_validation_comments_plan.md)。

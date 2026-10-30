@@ -9,3 +9,5 @@
 链接 vln_memory::vln_memory_rgb 与 vln_memory::vln_memory_depth；不借用源码 include，不手动编译核心源文件。因而能检查公开共享类型、C++17 与导出库是否足以被后续 bag 组装层使用。
 
 从 [安装消费者项目](../../../../test/install_consumer/CMakeLists.txt) 配置、构建并运行 depth_consumer。本轮无 ROS 安装与真实 ament 安装两种方式均已验证通过；见 [Depth 验证](../depth.md#验证结果)。
+
+2026-10-29 可读性调整：消费者使用并列的 alignment、rgb_grid、alignment_basis，验证安装后的 RGB/Depth 接口协作。

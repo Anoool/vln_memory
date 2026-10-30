@@ -16,3 +16,5 @@ build/camera-core-consumer/camera_info_consumer
 ```
 
 ROS 安装后也构建相同消费者，并额外构建真实消息适配消费者。严格核心编译和真实 Humble 两种路径已运行通过。说明见 [CameraInfo 核心](../camera_info.md) 与 [公共时间约定](../../../common/sensor_time.md)。
+
+2026-10-29：CameraImageReference 逐项填写 topic/width/height/frame_id/stamp；CameraInfoMatchOptions 直接填写绑定、时钟关系及纳秒容差，不再经 binding/time 包装。保留协作中的 Depth 扁平接口修改，仍分别验证 RGB 与注册 Depth 的显式绑定。

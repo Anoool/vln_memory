@@ -9,6 +9,11 @@
 
 #include "vln_memory/bag/common/sensor_types.hpp"
 
+/**
+ * @file
+ * RGB 单帧处理契约：借用输入布局，成功时输出独立持有的紧密 RGB8。
+ * 调用者负责来源、消息配对和标定/TF；像素解码成功不是可定位观测的判据。
+ */
 namespace vln_memory
 {
 
@@ -22,12 +27,14 @@ struct RgbImageView
   // 采样身份：保留来源时间和光学帧，不在 RGB 层补定位信息。
   SensorStamp stamp;
   std::string_view frame_id;
+
   // 输入布局：step 是一整行的字节数，可能大于有效像素所需长度。
   std::uint32_t width{0};
   std::uint32_t height{0};
   std::string_view encoding;
   std::uint32_t step{0};
   std::uint8_t is_bigendian{0};
+
   // 借用的缓冲区与长度必须来自同一张图像，调用期间由上层保持有效。
   const std::uint8_t * data{nullptr};
   std::size_t data_size{0};
@@ -56,10 +63,12 @@ struct RgbFrame
   std::uint32_t height{0};
   std::string encoding{"rgb8"};
   std::uint32_t step{0};
+
   // 源格式单独保留，供后续导出和排查使用，不能当作输出像素格式。
   std::string source_encoding;
   std::uint32_t source_step{0};
   bool source_is_bigendian{false};
+
   // 独立持有的数据，可在源 ROS 消息销毁后交给保存或同步模块。
   std::vector<std::uint8_t> pixels;
 };
@@ -89,8 +98,12 @@ struct RgbResult
   /**
    * @brief 调用者须先检查 ok()，再访问 frame。
    * @note 默认构造尚无图像，code=none 本身不足以说明处理成功。
+   *       此谓词只保证本次像素解码成功；空 frame_id、时间配对等仍需下游检查。
    */
-  bool ok() const noexcept {return code == RgbErrorCode::none && frame.has_value();}
+  bool ok() const noexcept
+  {
+    return code == RgbErrorCode::none && frame.has_value();
+  }
 };
 
 /** @brief 稳定的错误码名称，供未来 JSONL 报告层使用。 */

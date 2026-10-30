@@ -1,6 +1,9 @@
 #include "vln_memory/bag/tf/tf_ros.hpp"
 
+#include <rmw/validate_full_topic_name.h>
 #include <tf2/buffer_core.hpp>
+
+#include "vln_memory/bag/common/sensor_names.hpp"
 #include <tf2/time.hpp>
 
 #include <iostream>
@@ -9,11 +12,13 @@
 
 namespace
 {
+/** 检查条件并在失败时抛出原因，保持发布构建中的断言有效。 */
 void expect(bool value, const std::string & reason)
 {
   if (!value) {throw std::runtime_error(reason);}
 }
 
+/** 构造真实 ROS 变换字段；来源话题/ID 由接入调用显式提供。 */
 geometry_msgs::msg::TransformStamped transform(
   const std::string & parent, const std::string & child, std::int32_t sec)
 {
@@ -31,11 +36,29 @@ geometry_msgs::msg::TransformStamped transform(
 }
 }
 
+/** 验证真实消息映射、部分失败、RMW 规则和 tf2 时间语义，不读取真实 bag。 */
 int main()
 {
   using namespace vln_memory;
   try {
+    // 与本机 Humble RMW 的长度版接口对照，含 NUL 输入不能被 C 字符串截断。
+    for (const auto & topic : {std::string("/tf"), std::string("/_hidden/__stream"),
+      std::string("/bad topic"), std::string("/a//b"), std::string("/1tf"),
+      std::string("/bad\0topic", 10), "/" + std::string(246, 'a'),
+      "/" + std::string(247, 'a')})
+    {
+      int validation = RMW_TOPIC_VALID;
+      expect(rmw_validate_full_topic_name_with_size(topic.data(), topic.size(), &validation, nullptr) == RMW_RET_OK,
+        "RMW validator failed to run");
+      expect(isResolvedTopicName(topic) == (validation == RMW_TOPIC_VALID), "RMW topic rules disagree");
+    }
     const TfScope scope{"driver_clock_1", "session_1"};
+    TfTimeOptions query;
+    query.clock_id = scope.clock_id;
+    query.segment_id = scope.segment_id;
+    query.max_interpolation_gap_ns = 2000000000LL;
+    TfTimeOptions exact_query = query;
+    exact_query.max_interpolation_gap_ns = 0;
     TfIndex index(scope);
     tf2_msgs::msg::TFMessage fixed;
     fixed.transforms.push_back(transform("base", "camera_optical", 99));
@@ -48,7 +71,7 @@ int main()
     dynamic.transforms[1].transform.translation.x = 1.0;
     report = ingestRosTf(index, dynamic, "/tf", "bag_1:message_8");
     expect(report.ok() && report.inserted == 2, "Out-of-order dynamic TFMessage was not indexed");
-    const auto selected = index.checkTime("map", "camera_optical", {2, 0}, {scope, {2000000000LL}});
+    const auto selected = index.checkTime("map", "camera_optical", {2, 0}, query);
     expect(selected.covered() && selected.edges.size() == 2 && selected.edges[1].after,
       "ROS TF chain time selection failed");
     const auto & saved = selected.edges[0].before;
@@ -56,10 +79,10 @@ int main()
       saved.parent_frame == "base" && saved.child_frame == "camera_optical" &&
       saved.translation_m == std::array<double, 3>{0.1, 0.2, 0.3} &&
       saved.rotation_xyzw == std::array<double, 4>{0, 0, 0.6, 0.8} &&
-      saved.source.topic == "/tf_static" && saved.source.message_id == "bag_1:message_7" &&
-      saved.source.transform_index == 0, "TFMessage fields/source were not preserved");
-    expect(selected.edges[1].before.source.transform_index == 1 &&
-      selected.edges[1].after->source.transform_index == 0 &&
+      saved.source_topic == "/tf_static" && saved.source_message_id == "bag_1:message_7" &&
+      saved.source_transform_index == 0, "TFMessage fields/source were not preserved");
+    expect(selected.edges[1].before.source_transform_index == 1 &&
+      selected.edges[1].after->source_transform_index == 0 &&
       selected.edges[1].before.stamp.sec == 1 && selected.edges[1].after->stamp.sec == 3,
       "Header time order or message-local source indices were lost");
 
@@ -79,7 +102,7 @@ int main()
       "Repeated static broadcast expanded history");
     fixed.transforms[0].header.frame_id = "changed";
     fixed.transforms[0].transform.translation.x = 999;
-    const auto owned = index.checkTime("map", "camera_optical", {2, 0}, {scope, {2000000000LL}});
+    const auto owned = index.checkTime("map", "camera_optical", {2, 0}, query);
     expect(owned.covered() && owned.edges[0].before.parent_frame == "base" &&
       owned.edges[0].before.translation_m[0] == 0.1, "ROS source message was retained by reference");
 
@@ -98,6 +121,8 @@ int main()
       remapped.sampleCount() == 2, "Unexpected topic mutated the index");
     expect(ingestRosTf(remapped, dynamic, "/robot/tf", "", binding).code == TfMessageCode::missing_message_id,
       "Missing source identity was accepted");
+    expect(ingestRosTf(remapped, dynamic, "/bad topic", "id", {"/bad topic", "/tf_static"}).code ==
+      TfMessageCode::invalid_binding, "Invalid configured topic reached the core index");
     expect(ingestRosTf(remapped, dynamic, "/tf", "id", {"/tf", "/tf"}).code == TfMessageCode::invalid_binding,
       "Ambiguous static/dynamic binding was accepted");
     const tf2_msgs::msg::TFMessage empty_message;
@@ -117,7 +142,7 @@ int main()
         "Zero-time fixture rejected");
       expect(zero_reference.setTransform(entry, "test", false), "tf2 rejected zero-time fixture");
     }
-    const auto actual_zero = zero_index.checkTime("map", "base", {}, {scope, {0}});
+    const auto actual_zero = zero_index.checkTime("map", "base", {}, exact_query);
     expect(actual_zero.covered() && actual_zero.edges[0].before.translation_m[0] == 0.0,
       "Actual zero time selected the latest transform");
     expect(zero_reference.lookupTransform("map", "base", tf2::TimePointZero).transform.translation.x == 20.0,

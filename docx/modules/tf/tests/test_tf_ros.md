@@ -7,3 +7,7 @@
 原生 tf2::BufferCore 对照验证同一 fixture 在 2 秒的链可用、4 秒外推失败；另用零和 20 秒样本验证 tf2 的 time=0/latest 哨兵与本索引“真实零时刻”检查的区别。此对照不声称本索引已实现 tf2 全部几何或动态换 parent 行为。
 
 运行：加载 /opt/ros/humble/setup.bash 后 colcon build/test，或 ctest --test-dir build/tf-ros/build/vln_memory -R tf_ros_adapter --output-on-failure。真实 Humble 回归已包含本项，没有伪造 ROS 类型。适配入口见 [tf_ros](../tf_ros.md)。
+
+## 2026-10-30 可读性迁移
+
+已迁移扁平来源字段和查询配置，原断言预期保留；核心另核对报告上下文、来源所有权及首个错误顺序。当前验证结果统一记录在 [TF 可读性整理](../../../project/tf_readability_plan.md)。

@@ -91,6 +91,10 @@ endif()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_sensor_names test/bag/common/test_sensor_names.cpp)
+  target_compile_features(test_sensor_names PRIVATE cxx_std_17)
+  target_include_directories(test_sensor_names PRIVATE include)
+  add_test(NAME sensor_names_core COMMAND test_sensor_names)
   add_executable(test_rgb test/bag/rgb/test_rgb.cpp)
   target_link_libraries(test_rgb PRIVATE vln_memory_rgb)
   add_test(NAME rgb_core COMMAND test_rgb)
@@ -109,9 +113,10 @@ if(BUILD_TESTING)
   if(VLN_MEMORY_ENABLE_ROS)
     # tf2 只用于真实 ROS 对照测试，当前索引/适配库不依赖其缓存。
     find_package(tf2 REQUIRED)
+    find_package(rmw REQUIRED)
     add_executable(test_tf_ros test/bag/tf/test_tf_ros.cpp)
     target_link_libraries(test_tf_ros PRIVATE vln_memory_tf_ros)
-    ament_target_dependencies(test_tf_ros PUBLIC tf2)
+    ament_target_dependencies(test_tf_ros PUBLIC tf2 rmw)
     add_test(NAME tf_ros_adapter COMMAND test_tf_ros)
     add_executable(test_camera_info_ros test/bag/camera_info/test_camera_info_ros.cpp)
     target_link_libraries(test_camera_info_ros PRIVATE vln_memory_camera_info_ros)
@@ -133,6 +138,7 @@ install(TARGETS ${memory_export_targets}
 # 安装时保留层/模块路径，下游 include 与源码中的公开路径保持一致。
 install(FILES include/vln_memory/bag/common/sensor_types.hpp
   include/vln_memory/bag/common/sensor_time.hpp
+  include/vln_memory/bag/common/sensor_names.hpp
   DESTINATION include/vln_memory/bag/common)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)

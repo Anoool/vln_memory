@@ -4,6 +4,11 @@
 
 #include "vln_memory/bag/depth/depth.hpp"
 
+/**
+ * @file
+ * ROS Depth 边界：消息负责像素布局，DepthOptions 负责单位/含义/注册依据。
+ * 适配不从 topic 或 encoding 猜语义，转换和错误处理全部委托核心。
+ */
 namespace vln_memory
 {
 

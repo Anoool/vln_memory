@@ -11,6 +11,11 @@
 
 #include "vln_memory/bag/common/sensor_types.hpp"
 
+/**
+ * @file
+ * 离线 TF 契约：先建立单段历史索引，再检查坐标链、共同覆盖和采样端点。
+ * 报告不包含组合后的 map 位姿；数值插值/求逆/组合必须由后续求解步骤完成。
+ */
 namespace vln_memory
 {
 
@@ -21,14 +26,6 @@ struct TfScope
 {
   std::string clock_id;
   std::string segment_id;
-};
-
-/** @brief 来源消息 ID 与消息内序号共同定位原始 TransformStamped。 */
-struct TfSource
-{
-  std::string topic;
-  std::string message_id;
-  std::size_t transform_index{0};
 };
 
 /**
@@ -44,7 +41,10 @@ struct TfTransform
   std::string child_frame;
   std::array<double, 3> translation_m{};
   std::array<double, 4> rotation_xyzw{0, 0, 0, 1};
-  TfSource source;
+  // 来源直接与样本并列；话题通过公共名称规则，ID/条目序号由 reader 提供。
+  std::string source_topic;
+  std::string source_message_id;
+  std::size_t source_transform_index{0};
 };
 
 /** @brief 索引资源上限，重复广播不计入唯一样本数；不约束之前的 ROS 反序列化内存。 */
@@ -66,6 +66,7 @@ struct TfInsertResult
 {
   TfInsertCode code{TfInsertCode::invalid_scope};
   std::string message;
+  /** @brief inserted/duplicate 均为接受；不表示整个数据段或坐标链有效。 */
   bool accepted() const noexcept
   {
     return code == TfInsertCode::inserted || code == TfInsertCode::duplicate;
@@ -107,7 +108,8 @@ struct TfChainReport
 {
   TfChainCode code{TfChainCode::invalid_options};
   std::string message;
-  TfScope scope;
+  std::string clock_id;
+  std::string segment_id;
   std::string failed_frame;  // 缺失/无效/冲突 frame，方便 issues 报告定位。
   std::string target_frame;
   std::string source_frame;
@@ -115,13 +117,17 @@ struct TfChainReport
   std::vector<TfChainEdge> edges;
   TfCoverageStatus coverage_status{TfCoverageStatus::not_evaluated};
   std::vector<TfTimeInterval> intervals;  // 有序、不相交，取所有动态边的交集。
+  /** @brief 只判断拓扑连通，时间可用性另查 coverage_status/intervals。 */
   bool chainExists() const noexcept {return code == TfChainCode::connected;}
 };
 
 struct TfTimeOptions
 {
-  TfScope scope;  // 查询图像的时钟/数据段声明，必须与索引一致。
-  TfCoverageOptions coverage;
+  // 查询图像的时钟/数据段声明，必须与索引一致；不从 stamp 推断。
+  std::string clock_id;
+  std::string segment_id;
+  // 与 inspectChain 的覆盖策略含义相同，直接填写非负整数纳秒。
+  std::int64_t max_interpolation_gap_ns{0};
 };
 
 enum class TfTimeCode
@@ -147,13 +153,31 @@ struct TfTimeCheck
   std::string failed_frame;
   std::vector<std::string> frames;
   std::vector<TfSelectedEdge> edges;  // 失败为空，不把部分链作为可用链输出。
+  /** @brief 只说明端点可按策略使用，不表示已有插值/组合后的 map 位姿。 */
   bool covered() const noexcept {return code == TfTimeCode::covered;}
 };
 
+/** @brief 返回插入状态的稳定静态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfInsertCodeName(TfInsertCode code) noexcept;
+/** @brief 返回拓扑状态的稳定静态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfChainCodeName(TfChainCode code) noexcept;
+/** @brief 返回覆盖状态的稳定静态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfCoverageStatusName(TfCoverageStatus status) noexcept;
+/** @brief 返回时刻检查状态的稳定静态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfTimeCodeName(TfTimeCode code) noexcept;
+
+namespace detail
+{
+
+/** @brief 索引内部的一条边历史；样本按整数纳秒排序，至少包含一个已接受样本。 */
+struct TfEdgeHistory
+{
+  std::string parent_frame;
+  TfKind kind{TfKind::dynamic};
+  std::map<std::int64_t, TfTransform> samples;
+};
+
+}  // namespace detail
 
 /**
  * @brief 一个数据段的离线历史索引，保留所有接受样本，不使用短时 TF 缓存。
@@ -164,9 +188,13 @@ const char * tfTimeCodeName(TfTimeCode code) noexcept;
 class TfIndex
 {
 public:
+  /** @brief 保存上下文/上限；无效配置由 insert/查询报告，不猜测默认域。 */
   explicit TfIndex(TfScope scope, TfLimits limits = {});
+  /** @brief 返回索引持有的上下文引用，其生命周期随索引。 */
   const TfScope & scope() const noexcept {return scope_;}
+  /** @brief 返回已接受的唯一 child 边数，重复广播不增加计数。 */
   std::size_t edgeCount() const noexcept {return edges_.size();}
+  /** @brief 返回唯一原始样本数，不包含重复广播和被拒绝输入。 */
   std::size_t sampleCount() const noexcept {return sample_count_;}
 
   /** @brief 单条插入；重复几何保留首次来源，重复源消息本身由 builder 保存证据。 */
@@ -186,17 +214,20 @@ public:
     const TfTimeOptions & options) const;
 
 private:
-  struct Edge
-  {
-    std::string parent;
-    TfKind kind{TfKind::dynamic};
-    std::map<std::int64_t, TfTransform> samples;
-  };
-
+  /** @brief 只检查拓扑并生成 source->target 路径，不计算覆盖或几何。 */
   TfChainReport findChain(const std::string & target, const std::string & source) const;
+  /** @brief 收集到根的完整祖先，遇阻断节点写入 failed_frame；输出独立持有名称。 */
+  bool collectAncestors(
+    std::string frame, std::vector<std::string> & path, std::string & failed_frame) const;
+  /** @brief 为已知 child 复制一条边摘要，保留动态首末包络和方向标志。 */
+  TfChainEdge describeEdge(const std::string & child, bool inverted) const;
+  /** @brief 检查新增 parent->child 是否闭环，不修改索引。 */
+  bool wouldCreateCycle(const std::string & parent, const std::string & child) const;
+  /** @brief 标记矛盾 child，保留旧样本并返回对应错误；后续相关查询被阻断。 */
+  TfInsertResult blockFrame(const std::string & child, TfInsertCode code, const char * message);
   TfScope scope_;
   TfLimits limits_;
-  std::map<std::string, Edge> edges_;  // child -> 唯一 parent 与按 header 时间排序的样本。
+  std::map<std::string, detail::TfEdgeHistory> edges_;  // child -> 唯一 parent 与按 header 时间排序的样本。
   std::set<std::string> frames_;
   std::set<std::string> blocked_frames_;
   std::size_t sample_count_{0};

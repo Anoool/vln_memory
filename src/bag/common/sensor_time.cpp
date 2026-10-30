@@ -1,5 +1,10 @@
 #include "vln_memory/bag/common/sensor_time.hpp"
 
+/**
+ * @file
+ * 实现路径：合法 stamp/容差 -> 明确同一时钟 -> 整数差值 -> 闭区间判断。
+ * 不把未知时钟当同域，也不把超过容差的差值丢掉，便于后续质量统计。
+ */
 namespace vln_memory
 {
 

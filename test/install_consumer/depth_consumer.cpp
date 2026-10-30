@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 
+/** @brief 仅使用安装后的公开目标验证跨模块协作；失败返回非零。 */
 int main()
 {
   // 只使用安装后的两个公开模块，在 bag 组装的位置构造共享网格契约。
@@ -33,7 +34,9 @@ int main()
   vln_memory::DepthOptions options;
   options.input_unit = vln_memory::DepthUnit::millimeters;
   options.convention = vln_memory::DepthConvention::optical_z;
-  options.alignment = {vln_memory::DepthAlignment::aligned_to_rgb, grid, "registered_stream_config"};
+  options.alignment = vln_memory::DepthAlignment::aligned_to_rgb;
+  options.rgb_grid = grid;
+  options.alignment_basis = "registered_stream_config";
   const auto depth = vln_memory::decodeDepth(depth_input, options);
   if (!depth.ok() || depth.frame->depth_m != std::vector<float>{1.0F, 2.0F} ||
     !vln_memory::checkDepthRgbAlignment(depth.frame.value(), grid).alignedToRgb())

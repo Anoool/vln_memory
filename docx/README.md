@@ -4,18 +4,25 @@
 
 | 内容 | 入口 |
 | --- | --- |
+| 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
+| BagBuilder：rosbag 读取、五模块整合及分步验收方案（待审阅） | [整合方案](project/rosbag_integration_plan.md) |
+| RGB-D 自动时间配对的分步方案（待实现） | [配对方案](project/rgbd_sync_plan.md) |
+| 当前问题修复、注释改进与验证 | [修复实施记录](project/sensor_validation_comments_plan.md) |
+| 统一的已解析话题名称规则 | [sensor_names](common/sensor_names.md) |
 | 当前真实能力、缺口与逐模块核查结果 | [源码核查报告](reviews/observation_preparation_audit.md) |
 | 公开接口、提供文件、参数格式、返回值与作用 | [观测准备层接口手册](interfaces/observation_preparation_api.md) |
-| 整个系统目标、各层职责与实施顺序 | [系统整体规划](project/system_plan.md) |
+| 原设计第 1、2 部分的收敛实施规划 | [系统整体规划](project/system_plan.md) |
 | 当前观测准备层、源码分类与开发/Git 约定 | [当前架构](project/architecture.md) |
 | 构建目标、安装与导出 | [CMakeLists 说明](project/CMakeLists.md) |
 | 采样时间与图像网格 | [共享数据类型](common/sensor_types.md) |
-| RGB 输入输出、错误码、示例与验证 | [RGB 核心](modules/rgb/rgb.md) |
+| RGB 输入输出、错误码、分步审阅、示例与验证 | [RGB 核心](modules/rgb/rgb.md) |
 | ROS Image 怎样接入 RGB | [RGB ROS 适配](modules/rgb/rgb_ros.md) |
-| Depth 类型、单位、质量与对齐检查 | [Depth 核心](modules/depth/depth.md) |
+| Depth 扁平字段、单位、质量、对齐检查与可读性重构 | [Depth 核心](modules/depth/depth.md) |
 | ROS Image 怎样接入 Depth | [Depth ROS 适配](modules/depth/depth_ros.md) |
-| CameraInfo 校验、图像话题/frame/尺寸关联 | [CameraInfo 核心](modules/camera_info/camera_info.md) |
+| CameraInfo 扁平字段、标定检查、图像关联与迁移 | [CameraInfo 核心](modules/camera_info/camera_info.md) |
+| CameraInfo 可读性重构的计划、边界与验证 | [重构记录](project/camera_info_readability_plan.md) |
 | ROS CameraInfo 怎样接入 | [CameraInfo ROS 适配](modules/camera_info/camera_info_ros.md) |
+| TF 可读性重构、扁平字段与验证 | [实施记录](project/tf_readability_plan.md) |
 | TF 坐标链、静态/动态覆盖与历史样本 | [TF 核心](modules/tf/tf.md) |
 | /tf、/tf_static 与逐条来源报告 | [TF ROS 适配](modules/tf/tf_ros.md) |
 | 各模块时间、TF/入库/在线控制使用哪个时刻 | [sensor_time](common/sensor_time.md) |
@@ -30,9 +37,10 @@ docx/
 ├── reviews/observation_preparation_audit.md
 ├── project/{system_plan,architecture,CMakeLists}.md
 ├── common/
+│   ├── sensor_names.md
 │   ├── sensor_types.md
 │   ├── sensor_time.md
-│   └── tests/test_sensor_time.md
+│   └── tests/{test_sensor_names,test_sensor_time}.md
 └── modules/
     ├── rgb/{rgb,rgb_ros}.md 与 tests/
     ├── depth/{depth,depth_ros}.md 与 tests/

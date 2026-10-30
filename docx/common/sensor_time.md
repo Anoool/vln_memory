@@ -84,3 +84,8 @@ int main()
 - [CameraInfo 消息约定](https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg)：header 是采样时间。
 - [Humble ApproximateTime 实现](https://github.com/ros2/message_filters/blob/humble/include/message_filters/sync_policies/approximate_time.h)：队列时间匹配，可明确限制时间区间。
 - [Humble TF 时间教程](https://github.com/ros2/ros2_documentation/blob/humble/source/Tutorials/Intermediate/Tf2/Learning-About-Tf2-And-Time-Cpp.rst)：按时刻查询以及零时刻的 latest 含义。
+
+
+## 2026-10-29 修复与注释复核
+
+补明“先选候选、再确认同域、最后比较时差”的调用顺序；matched 不代表已完成同步队列或时钟校准。 具体修复与验证记录见 [本次实施记录](../project/sensor_validation_comments_plan.md)。

@@ -1,221 +1,163 @@
-# VLN 空间语义记忆系统整体规划
+# VLN 空间语义记忆规划：当前只交付原设计第 1、2 部分
 
-更新：2026-10-29。本文保存整个系统的目标、边界和分步实现顺序。它是设计规划，不能将未来模块视为已经实现。
+更新：2026-10-29。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
 
-**当前开发范围：观测准备层 bag。已实现 RGB、Depth、CameraInfo、TF 链/历史覆盖索引与候选时间检查；TF 位姿求解、bag 读取/自动配对/导出尚待实现。**现有源码和测试的分类见 [当前架构](architecture.md)，各模块详细接口见 [文档导航](../README.md)。
+**当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前代码仍只完成观测准备层的部分基础，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
 
-## 1. 系统目标与数据流
+## 1. 本轮范围与完成定义
 
-将 ROS 2 RGB-D bag 转成可追溯的空间语义记忆，供 Agent 查询并辅助导航：
+目标闭环：
 
 ```text
-ROS 2 bag
-  -> 观测准备层 BagBuilder
-  -> Observation JSONL + RGB/Depth/CameraInfo/TF 原始证据
-  -> MemoryEngine 分批观察、召回旧记录、调用模型工具
-  -> 记忆核心校验与提交：实体、区域、关系、纠错和标注
-  -> 完整、不可变的记忆快照
-  -> Agent 查询插件 / MemoryViewer
-  -> 导航适配层选择可达接近点，再调用现有导航工具
+ROS 2 bag + config/vln_memory.yaml（配置入口待实现）
+  -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析、关键帧
+  -> observations.jsonl + evidence/ + pending/质量报告
+  -> MemoryEngine：几何、实体/关系、构建读取与修改工具、模型批次/恢复
+  -> 原文 1.6 规定的完整版本、索引与原子发布 manifest
+  -> MemoryViewer：map 实体/关系、图像/选区/轨迹/位姿联动及命名标注
 ```
 
-世界几何统一为明确的 map 基准，单位米、弧度。像素选区由模型提出，世界坐标由深度、标定和历史位姿计算。物体表面代表点不直接作为机器人导航终点。
+原文第 2.2 节已经要求 search_entities/get_observation/project_depth/spatial_query，因此构建所需读取能力在范围内。原文第 2.9/2.10 节要求 Viewer 与人工标注，也在范围内。
 
-## 2. 分层职责和当前状态
+当前暂不交付：第 3 部分完整在线自然语言查询编排、全空间操作目录与视角问答、独立 Agent 在线查询插件组、导航目标生成/执行。可选向量检索、embedding、跟踪不作为前置条件。不会为这些内容提前创建源码或目标。
 
-| 层 | 主要职责 | 当前状态 |
+“第 1 部分完成”需要规范对应真实的数据结构、校验、存储/序列化和版本证据；“第 2 部分完成”需要三个实际运行模块和端到端验收。不能以写了设计或有单元测试替代。
+
+## 2. 当前真实实现及可复用基础
+
+| 已有内容 | 当前能力 | 明确未完成 |
 | --- | --- | --- |
-| bag：观测准备 | 传感器消息处理、时间匹配、标定/TF、媒体和 JSONL 导出 | 正在开发；RGB/Depth/CameraInfo 已实现，TF 链/覆盖已实现 |
-| memory：记忆核心 | 几何、实体/区域/关系、查询、修改、工作库、快照 | 规划 |
-| engine：离线构建 | 上下文组织、模型会话、工具分发、进度与恢复 | 规划 |
-| plugins：Agent 接入 | 将只读记忆查询接入现有 ToolManager | 规划 |
-| viewer：检查与标注 | 地图、轨迹与证据联动，人工复核入口 | 规划 |
-| apps：薄命令入口 | prepare/build/inspect/annotate 等参数解析和模块组装 | 规划 |
+| RGB | rgb8/bgr8/mono8 到紧密 rgb8，输入检查与独立输出 | bag 读取、同步、媒体保存 |
+| Depth | 16UC1/32FC1、明确米/毫米、米制 optical-z、质量统计 | 物理配准、径向深度换算、可直接用于投影的几何链 |
+| CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查 | 标定有效区间索引、有效内参、去畸变/重投影 |
+| TF | 静/动态原始消息、child/时间索引、链/区间交集与样本端点 | 插值/求逆/组合后的 map 相机/底盘位姿及跳变门控 |
+| common | SensorStamp/ImageGeometry、候选时差与统一名称检查 | 观测 provenance、clock/map/版本统一上下文 |
+| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标和已记录的测试 | 正式 BagBuilder/MemoryEngine/Viewer、config 文件和完整产物 |
 
-层之间通过公开数据或工具契约结合。记忆核心不依赖 ROS、模型客户端或 Agent 工具类型；适配代码负责协议转换。只为已经开始实现的模块创建源码，不为未来层生成空类或空目录。
+当前 vln_memory 中没有 Entity/Relation/Observation 正式业务类型和持久化，没有原文八个构建工具。vln_agent 的 SessionManager/ToolManager 是可复用基础；EnvironmentMemory 是逐观测历史，不计作永久空间记忆。详见 [范围对照第 6 节](sections_1_2_scope.md)。
 
-## 3. 当前观测准备层的五个模块
+## 3. 实施顺序与逐步验收
 
-这里的 bag 同时是层名。其内部第五个“bag 读取与组装模块”使用 builder 目录，避免 bag/bag 含义不清。
-
-| 模块 | 输入 | 输出 | 源码归属 | 状态 |
+| 阶段 | 原文对应 | 交付 | 验收重点 | 状态 |
 | --- | --- | --- | --- | --- |
-| RGB | 原始图像字段 / ROS Image | 标准 rgb8、采样身份与错误 | bag/rgb | 已实现 |
-| Depth | Image、显式单位/深度含义、注册声明 | 米制 float32、质量、RGB 网格检查 | bag/depth | 已实现 |
-| CameraInfo | 标定消息、真实 topic、图像绑定/时间策略 | 完整标定与图像尺寸/frame/时间检查 | bag/camera_info | 已实现 |
-| TF | TF/TFStatic、clock/segment 与采样时刻 | 链、时间覆盖与历史样本依据；后续求解 map 位姿 | bag/tf | 链/覆盖已实现；位姿求解后续 |
-| builder | bag、提取配置及以上四模块 | 完整 Observation、证据和报告 | bag/builder | 待实现 |
+| S0 数据契约/配置 | 1.1–1.6、2.10 | map/clock/来源/版本、Observation 与实体/关系字段规则，配置 schema/加载与校验 | 单位、引用、缺项、版本语义明确；配置不静默猜数据含义 | 待实现 |
+| S1 自动配对与读取 | 2.1、2.10 | 先实现无 ROS rgbd_sync，再 reader、话题类型/编码与时间索引 | 确定配对、平局/一对一、时钟段边界、来源可回查 | 配对只有方案；reader 未实现 |
+| S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 只有前四模块基础 |
+| S3 几何与工作库 | 1.2/1.4/1.6、2.3–2.7 | 点/区域到 map、对象/空间、关系、事务存储、基本索引与版本 | 已知几何答案、永久 ID、代表点、inside/region_id、revision | 待实现 |
+| S4 工具与模型构建 | 1.5、2.1/2.2/2.4/2.6 | 八工具、上下文/图像、批次循环、进度/幂等恢复 | 真实模型服务、多视图 ID 复用、轮数上限/失败不误报完成、重复 call_id 不重复写 | 待实现 |
+| S5 纠错/标注与发布 | 2.7–2.10 | 四纠错、关系刷新、注释历史、完整记忆产物和原子 manifest | 整体提交/引用修复、人工信息保留、几何缓存失效、半成品不发布 | 待实现 |
+| S6 Viewer 与闭环验收 | 2.1/2.9/2.10 | 地图/关系/图像/轨迹联动、按实体/关系/时间定位观测、人工命名与回读 | 同一发布版本可检查，标注走共用写入路径，重开后结果一致 | 待实现 |
 
-SensorStamp、ImageGeometry 以及显式时钟关系的候选时差检查位于 bag/common。它们是观测准备层共用类型，不提前承担未来 Entity、Relation 等业务。
+S0 的字段契约先定清，再逐个落地真实模块，不为所有阶段生成空类。最近可继续实现的小模块仍是 [RGB-D 自动配对](rgbd_sync_plan.md)；该方案现在明确归属于 S1，不再把它当整个第 1、2 部分的交付范围。
 
-### 3.1 RGB 与 Depth 的已实现边界
+## 4. S0–S2：观测准备层如何收口
 
-- RGB 校验 rgb8/bgr8/mono8，输出独立持有的 rgb8，保留原图尺寸和采样身份。
-- Depth 支持 16UC1/32FC1，必须显式指定米/毫米与 optical_z；处理大小端、行填充和无效值。
-- Depth 对齐检查验证“已声明注册”与实际 RGB 网格元数据一致，不靠相同尺寸推断配准，不完成标定或时间同步。
-- 二者输出内存数据。原始证据保存、文件命名、跨消息同步和最终 JSONL 由 builder 统一完成。
+### 4.1 数据与配置
 
-详细说明：[RGB](../modules/rgb/rgb.md)、[Depth](../modules/depth/depth.md)。
+- 观察视角与物体自身朝向分开；参照不足返回待补充/未知，不猜测语义正面。该约定保留，完整第 3.4 节视角问答暂不开发。
+- 世界几何属于同一 map；map_id、geometry_revision、米/弧度、坐标轴和时钟段在配置/manifest 中明确。相同 map_id 不足以证明不同 bag 已配准。
+- 正式区分源消息采样时间、bag 记录时间、处理时间，统一来源消息 ID；零时刻真实保留，未知时钟不跨域关联。
+- config/vln_memory.yaml 是最终交付物，包含 dataset/topics/frames/preprocess/build/model/geometry。当前未生成该文件或解析器，不把原文 YAML 示例算已支持配置。
+- 原文示例的 sync_tolerance_ms=30、depth_scale_to_m=0.001、keyframe_distance_m=0.8、keyframe_yaw_deg=25 都需按实际采集配置确认。深度单位/比例冲突应拒绝；已有米制深度不能再乘 0.001；角度配置转换到内部弧度须明确。
+- 未注册深度需要自己的标定话题和 frame，不能因为示例只有一个 camera_info 字段就默认共用 RGB 内参。
 
-### 3.2 CameraInfo 与 TF 当前范围和后续目标
+### 4.2 配对与读取
 
-- CameraInfo 保留真实 topic、header、K/D/R/P、畸变模型、ROI、binning，校验完整标定、显式光学 frame 和图像尺寸。raw/rectified 必须声明；校正 ROI 需要后续几何计算时明确返回不支持。
-- 固定标定可按显式策略和依据复用；逐帧标定核验同一时钟与时间容差。自动选消息、动态标定有效区间由后续 builder 实现，不能整包取最后一条。
-- TF 已按采样时间检查 map<-body、body<-camera_optical 等配置链，支持静态/动态混合链，返回精确或插值前后样本；变换插值/求逆/组合的数值求解尚待实现。
-- 当前使用有边/样本上限的数据段内存历史索引，保留所有接受样本，不依赖默认短时 Buffer。链覆盖按动态区间交集并保留大间隔空洞，不用 latest 填历史记录；分块/磁盘索引后续由 builder 扩展。
-- 缺链、断树、拓扑/值冲突、时间超界/空洞已返回结构化错误；重定位跳变检测、自动分段和 JSONL 报告留给后续实现，不把采样间隔合格当作无跳变证明。
+保留 [配对方案](rgbd_sync_plan.md) 的原始 stamp、单时钟段、RGB 基准、一对一/单调最近候选及可追溯失败规则。metadata 先索引、后选择解码，避免把整包像素留在内存。
 
-CameraInfo 详细规划与接口见 [模块说明](../modules/camera_info/camera_info.md)，TF 见 [链与时间覆盖索引](../modules/tf/tf.md)。公共时差检查不自动改变任何时间；采用哪个时刻、写入与在线控制规则见 [时间约定](../common/sensor_time.md)。
+reader 负责 bag 存储/类型/反序列化、来源与稳定顺序，当前纯时间检查/ROS 适配不能替代 reader。输入是否有时间重启要结合采集依据处理，不能把重启数据简单全局排序。
 
-### 3.3 BagBuilder 的目标流程
+### 4.3 历史位姿与相机几何
 
-1. 检查 bag 存储、话题类型、编码、标定和 TF 时间覆盖。
-2. 第一遍建立消息时间、CameraInfo、TF 与来源索引。
-3. 以 header.stamp 为依据，确定 RGB-D 配对、标定和历史位姿。
-4. 第二遍调用各消息模块，解码并保存原始与标准化媒体。
-5. 输出有效 Observation、pending、异常与质量统计。
-6. 导出关键帧引用、检查文件与引用完整性，再发布完整数据集。
+TF 模块在既有链/样本选择之上补数值插值、逆变换与组合，得到 map<-body、body<-camera_optical、map<-camera_optical；返回查询时刻与所用原始依据，缺失/超界/跳变明确处理，不用 latest 补历史。
 
-默认保留有效配对，关键帧使用 observation_id 索引，便于后续重选。同步容差、深度帧复用和标定匹配策略必须明确。记录 bag 接收时间与传感器采样时间，不混成同一个时间。
+CameraInfo 模块补实际图像模型：raw 使用 K/D，rectified 使用 P，并处理 ROI/binning/裁剪缩放。非 optical-z 值在模型明确后换算；未注册深度先按标定/外参重投影。支持范围按真实输入验证，未支持的组合进入明确错误/pending，不能默认生成单位模型。
 
-### 3.4 Observation 交接契约
+### 4.4 Observation、关键帧和证据
 
-一条观测对应一组明确配对的原始 RGB-D，各张图保留独立时间。主要字段：
+一条 Observation 引用一对明确配对的图像，保留原文字段并使时间语义无歧义：camera_pose_map 对应 RGB 参考时刻，Depth 保留自己时刻的相机位姿（可增加 depth_camera_pose_map），body_pose_map 对应 RGB 索引时刻。schema 阶段确定具体字段，不用一个未注明时间的位姿替代两者。
 
-- id、schema_version、clock_id、map_id、frame_id、geometry_revision；
-- 以 rgb_stamp 为观测索引，分别保留 rgb_stamp、depth_stamp、CameraInfo 原始 stamp 与 bag 接收时间；媒体相对路径、尺寸与原始格式；
-- camera_model、intrinsics、完整 CameraInfo 引用；
-- depth_unit=m、depth_convention=optical_z；
-- RGB 与 Depth 各自采样时刻的 camera_pose_map；RGB 索引时刻的 body_pose_map，quaternion_xyzw；明确标记每个位姿的查询时刻，不能把一个模糊的 camera_pose_map 复用于两个时刻；
-- bag 来源、源消息 ID、同步时差和有效深度比例。
+记录两张图各自 frame/stamp、CameraInfo 原始模型/选择版本、有效投影参数、原始与标准媒体、bag 来源、clock/segment、配对策略/时差、TF 查询与质量。未定位/坏帧保留证据进入 pending。
 
-缺深度、标定或位姿的记录保留证据进入 pending，不以原点或单位旋转补齐。纯观测数据集还不是语义记忆，不提前生成 memory_version。
+关键帧依据有效底盘位姿的位移/转角及明确采样策略选择，输出 observation_id 引用；处理首帧、静止、缺姿态、定位跳变，不把每张解码图像自动称关键帧。BagBuilder 完成后必须产出真实 observations.jsonl/evidence/及报告。
 
-```text
-dataset/session_01/
-  manifest.json
-  observations.jsonl
-  camera_info.jsonl
-  tf_dynamic.jsonl
-  tf_static.jsonl
-  keyframes.jsonl
-  evidence/
-  reports/pending.jsonl
-  reports/issues.jsonl
-  reports/summary.json
-```
+## 5. S3：原文第 1 部分的数据与几何业务
 
-## 4. 记忆核心层目标
+### 5.1 实体、空间和关系
 
-### 4.1 数据模型
+Entity 同时支持 kind=object/region，永久 ID、semantic_label、名称/别名/属性、状态、观测引用和 revision。物品位置是已观测表面的代表点；空间代表点必须引用确认在内部的 body_pose_map，polygon_map/orientation_map 未确认则留空。
 
-- Entity：物品与 kind=region 空间共用永久 ID、名称/别名、描述、属性、观测引用和 revision。
-- 物品位置表示已观测表面的代表位置，保留逐观测几何与已观测范围，支持重算和拆分。
-- 空间代表点必须引用确认位于内部的机器人位姿；polygon_map 可暂缺。
-- Relation：near/on/hanging_on/inside，以及连接、功能等关系；支持有角色的多端点关系，如门连接两个空间。
-- 人工标注、来源和修订历史独立记录；自动修改使用字段白名单保护人工确认。
+SemanticRelation 支持有证据的 near/on/hanging_on/inside 及 connects_regions 多端点连接。数值 near 保留距离定义、阈值、实测距离和 geometry_revision；on/hanging_on 不从中心高低或距离硬推。空间 inside 与 region_id 在同一修改中同步，指向物品的 inside 不改空间索引。
 
-### 4.2 查询与修改
+### 5.2 project_depth 与索引
 
-QueryService 只取得只读视图，统一名称/属性/区域/关系检索和空间计算。MutationService 持有可写工作库，集中维护创建、更新、纠错与标注。
+point/bbox/polygon 使用原图像素，适配先还原缩略/拼图坐标；验证边界。根据有效相机模型和深度计算 map 点；区域返回可信簇、代表点、点数/范围/背景与多簇歧义，include_points 返回点集引用。invalid_depth/missing_map_pose/ambiguous_region 等错误保持明确依据。
 
-- inside(object, region) 为有效空间归属事实，region_id 是同步派生索引；物品 inside 柜子不改空间归属。
-- near 定性结论与数值距离有不同依据，距离注明 xy/xyz、代表点/表面及几何版本。
-- on/hanging_on 使用视觉或可靠几何依据，不能用中心点高低远近代替。
-- merge/split/retract 在一个事务内修复观测、几何、关系、索引与旧 ID 引用。
-- 静态多视图融合与移动物体时间状态分开；位置冲突不平均成中间假位置。
+工作库优先使用 SQLite 单 writer 支持事务与恢复，再导出原文 1.6 JSONL。基本 ID/名称/区域成员/关系端点索引必须有效；空间检索先用可验证的小规模实现，向量索引为可选增强。存储选择是内部实现方案，不扩展成独立在线服务。
 
-### 4.3 工作库、证据和快照
+## 6. S4–S5：MemoryEngine、八工具及发布
 
-构建时 SQLite 工作库是唯一事实源；JSONL 是检查通过后的导出，索引可重建。原始证据不可变，保存来源与校验信息。
+### 6.1 构建工具范围
 
-每个 release 包含完整的 manifest、observations/entities/relations/annotations JSONL、证据、报告与索引。先写临时目录并校验，再形成不可变版本，最后原子切换 current.json。查询固定同一版本；临时计算缓存放在快照外，不回写已发布记录。
+| 工具 | 本轮用途 |
+| --- | --- |
+| search_entities | 构建时召回旧对象/空间与 ID/revision/证据 |
+| get_observation | 取回原始 RGB/Depth、标定、相机/底盘 map 位姿与关联选区 |
+| project_depth | 程序计算像素点/区域的 map 几何与质量 |
+| spatial_query | 构建需要的有效 near/on/hanging_on/inside、关系/几何/观察依据；数值结论版本匹配 |
+| create_entity | 经观测/定位/引用校验后建立永久 ID、几何与关系 |
+| update_entity | expected_revision、字段合并、观测追加、关系及几何更新 |
+| correct_memory | update/merge/split/retract，理由/证据/版本、引用重定向或重分配、整体提交 |
+| memory_annotate | 人工/模型共用名称、别名、备注处理及注释历史/名称索引刷新 |
 
-区分 schema_version、已发布 memory_version、geometry_revision 与单记录 revision。更新轨迹/标定后重算几何并使旧数值关系失效，不能只改版本号。相同 map_id 不能证明多个 bag 已配准。
+### 6.2 模型循环与 Agent 复用
 
-## 5. MemoryEngine 目标
+MemoryEngine 分批组织 1–4 张观测、相关旧实体与历史视图，运行 function calling。setTools/addInputs/request/takeResponse 可经 ModelSession 适配复用现有 SessionManager；已有 previous_response_id 自动续接时不能重复追加整段历史，必要时新实例建立新批次上下文。
 
-MemoryEngine 管批次状态、上下文、重试、取消与恢复；ContextBuilder 召回少量相关实体与历史共视图；ModelSession 包装现有模型会话；BuildDispatcher 处理完整 function_call 与本地执行记录。
+核心业务不依赖 API 外壳。当前 vln_agent 的 functionCallOutput 使用内容数组，而原文示例业务载荷是 JSON 字符串：由适配层对接并用实际服务验证文本/图像与工具协议，不能直接改坏现有客户端。api_key_env、模型地址/超时等配置仍需显式落实，不假定现有配置原生支持。
 
-目标工具：
+BuildDispatcher 持有原始 call_id/name/arguments，执行前验证并持久记录调用结果。ToolManager 的活动去重不能替代该记录。调用修改/执行结果在同一事务提交，重试同 call_id 复用结果；冲突参数返回错误。批次进度与调用结果分开，超时/拒绝/工具轮数耗尽不能误判完成，恢复时从已提交工作库重组上下文。
 
-- 查询：search_entities、get_observation、project_depth、spatial_query。
-- 写入：create_entity、update_entity、correct_memory、memory_annotate。
-- 构建控制：finish_batch，明确结束当前批次。
+### 6.3 修改、纠错和版本
 
-查询定义只维护一份，构建时合并写入/控制工具；未实现工具不提前注册。
+物品多视图沿用 ID；同图不同实例独立 ID。证据/位置矛盾进入 unresolved/needs_review，未定位新实体不以原点入库。静态物品融合与移动物体的时间状态分开，空间沿用确认的内部代表点。
 
-按批次使用短模型上下文，持久事实以工作库为准。每次工具修改和执行结果在同一事务提交，不跨模型请求持有写事务。同 call_id 的参数变化报冲突；新 call_id 的重复内容仍受观测、选区、身份和 revision 等约束。
+update/merge/split/retract 必须在一个事务里维护引用、关系、索引、region_id 与历史；自动更新遵循字段白名单并保留人工名称、别名和原始证据。几何/观测归属变化使受影响关系进入复核、旧数值缓存失效；更新 geometry_revision 后重算几何，不能只改版本号。
 
-工具提交与批次完成分别记录。空回复、拒绝、超时、轮数上限不自动算完成；支持 completed_with_pending。重启从已提交事实重组上下文，不假设服务端链或 transcript 一定能精确恢复。
+导出版本包含 manifest、entities/observations/relations/annotations JSONL、evidence/reports/indexes；JSON 不能直接写 NaN/Inf。先验证完整性再原子发布 manifest，构建工作库/临时文件不能成为有效完整版本。memory_version、geometry_revision、记录 revision、schema_version 含义分别固定，不能混用。
 
-## 6. 与现有 vln_agent 的结合
+## 7. S6：原文要求的 MemoryViewer
 
-| 现有组件 | 规划的复用方式 | 边界 |
-| --- | --- | --- |
-| SessionManager | 离线 ModelSession 持有独立实例 | 遵守现有 previous_response_id 增量链，不重复追加整段历史；无 reset 时通过新实例建立新链 |
-| ToolManager / ToolPluginBase | 四个在线只读查询插件 | execute 只有 arguments，不能当作离线持久幂等入口 |
-| SharedResources | 同一管理器内四插件共享 MemoryRuntime | 固定只读快照，核对目录与版本，确保在途查询引用有效 |
-| ToolResult / utils | 在适配层包装数据和实际图片 | 核心不依赖 API 外壳；get_observation 要提供模型能看到的图像 |
-| EnvironmentMemory | 保留原有逐观测历史用途 | 其局部对象 ID 不直接冒充全局 Entity |
-| Nav2 工具 | 上层选择可达接近点或观察点后调用 | 物品表面位置不是机器人目标位置 |
+Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Depth 与像素选区、机器人轨迹和观测位姿；可以按实体、关系、时间定位观测。
 
-模型服务需验证图像、工具、WS、续接与可选字段兼容性；“OpenAI-compatible”不足以证明全支持。api_key_env 属于需明确落实的配置扩展，不假定现有客户端已支持。
+名称、别名、备注通过与 MemoryEngine 共用的 memory_annotate 处理函数写入并记录历史，重开后回读；不得只修改 Viewer 内存或任意改已发布 JSONL。采用单 writer/事务与版本发布，先实现可检查、可标注的闭环，不另建一套不一致的存储。
 
-当前 RGB/Depth 不链接 vln_agent。适配在未来 engine/plugins 层实现，不形成 vln_agent 与 vln_memory 的循环依赖。
+本轮不将 Viewer 扩展成自然语言在线导航工作台。其原文 2.10 明确要求的可视化/定位/标注能力仍是必需验收项。
 
-## 7. MemoryViewer 与人工复核
+## 8. 目录与依赖约定
 
-地图实体/关系、机器人轨迹与采样位姿，联动 RGB/深度、选区和点集证据。显示版本、状态和关系依据。
+真实源码仍以 include/vln_memory/bag、src/bag 和 test/bag 分类，详细树见 [当前架构](architecture.md)。最近增加的模块应位于 bag/builder/rgbd_sync；其余 reader/组装在 builder 分步落实。
 
-Viewer 初期只读快照；人工名称、别名和备注通过受控标注入口，在构建停写时使用同一修改事务并发布新版本。需要构建中编辑时，再向唯一 writer 提交命令。人工修改不直接改 JSONL，也不另建不受控 writer。
+后续真实业务实现时才创建 memory（模型/几何/存储/修改）、engine（上下文/会话适配/工具构建）、viewer（检查标注）、apps（薄命令入口）与 config。当前不创建 plugins 在线查询目录，也不注册未实现工具，不生成空目标。vln_agent 不反向依赖这些准备库，模型会话适配保持单向复用。
 
-## 8. 源码与文档组织
+文档：project 为当前范围/实施计划，interfaces 为已实现接口，modules 为同名代码说明与 tests，reviews 保留历史核查/后续修复记录。规划接口与真实已实现接口必须区分。
 
-当前真实代码以层/模块分类：
+## 9. 本轮验收清单
 
-```text
-include/vln_memory/bag/
-  common/sensor_types.hpp, sensor_time.hpp
-  rgb/rgb.hpp, rgb_ros.hpp
-  depth/depth.hpp, depth_ros.hpp
-  camera_info/camera_info.hpp, camera_info_ros.hpp
-  tf/tf.hpp, tf_ros.hpp
-src/bag/
-  common/sensor_time.cpp
-  rgb/rgb.cpp, rgb_ros.cpp
-  depth/depth.cpp, depth_ros.cpp
-  camera_info/camera_info.cpp, camera_info_ros.cpp
-  tf/tf.cpp, tf_ros.cpp
-test/bag/
-  common/test_sensor_time.cpp
-  rgb/test_rgb.cpp, test_rgb_ros.cpp
-  depth/test_depth.cpp, test_depth_ros.cpp
-  camera_info/test_camera_info.cpp, test_camera_info_ros.cpp
-  tf/test_tf.cpp, test_tf_ros.cpp
-```
+完整验收以 [第 1、2 部分对照第 7 节](sections_1_2_scope.md) 为准，至少包括：
 
-CameraInfo 与 TF 链/覆盖已有真实实现；后续 builder 位于 bag/builder，TF 位姿求解在既有 bag/tf 按需要补充。记忆核心、构建、插件、Viewer 层开始实现时，才建立 memory、engine、plugins、viewer 等同级源码目录；命令行参数组装再放 apps。
+- 真实 bag 到可回查的观测/关键帧/证据和 pending；
+- 已知几何投影、多簇/无效输入与独立 RGB/Depth 历史位姿；
+- 八工具与真实模型多视图构建；永久 ID/空间归属/版本一致性；
+- 幂等恢复、四类纠错、关系刷新、人工信息保留；
+- 原文文件集合、有效索引、单 writer 原子发布；
+- Viewer 按实体/关系/时间联动检查和标注回读；
+- 三个入口使用实际 config/vln_memory.yaml，支持字段和错误有验证。
 
-include 与 src 使用相同层/模块布局；导出的头文件保持该目录结构。现有函数、命名空间和库目标保持，调用方更新 include 路径。安装后独立消费者用来检查实际公开接口。
+当前构造消息测试/安装消费者通过，只支持“已实现基础可调用”的判断。原文第 1、2 部分完成前，README 和进度报告不得写成完整离线记忆系统已经交付。
 
-文档入口为 docx/README.md：project 保存系统目标与目录/构建约定；common 保存共享类型说明；modules/rgb、modules/depth、modules/camera_info、modules/tf 保存当前 bag 子模块的同名代码说明，tests/ 保存测试说明。未来新层的文档再按真实模块扩展，不生成空文档。
+## 10. 当前最近行动
 
-## 9. 分步实施与验收
+先按已有 [rgbd_sync 方案](rgbd_sync_plan.md) 审阅数据契约并实现配对核心，再接入真实 reader 和 S2 观测收口。S0 的字段/来源/配置约定随这一步落实，避免再产生与原文 Observation/版本语义不兼容的数据。
 
-| 阶段 | 交付 | 验收 | 状态 |
-| --- | --- | --- | --- |
-| bag-1 | RGB、Depth 核心与真实 ROS 适配 | 已知数据、格式/单位/对齐边界、安装消费者 | 已完成 |
-| bag-2 | CameraInfo 与历史 TF | 标定匹配、链/覆盖、位姿求解、缺失/超限/跳变报告 | 标定及 TF 链/覆盖已实现；几何求解/跳变报告待补 |
-| bag-3 | bag 读取、同步、证据和 Observation JSONL | 短真实 bag、引用完整、统计一致、可回查落点 | 待实现 |
-| memory-1 | 几何、实体/区域、工作库与只读查询 | 投影、同物体多视图、同类实例区分 | 待实现 |
-| engine-1 | 工具构建、批次终态与恢复 | 提交后中断不重复、轮数耗尽不误报成功 | 待实现 |
-| memory-2 | 关系刷新、快照与在线查询插件 | 版本固定、归属一致、旧距离失效 | 待实现 |
-| review | 完整纠错、标注和 Viewer | merge/split 引用修复、人工信息保留、证据联动 | 待实现 |
-
-优先完善当前 bag 层，不并行搭建未用到的其他层空壳。每个小模块遵循“规划与自审 -> 实现与注释 -> 针对性验证 -> 整体通读 -> 分类同名说明 -> Git 暂存审阅”。已有修改留在 codex/ 分支，合并由用户审阅后决定。
-
-
-## 10. 当前层源码验收记录
-
-2026-10-29 重新按实际代码核查：当前是消息处理与检查库，尚未形成 rosbag→同步 RGB-D/标定/历史位姿/关键帧→Observation 文件的完整流程。逐项状态与可复现问题见 [审查报告](../reviews/observation_preparation_audit.md)，真实参数、返回值及提供文件见 [集中接口手册](../interfaces/observation_preparation_api.md)。
+本轮只更新范围、进度对照与规划，没有把未来模块写成已实现，也没有修改用户原设计附件或运行源码。

@@ -13,7 +13,7 @@ CameraInfoResult decodeRosCameraInfo(
   const sensor_msgs::msg::CameraInfo & message, std::string_view topic);
 ```
 
-映射 header.stamp/frame_id、width/height、distortion_model、D/K/R/P、binning、ROI 全部字段。ROI 核心结构排列为 x_offset,y_offset,width,height,do_rectify，映射使用显式字段，避免 ROS 消息中 height/width 顺序造成误读。全部输出拥有数据，不保留 message/topic 的借用引用。
+映射 header.stamp/frame_id、width/height、distortion_model、D/K/R/P、binning、ROI 全部字段。ROI 保留原始语义，x_offset、y_offset、width、height、do_rectify 使用逐字段赋值，避免聚合初始化时混淆宽高顺序。全部输出拥有数据，不保留 message/topic 的借用引用。
 
 bag reader 必须先验证话题类型为 sensor_msgs/msg/CameraInfo；本函数强类型接收，不能代替序列化层类型检查。结构、错误、配对和时间规则见 [核心](camera_info.md) 与 [时间约定](../../common/sensor_time.md)。
 
@@ -36,3 +36,8 @@ find_package(vln_memory CONFIG REQUIRED)，链接 vln_memory::vln_memory_camera_
 ## 验证
 
 真实 Humble CameraInfo 测试检查全部标定、时间、ROI/binning 字段与所有权，并验证未标定错误继续来自核心。安装后的 ROS 消费者仅链接公开 ROS 目标并成功运行，见 [测试说明](tests/test_camera_info_ros.md)。
+
+
+## 2026-10-29 修复与注释复核
+
+说明完整矩阵/畸变字段映射和核心校验，不在适配层补默认标定或修改原始几何。 话题格式统一最长 247 字节。具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。

@@ -2,12 +2,15 @@
 
 核查日期：2026-10-29。范围：当前 include/vln_memory/bag、src/bag、CMake 导出目标及安装消费者。本文按实际声明和实现编写；所有 C++ 类型/函数属于 vln_memory 命名空间。完整目标与审查结论分别见 [系统规划](../project/system_plan.md)、[本次核查报告](../reviews/observation_preparation_audit.md)。
 
+当前项目验收仅覆盖原设计第 1、2 部分，范围对照见 [当前规划](../project/sections_1_2_scope.md)。本手册只描述其中已经实现的观测准备接口，不代表实体、关系、MemoryEngine 和 Viewer 已实现。
+
 ## 1. 能调用哪些接口
 
 当前接口处理的是**已解码布局字段或已反序列化 ROS 消息**，还没有“传入 bag 路径→输出观测文件”的公开接口。
 
 | 作用 | 公开头文件（include/vln_memory/bag/ 下） | 实现文件（src/bag/ 下） | CMake 目标（vln_memory:: 前缀） |
 | --- | --- | --- | --- |
+| 已解析话题格式 | common/sensor_names.hpp | header-only，无实现文件 | 各核心目标的公开头路径 |
 | 共享时间/网格 | common/sensor_types.hpp | 无实现，纯数据 | 随各核心头文件提供 |
 | 候选时间检查 | common/sensor_time.hpp | common/sensor_time.cpp | vln_memory_sensor_time |
 | RGB 解码 | rgb/rgb.hpp | rgb/rgb.cpp | vln_memory_rgb |
@@ -48,7 +51,11 @@
 
 默认构造的三个解码结果均无 frame/info，即便 code=none 也不是成功。不要统一写 code==none 代替上述谓词。
 
-## 3. 公共时间检查
+## 3. 公共名称与时间检查
+
+[sensor_names.hpp](../../include/vln_memory/bag/common/sensor_names.hpp) 提供 header-only 的 `bool isResolvedTopicName(std::string_view topic) noexcept`，无分配、不保存输入引用。接受已解析的绝对 ASCII 话题名，拒绝空 token/空白/NUL/数字开头 token/相对名/超过 247 字节；不执行 remap，不证明消息类型或来源真实性。TF 核心、TF ROS binding、CameraInfo 共用，详细规则见 [同名说明](../common/sensor_names.md)。
+
+### 时间检查
 
 提供方：[sensor_time.hpp](../../include/vln_memory/bag/common/sensor_time.hpp)，实现：[sensor_time.cpp](../../src/bag/common/sensor_time.cpp)。
 
@@ -117,11 +124,12 @@ DepthImageView 与 RGB 视图拥有相同字段名称和基础类型，encoding 
 | --- | --- |
 | input_unit | DepthUnit，必填 meters 或 millimeters；默认 unspecified 会失败，不按编码猜单位 |
 | convention | DepthConvention，必填 optical_z；unspecified、radial_range 不支持 |
-| alignment | DepthAlignmentInfo{DepthAlignment state; ImageGeometry rgb_grid; string basis} |
+| alignment | DepthAlignment，直接填写 unknown / not_aligned / aligned_to_rgb |
+| rgb_grid / alignment_basis | ImageGeometry / string，并列保存目标网格和注册依据 |
 | min_depth_m / max_depth_m | double，min 有限且>=0，max>min；默认 0/+Inf，正有效值按闭区间过滤 |
 | limits | 与 RGB 同名字段及相同默认上限；只限制本次转换 |
 
-alignment.state=unknown/not_aligned 时 rgb_grid 必须为空。aligned_to_rgb 时，rgb_grid 必须与深度网格宽高/frame 相同，且 basis 非空；basis 来自注册流/设备配置，不能拿尺寸相同作依据。
+alignment=unknown/not_aligned 时 rgb_grid 必须为空。aligned_to_rgb 时，rgb_grid 必须与深度网格宽高/frame 相同，且 alignment_basis 非空；alignment_basis 来自注册流/设备配置，不能拿尺寸相同作依据。
 
 返回 DepthResult{code,message,optional<DepthFrame> frame}。DepthFrame 持有：
 
@@ -131,8 +139,8 @@ alignment.state=unknown/not_aligned 时 rgb_grid 必须为空。aligned_to_rgb �
 | encoding,step,unit,convention | 32FC1、width*4、meters、optical_z |
 | depth_m | vector<float>，width*height，逐行紧密排列；无效值 quiet NaN，不是可直接写入 ROS Image 的字节缓冲区 |
 | source_* | encoding、numeric_type、unit、scale_to_m、step、is_bigendian，防止重复换算 |
-| alignment / min_depth_m / max_depth_m | 拷贝本次采用的声明和过滤策略 |
-| statistics | valid_pixels、invalid_pixels、zero_pixels、negative_pixels、nonfinite_pixels、out_of_range_pixels、unrepresentable_pixels 为 size_t；valid_ratio 为 double |
+| alignment / rgb_grid / alignment_basis / min_depth_m / max_depth_m | 并列保存本次注册声明、目标网格、依据和过滤策略 |
+| 扁平质量字段 | valid_pixels、invalid_pixels、zero_pixels、negative_pixels、nonfinite_pixels、out_of_range_pixels、unrepresentable_pixels 为 size_t；valid_ratio 为 double，均直接位于 DepthFrame |
 
 零/负数/非有限/过滤外/不可表示像素分别统计。全无效图像也可 ok()，此时 valid_ratio=0；上层必须决定是否进入 pending。
 
@@ -166,15 +174,17 @@ CameraInfoMatchResult checkCameraInfoImage(
 
 | 关联参数 | 格式/约束 |
 | --- | --- |
-| image | CameraImageReference{string topic; ImageGeometry geometry; SensorStamp stamp}，必须来自实际候选图像 |
-| options.binding | CameraInfoBinding{string camera_info_topic,image_topic,optical_frame,basis; CameraImageDomain image_domain} |
-| image_domain | raw 或 rectified，默认 unspecified 不可用 |
+| image | CameraImageReference{string topic; uint32_t width,height; string frame_id; SensorStamp stamp}，逐项来自实际候选图像，不含像素 |
+| options.camera_info_topic / image_topic / optical_frame / binding_basis | 四个 string，分别为标定话题、图像话题、光学 frame 和绑定依据，直接位于配置顶层 |
+| options.image_domain | raw 或 rectified，默认 unspecified 不可用 |
 | time_policy | synchronized（默认）或 static_calibration |
-| options.time | SensorTimeOptions；synchronized 时要求同域与容差通过；static_calibration 时不做时间比较，basis 必须说明固定段的依据 |
+| options.clock_relation / max_delta_ns | SensorClockRelation / int64_t 纳秒；synchronized 要求同域与非负容差通过；static_calibration 不比较时差，binding_basis 必须说明固定段依据 |
 
 匹配结果字段：code、message、calibration_code、expected_width/expected_height、optional<SensorTimeCheck> timing、used_static_calibration。若标定校验失败，calibration_code 说明具体原因；timing 只在真正运行时间检查时有值，符号为 CameraInfo-image。
 
 尺寸由 ROI.width/bx、ROI.height/by 推出；默认零 ROI 用完整标定网格。当前要求整除，不猜舍入。rectified + roi.do_rectify=true 返回 unsupported_rectified_roi。raw K/P 原值仍保留，后续投影不能拿未调整的完整分辨率内参直接用于裁剪图像。
+
+CameraInfoBinding 已移除，图像尺寸/frame 和匹配配置均直接访问顶层字段；旧版调用者应按 [迁移表](../modules/camera_info/camera_info.md#10-2026-10-29-可读性重构) 修改并重新编译。原始 ROI、采样时刻和结果诊断类型保留。
 
 本接口不从多条 CameraInfo 自动选版本；动态有效区间和固定标定的配置证明由 builder 管理。
 
@@ -197,12 +207,12 @@ TfTimeCheck TfIndex::checkTime(
 | --- | --- |
 | TfScope | string clock_id,segment_id，必须非空；由采集配置声明，一个索引一段，不含数据段起止时间 |
 | TfLimits | size_t max_edges=4096、max_samples=1000000；必须>0，构造函数存储配置，insert/查询时检查有效性 |
-| TfTransform | TfKind kind；SensorStamp stamp；string parent_frame,child_frame；array<double,3> translation_m；array<double,4> rotation_xyzw；TfSource source |
+| TfTransform | TfKind kind；SensorStamp stamp；string parent_frame,child_frame；array<double,3> translation_m；array<double,4> rotation_xyzw；string source_topic,source_message_id；size_t source_transform_index |
 | TfKind | dynamic 或 static_transform，不能从 stamp 是否为零推断 |
-| TfSource | string topic,message_id；size_t transform_index。核心目前只检查 topic 长度/前导 / 和非空 ID，完整话题语法校验差异见核查报告 |
+| TfTransform 来源字段 | string source_topic,source_message_id；size_t source_transform_index。source_topic 必须通过公共完整名称规则（绝对名称、合法 token、最长 247 字节）；source_message_id 非空。坏来源返回 missing_provenance，索引不变 |
 | 几何 | parent!=child；有效 frame；有限平移；四元数 norm 与 1 差<=1e-3；保留原值 |
 | TfCoverageOptions | int64_t max_interpolation_gap_ns，非负；默认 0 仅允许精确样本 |
-| TfTimeOptions | TfScope scope 与 TfCoverageOptions coverage；查询必须与索引 clock/segment 相同 |
+| TfTimeOptions | string clock_id,segment_id；int64_t max_interpolation_gap_ns；查询必须与索引 clock/segment 相同，间隔非负 |
 
 变换保存 T_parent_child，把 child 中的点变到 parent。target/source 为查询终点/起点，例如 target=map、source=rgb_optical。
 
@@ -210,7 +220,7 @@ insert 返回 {TfInsertCode code; string message}；accepted() 接受 inserted �
 
 | TfChainReport 字段 | 结果格式 |
 | --- | --- |
-| code,message,scope,target_frame,source_frame,failed_frame | 拓扑/配置状态、上下文与定位信息 |
+| code,message,clock_id,segment_id,target_frame,source_frame,failed_frame | 拓扑/配置状态、上下文与定位信息 |
 | frames | vector<string>，从 source 到 target |
 | edges | vector<TfChainEdge>；每边 parent_frame,child_frame,kind,inverted,sample_count,optional<TfTimeInterval> dynamic_bounds |
 | inverted | source→target 路径沿 parent→child 时 true，几何计算时需取逆 |
@@ -339,3 +349,7 @@ int main()
 | TfCoverageStatus | not_evaluated, static_only, available, no_common_time |
 | TfTimeCode | covered, invalid_options, invalid_stamp, invalid_scope, clock_mismatch, segment_mismatch, chain_unavailable, outside_range, gap_too_large |
 | TfMessageCode | processed, invalid_binding, unexpected_topic, missing_message_id |
+
+## 13. TF 字段迁移（2026-10-30）
+
+TF 来源和查询/报告上下文已改为顶层字段，TfSource 不再提供。完整迁移表与仍保留的语义类型见 [TF 说明](../modules/tf/tf.md#12-2026-10-30-可读性重构与字段迁移)。旧式 options={scope,coverage} 需改为逐字段填写 clock_id、segment_id、max_interpolation_gap_ns；调用方必须重新编译。

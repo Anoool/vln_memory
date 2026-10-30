@@ -46,9 +46,12 @@ int main()
   message.transforms.push_back(entry);
   const auto report = ingestRosTf(index, message, "/tf_static", "bag:message:1");
   if (!report.ok()) {return 1;}
-  const auto checked = index.checkTime("base", "camera_optical", {10, 0}, {scope, {0}});
+  TfTimeOptions options;
+  options.clock_id = scope.clock_id;
+  options.segment_id = scope.segment_id;
+  const auto checked = index.checkTime("base", "camera_optical", {10, 0}, options);
   if (!checked.covered()) {return 1;}
-  std::cout << checked.edges[0].before.source.topic << '\n';
+  std::cout << checked.edges[0].before.source_topic << '\n';
   return 0;
 }
 ```
@@ -62,3 +65,12 @@ int main()
 builder 第一遍完成该段数据的收集后再对图像做 checkTime；缺链、冲突、超范围和时间空洞应保留为 pending/issues。不会自动启动在线 TF Listener 来填补离线证据。
 
 数值、方向、冲突、时钟/段范围见 [核心说明](tf.md)。真实消息及原生 tf2 对照见 [test_tf_ros](tests/test_tf_ros.md)。
+
+
+## 2026-10-29 修复与注释复核
+
+删除重复名称解析器，改用公共规则；注释说明 processed/ok、条目来源序号与部分成功。 话题格式统一最长 247 字节。具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+## 2026-10-30 可读性整理
+
+接入函数逐字段写入 source_topic/source_message_id/source_transform_index，消息内循环使用 transform_index；查询示例使用扁平 TfTimeOptions。真实 ROS header 时间、条目顺序、部分成功和输出所有权保持。字段迁移见 [TF 核心第 12 节](tf.md#12-2026-10-30-可读性重构与字段迁移)。

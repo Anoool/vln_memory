@@ -10,6 +10,11 @@
 
 #include "vln_memory/bag/common/sensor_types.hpp"
 
+/**
+ * @file
+ * Depth 单帧处理契约：显式数值语义输入，标准化为米制 optical-z。
+ * 数据质量、时间、相机模型和物理注册分别检查，不能用一个成功标志替代。
+ */
 namespace vln_memory
 {
 
@@ -19,18 +24,6 @@ enum class DepthUnit {unspecified, meters, millimeters};
 enum class DepthConvention {unspecified, optical_z, radial_range};
 enum class DepthNumericType {unknown, uint16, float32};
 enum class DepthAlignment {unknown, not_aligned, aligned_to_rgb};
-
-/**
- * @brief 上游对 RGB 注册的声明，不是本模块从像素或尺寸推断出的结论。
- * @note aligned_to_rgb 必须提供匹配的 RGB 网格和非空依据，例如注册流配置 ID。
- *       unknown/not_aligned 的 rgb_grid 必须为空；basis 可记录未确定/未注册原因。
- */
-struct DepthAlignmentInfo
-{
-  DepthAlignment state{DepthAlignment::unknown};
-  ImageGeometry rgb_grid;
-  std::string basis;
-};
 
 /**
  * @brief 借用未压缩单通道 Image 数据，所有引用只需在 decodeDepth 调用期间有效。
@@ -51,12 +44,19 @@ struct DepthImageView
   std::size_t data_size{0};
 };
 
-/** @brief 必填语义与可选范围过滤；默认对象缺少单位/深度含义，不能直接解码。 */
+/**
+ * @brief 必填语义与可选范围过滤；默认对象缺少单位/深度含义，不能直接解码。
+ * @note aligned_to_rgb 要求 rgb_grid 与深度布局一致且 alignment_basis 非空；
+ *       unknown/not_aligned 的 rgb_grid 必须为空，依据可记录未确定/未注册原因。
+ */
 struct DepthOptions
 {
   DepthUnit input_unit{DepthUnit::unspecified};
   DepthConvention convention{DepthConvention::unspecified};
-  DepthAlignmentInfo alignment;
+  // 注册状态、目标 RGB 网格与来源依据分别保存；相同尺寸不构成注册证明。
+  DepthAlignment alignment{DepthAlignment::unknown};
+  ImageGeometry rgb_grid;
+  std::string alignment_basis;
   // 有效像素必须正数，且位于 [min_depth_m, max_depth_m]；默认不截断正有限值。
   double min_depth_m{0.0};
   double max_depth_m{std::numeric_limits<double>::infinity()};
@@ -67,19 +67,6 @@ struct DepthLimits
 {
   std::size_t max_pixels{16U * 1024U * 1024U};
   std::size_t max_input_bytes{128U * 1024U * 1024U};
-};
-
-/** @brief 无效原因互斥计数；invalid_pixels 等于五类原因之和。 */
-struct DepthStatistics
-{
-  std::size_t valid_pixels{0};
-  std::size_t invalid_pixels{0};
-  std::size_t zero_pixels{0};
-  std::size_t negative_pixels{0};
-  std::size_t nonfinite_pixels{0};
-  std::size_t out_of_range_pixels{0};
-  std::size_t unrepresentable_pixels{0};
-  double valid_ratio{0.0};
 };
 
 /**
@@ -105,10 +92,22 @@ struct DepthFrame
   double source_scale_to_m{0.0};
   std::uint32_t source_step{0};
   bool source_is_bigendian{false};
-  DepthAlignmentInfo alignment;
+  // 注册状态、目标 RGB 网格与来源依据分别保存；相同尺寸不构成注册证明。
+  DepthAlignment alignment{DepthAlignment::unknown};
+  ImageGeometry rgb_grid;
+  std::string alignment_basis;
   double min_depth_m{0.0};
   double max_depth_m{std::numeric_limits<double>::infinity()};
-  DepthStatistics statistics;
+  // 质量总数、比例与互斥原因计数；invalid_pixels 等于五类原因之和。
+  std::size_t valid_pixels{0};
+  std::size_t invalid_pixels{0};
+  std::size_t zero_pixels{0};
+  std::size_t negative_pixels{0};
+  std::size_t nonfinite_pixels{0};
+  std::size_t out_of_range_pixels{0};
+  std::size_t unrepresentable_pixels{0};
+  double valid_ratio{0.0};
+  // 这是本机 float 数组，不是源 Image 字节缓冲区；落盘/JSONL 需另行定义格式。
   std::vector<float> depth_m;
 };
 
@@ -140,7 +139,11 @@ struct DepthResult
   DepthErrorCode code{DepthErrorCode::none};
   std::string message;
   std::optional<DepthFrame> frame;
-  bool ok() const noexcept {return code == DepthErrorCode::none && frame.has_value();}
+  /** @brief 同时检查错误码与拥有型帧；全无效帧也可成功，上层另查 frame->valid_ratio。 */
+  bool ok() const noexcept
+  {
+    return code == DepthErrorCode::none && frame.has_value();
+  }
 };
 
 enum class DepthAlignmentStatus
@@ -159,13 +162,20 @@ struct DepthAlignmentResult
 {
   DepthAlignmentStatus status{DepthAlignmentStatus::unknown};
   std::string message;
-  bool alignedToRgb() const noexcept {return status == DepthAlignmentStatus::aligned;}
+  /** @brief 只报告注册声明与实际 RGB 网格一致，不代表标定或时间同步已验证。 */
+  bool alignedToRgb() const noexcept
+  {
+    return status == DepthAlignmentStatus::aligned;
+  }
 };
 
-/** @brief 稳定名称用于后续 JSONL 报告；不以数值枚举下标作为持久格式。 */
+/** @brief 返回错误码的静态稳定名称；未知枚举返回 unknown，无需释放。 */
 const char * depthErrorCodeName(DepthErrorCode code) noexcept;
+/** @brief 返回源单位的静态报告名称；未知枚举返回 unknown，无需释放。 */
 const char * depthUnitName(DepthUnit unit) noexcept;
+/** @brief 返回源数值类型的静态报告名称；未知枚举返回 unknown，无需释放。 */
 const char * depthNumericTypeName(DepthNumericType type) noexcept;
+/** @brief 返回网格核对状态的静态报告名称；未知枚举返回 unknown，无需释放。 */
 const char * depthAlignmentStatusName(DepthAlignmentStatus status) noexcept;
 
 /**

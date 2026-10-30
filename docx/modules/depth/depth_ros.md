@@ -34,3 +34,10 @@ vln_memory::DepthResult handleDepth(
 下游 find_package(vln_memory REQUIRED)，链接 vln_memory::vln_memory_depth_ros；目标会传递核心与 sensor_msgs 依赖。
 
 本轮已在真实 Humble 环境构建并运行 Image 测试。见 [测试说明](tests/test_depth_ros.md)、[安装消费者](tests/depth_ros_consumer.md)、[验证结果](depth.md#验证结果)。
+
+
+## 2026-10-29 修复与注释复核
+
+整理并保留用户的信息头/时间戳说明，分开解释布局、单位来源和同步调用期间的借用。 具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+2026-10-29 可读性调整：核心的注册配置现在使用并列的 alignment、rgb_grid、alignment_basis，质量直接从 DepthFrame 读取；ROS 入口签名与字段映射保持。

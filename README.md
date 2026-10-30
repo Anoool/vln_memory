@@ -1,10 +1,14 @@
 # vln_memory
 
-ROS 2 Humble / C++17 空间语义记忆功能包。**当前正在实现观测准备层 bag，已完成该层的 RGB、Depth、CameraInfo，以及 TF 链/覆盖检查和公共时间检查。**
+ROS 2 Humble / C++17 空间语义记忆功能包。**当前交付目标限定为原设计第 1、2 部分：核心数据规范及离线构建、工具、纠错、标注、发布与 Viewer；完整在线查询/导航接入暂不开发。**
+
+逐条完成情况见 [原设计第 1、2 部分范围对照](docx/project/sections_1_2_scope.md)。当前两个原文部分均未完成。
+
+**当前正在实现观测准备层 bag，已完成该层的 RGB、Depth、CameraInfo，以及 TF 链/覆盖检查和公共时间检查。**
 
 当前源码的逐项验收见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。现阶段仍无 bag reader、自动配对、组合位姿、关键帧与 Observation 导出入口。
 
-整个系统构想、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
+收敛后的目标、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
 
 RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测准备层与源码组织](docx/project/architecture.md)。RGB/Depth 模块输出标准内存帧；PNG、跨消息同步和 Observation JSONL 在后续 bag 模块统一实现。
 
@@ -83,10 +87,13 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 
 ## Git 审阅
 
-本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；当前 TF 位于基于该提交的 codex/tf-module。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
+本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；TF/核查基线已保存为 e607c97；当前修复与范围规划位于 codex/sensor-validation-comments。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
 
 ```bash
 git status --short --branch
 git diff --cached --stat
 git diff --cached
 ```
+
+
+当前来源话题校验差异已统一修复，各模块注释也已补充。修复范围、输入约束收紧和验证见 [实施记录](docx/project/sensor_validation_comments_plan.md)。

@@ -56,3 +56,8 @@ Depth 和真实 Humble 安装后的下游验证见 [Depth 验证记录](../modul
 vln_memory::vln_memory_tf 显式公开 C++17/include，不依赖 ROS；vln_memory::vln_memory_tf_ros PUBLIC 链接核心，并传递 tf2_msgs、geometry_msgs。tf2 仅在 ROS+BUILD_TESTING 时查找用于对照测试，关闭测试的生产包不需要 tf2 库。
 
 公开头按 bag/tf/tf.hpp 和 tf_ros.hpp 安装；无 ROS 模式不安装适配头。完整核心测试总数 5，真实 ROS 模式总数 9；新增独立下游 tf_consumer、tf_ros_consumer。详情见 [TF 核心](../modules/tf/tf.md) 和 [ROS 适配](../modules/tf/tf_ros.md)。
+
+
+## 统一名称检查修复
+
+新增 header-only 的 common/sensor_names.hpp 并随公共头安装，无新增运行库。sensor_names_core 独立无 ROS 测试使核心数量变为 6；真实 ROS 总数为 10。rmw 仅作为 test_tf_ros 对照测试依赖，运行目标不依赖 rmw。当前编辑器格式约定见根目录 .editorconfig，修复说明见 [实施记录](sensor_validation_comments_plan.md)。

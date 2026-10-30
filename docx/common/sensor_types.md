@@ -35,3 +35,8 @@ struct ImageGeometry {
 宽高与光学帧用于模块间核对布局；此类型不包含内参、时刻或几何注册证明。bag 层可以从 RGB 的公开输出构造 ImageGeometry{rgb.width, rgb.height, rgb.frame_id}，交给 checkDepthRgbAlignment 检查。
 
 该类型拥有 frame_id 字符串，不借用来源消息。它是纯数据契约，不让 Depth 依赖 RGB 内部实现；CameraInfo 也使用它检查图像布局。详细规则见 [Depth 模块](../modules/depth/depth.md)。
+
+
+## 2026-10-29 修复与注释复核
+
+明确 SensorStamp 只保存数值，不携带时钟域 ID；跨消息/地图上下文不能从本类型推断。 具体修复与验证记录见 [本次实施记录](../project/sensor_validation_comments_plan.md)。

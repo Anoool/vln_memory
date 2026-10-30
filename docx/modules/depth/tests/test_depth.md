@@ -6,7 +6,7 @@
 
 已知字节序使用手写 uint16/float32 字节作为独立依据；生成样本覆盖不同编码、端序、宽高与填充。普通检查不使用会被 NDEBUG 关闭的 assert。
 
-## 11 组覆盖
+## 12 组覆盖
 
 1. uint16 毫米、奇数行填充、非对齐输入起点、元数据与统计。
 2. 手写大/小端 uint16 和 IEEE float32，验证已知物理深度。
@@ -19,6 +19,7 @@
 9. 源数据、字符串、注册依据与网格销毁后输出仍独立有效。
 10. 稳定错误、单位、数值类型和对齐状态名称。
 11. 两种编码、两种端序共 600 组生成样本，检查逐像素结果和计数恒等式。
+12. 同一输入同时违反多项约束，核对布局/语义/容量检查的原有错误优先级。
 
 ## 执行
 
@@ -32,3 +33,5 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 ```
 
 CMake/CTest 名称为 depth_core。添加 -fsanitize=address,undefined -fno-omit-frame-pointer -g 可运行地址和未定义行为检查；本轮已通过。完整结果见 [Depth 验证](../depth.md#验证结果)。
+
+2026-10-29：迁移为直接访问 frame.valid_ratio/各计数，以及独立的 alignment、rgb_grid、alignment_basis；移除测试中的嵌套三元表达式，补齐辅助函数用途注释。

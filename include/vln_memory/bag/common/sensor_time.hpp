@@ -5,6 +5,11 @@
 
 #include "vln_memory/bag/common/sensor_types.hpp"
 
+/**
+ * @file
+ * 候选时间检查契约：调用者先选出两条消息并确认时钟关系，再检查整数时差。
+ * 返回 matched 只表示容差通过，不建立同步队列、不改变任一原始 stamp。
+ */
 namespace vln_memory
 {
 

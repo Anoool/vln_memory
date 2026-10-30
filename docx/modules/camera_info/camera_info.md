@@ -69,7 +69,7 @@ CameraInfoMatchResult 返回 matched()、稳定 code/message、标定细分 cali
 
 ## 5. 与图像的绑定和网格
 
-CameraInfoBinding 必须明确 camera_info_topic、image_topic、optical_frame、basis 和 image_domain(raw/rectified)。binding 是设备配置的声明，检查器核对实际话题与图像元数据。一个 CameraInfo 可为多个流使用，但每个流都必须单独建立明确绑定。
+CameraInfoMatchOptions 在同一层明确 camera_info_topic、image_topic、optical_frame、binding_basis 和 image_domain(raw/rectified)。这些字段是设备配置的声明，检查器核对实际话题与图像元数据。一个 CameraInfo 可为多个流使用，但每个流都必须单独建立明确绑定。
 
 frame 名不必带 optical 后缀，也不能仅凭后缀证明光学轴。相机 frame 与图像 frame 必须都等于配置中的 optical_frame；相机 link/body frame 不能不经变换冒充光学 frame。实际轴与外参必须结合设备配置、URDF 和 TF 核查；TF 链连通和四元数有效本身不能证明物理安装正确。
 
@@ -87,7 +87,7 @@ rectified 且 roi.do_rectify=true 时必须计算校正后的 ROI，当前返回
 
 synchronized 为默认标定策略；需要明确同一时钟和非负容差，0 表示严格同时。timing.delta_ns=CameraInfo stamp-image stamp，超过容差也保留差值供统计。
 
-static_calibration 是显式配置承诺：basis 必须说明该数据段内标定/操作参数固定的依据，才可不检查 CameraInfo 的采样时差。此时 timing 为空、used_static_calibration=true，原 stamp 原样保存。它不授权跨标定版本复用，也不自动推断静态；动态标定的有效区间选择留给 builder。
+static_calibration 是显式配置承诺：binding_basis 必须说明该数据段内标定/操作参数固定的依据，才可不检查 CameraInfo 的采样时差。此时 timing 为空、used_static_calibration=true，原 stamp 原样保存。它不授权跨标定版本复用，也不自动推断静态；动态标定的有效区间选择留给 builder。
 
 详细的时间取舍、在线控制和未来 JSONL 约定见 [sensor_time 说明](../../common/sensor_time.md)。
 
@@ -114,11 +114,20 @@ int main()
   const auto decoded = decodeCameraInfo(source);
   if (!decoded.ok()) {std::cerr << decoded.message; return 1;}
 
-  CameraImageReference rgb{"/rgb/image_raw", {640, 480, "rgb_optical"}, {10, 0}};
+  CameraImageReference rgb;
+  rgb.topic = "/rgb/image_raw";
+  rgb.width = 640;
+  rgb.height = 480;
+  rgb.frame_id = "rgb_optical";
+  rgb.stamp = {10, 0};
   CameraInfoMatchOptions options;
-  options.binding = {"/rgb/camera_info", "/rgb/image_raw", "rgb_optical",
-    "device_profile_v1", CameraImageDomain::raw};
-  options.time = {SensorClockRelation::same_clock, 0};
+  options.camera_info_topic = "/rgb/camera_info";
+  options.image_topic = "/rgb/image_raw";
+  options.optical_frame = "rgb_optical";
+  options.binding_basis = "device_profile_v1";
+  options.image_domain = CameraImageDomain::raw;
+  options.clock_relation = SensorClockRelation::same_clock;
+  options.max_delta_ns = 0;
   const auto checked = checkCameraInfoImage(*decoded.info, rgb, options);
   if (!checked.matched()) {std::cerr << checked.message; return 1;}
   std::cout << checked.expected_width << 'x' << checked.expected_height << '\n';
@@ -141,3 +150,25 @@ int main()
 - [ROS 2 Humble CameraInfo 定义](https://github.com/ros2/common_interfaces/blob/humble/sensor_msgs/msg/CameraInfo.msg)：采样时间、光学 frame、K/P、ROI/binning 的语义。
 - [ROS image_geometry PinholeCameraModel](https://github.com/ros-perception/vision_opencv/blob/humble/image_geometry/src/pinhole_camera_model.cpp)：保留完整标定，按 ROI/binning 派生网格/内参；后续投影优先复用成熟几何库。本模块没有复制其去畸变算法。
 - [REP 103](https://github.com/ros-infrastructure/rep/blob/master/rep-0103.rst)：光学轴与单位约定。
+
+
+## 2026-10-29 修复与注释复核
+
+话题检查改用公共 sensor_names；补明完整 R/P 要求、原始模型与有效内参的区别，以及重新校验公开可变对象的原因。 话题格式统一最长 247 字节。具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+## 10. 2026-10-29 可读性重构
+
+图像引用和匹配配置改用扁平字段，删去只使用一次的 CameraInfoBinding。迁移关系如下；这是公开结构的源码/布局变更，仓库内调用点已迁移，下游须同步修改并重新编译。
+
+| 原访问方式 | 当前访问方式 |
+| --- | --- |
+| image.geometry.width / height / frame_id | image.width / height / frame_id |
+| options.binding.camera_info_topic / image_topic / optical_frame / image_domain | options.camera_info_topic / image_topic / optical_frame / image_domain |
+| options.binding.basis | options.binding_basis |
+| options.time.clock_relation / max_delta_ns | options.clock_relation / max_delta_ns |
+
+SensorStamp、原始 CameraRoi 和 optional 结果保留，分别表达采样时刻、原始 ROI 和失败无数据；不增加继承、别名兼容层或重复字段。ROS ROI 按字段复制，人工检查时不必记住聚合初始化的宽高顺序。
+
+人工审阅 camera_info.cpp 时，先看 validateCameraInfo 的来源/数值检查，再看 validateDistortion、validateMatrices 和 validateImageGrid；最后看 checkCameraInfoImage 的配置→图像→绑定→网格→时间。每个阶段保留原来的首个错误顺序，失败仍携带已经计算出的尺寸、calibration_code 和 timing；固定标定仍不伪造时差。
+
+复杂度和本次验证记录见 [重构计划与复核](../../project/camera_info_readability_plan.md)。

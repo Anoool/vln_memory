@@ -5,6 +5,11 @@
 
 #include "vln_memory/bag/camera_info/camera_info.hpp"
 
+/**
+ * @file
+ * ROS CameraInfo 边界：复制完整标定和操作参数，额外接收真实来源 topic。
+ * 返回对象独立拥有数据，所有校验规则与非 ROS 调用保持一致。
+ */
 namespace vln_memory
 {
 

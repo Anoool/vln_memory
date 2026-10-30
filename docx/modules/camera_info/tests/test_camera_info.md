@@ -9,3 +9,5 @@
 3. 时间：以 image 为 reference 的正时差、容差边界/超限、未知时钟拒绝、固定标定不伪造同步、静态策略仍拒绝坏 image stamp。
 
 运行：ctest --test-dir build/camera-core -R camera_info_core --output-on-failure。它校验结构与规则，不证明物理精度，也不选择跨消息候选。接口见 [核心](../camera_info.md)。
+
+2026-10-29：图像引用与匹配配置迁移到顶层字段，原有断言和预期语义保留；工厂、检查函数补充目的注释，密集赋值展开，方便逐例审阅。重构前后诊断对照及安装验证见 [重构记录](../../../project/camera_info_readability_plan.md)。

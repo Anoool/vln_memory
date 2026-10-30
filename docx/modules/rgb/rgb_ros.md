@@ -48,3 +48,13 @@ target_link_libraries(my_bag_reader PUBLIC vln_memory::vln_memory_rgb_ros)
 与核心一致：未支持编码返回 unsupported_encoding；空 frame_id 和零时间戳原样保留，能否定位由后续 TF/组装层判断。当前仅支持未压缩 Image。
 
 真实 ROS 消息测试位于 `test/bag/rgb/test_rgb_ros.cpp`，执行方式见 [适配测试说明](tests/test_rgb_ros.md)，实际结果见 [RGB 验证记录](rgb.md#实施与验证记录)。缺少 ROS 环境时，不用仿造消息头冒充真实 ROS 集成测试。
+
+
+## 2026-10-29 修复与注释复核
+
+注明各字段组原样映射及临时借用终止位置，明确 step 包含消息真实行填充。 具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+
+## 2026-10-29 人工审阅整理
+
+补充适配函数的输入/输出与所有权说明，按采样身份、布局、借用缓冲区分组，合并重复注释。字段映射与公开接口保持；核心的分步审阅和本次验证见 [RGB 可读性重构](rgb.md#2026-10-29-人工审阅可读性重构)。

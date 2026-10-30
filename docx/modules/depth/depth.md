@@ -28,7 +28,7 @@ Depth 核心使用 C++17，不依赖 RGB 实现、ROS 节点、CameraInfo、TF �
 
 ## Git 审阅流程
 
-现有 RGB 保存在 main 基线，本模块与必要的共享接口/构建/文档修改在 codex/depth-module 开发。完成后 git add，保留暂存差异供人工审阅，不自动合并。
+首次 Depth 实现（2026-10-28）在 codex/depth-module 开发，RGB 基线保留。后续修改按仓库约定在当前 codex/ 工作分支保留相关文件的暂存差异，供人工审阅，不自动合并。
 
 ## 代码与公开接口
 
@@ -54,6 +54,7 @@ DepthAlignmentResult checkDepthRgbAlignment(
 | is_bigendian | 仅允许 0/1；与 CPU 大小端无关 |
 | DepthOptions.input_unit | 必填 meters 或 millimeters；比例分别为 1.0、0.001 |
 | DepthOptions.convention | 必须为 optical_z；未给出或射线距离明确失败 |
+| alignment / rgb_grid / alignment_basis | 并列字段：注册状态、共享 RGB 网格、可追溯依据 |
 | min_depth_m / max_depth_m | 正深度还须落在闭区间内；min 有限且 >=0，max>min，允许 +Inf |
 | DepthLimits | 默认 16 Mi 像素、128 MiB 输入，计入行填充 |
 
@@ -68,8 +69,9 @@ DepthFrame 拥有像素和全部字符串，源消息、options 释放或复用�
 - source_unit / source_scale_to_m：保留显式单位与实际换算比例，避免下游二次换算。
 - source_step / source_is_bigendian：原布局来源。
 - min_depth_m / max_depth_m：保留本次过滤范围，便于解释质量报告。
-- alignment：保留原始对齐声明、RGB 目标网格和依据。
-- statistics：有效点数、无效点数、有效比例和互斥原因计数。
+- alignment / rgb_grid / alignment_basis：并列保存原始对齐声明、RGB 目标网格和依据。
+- valid_pixels / invalid_pixels / valid_ratio：直接从 DepthFrame 读取质量，不再经过 statistics 包装。
+- zero_pixels / negative_pixels / nonfinite_pixels / out_of_range_pixels / unrepresentable_pixels：互斥无效原因计数，同样直接位于 DepthFrame。
 
 无效原因包括零值、负数、非有限值、范围外及 float32 不可表示值；输出统一为 quiet NaN。原始特殊值应由 bag 层从原始消息保存，不从标准化结果反推。16UC1 的 65535 不默认当无效值，如需过滤，应按设备范围显式配置。
 
@@ -81,11 +83,11 @@ DepthFrame 拥有像素和全部字符串，源消息、options 释放或复用�
 | --- | --- |
 | unknown | 可解码；即使尺寸/frame_id 相同也保持 unknown |
 | not_aligned | 可解码；检查返回 not_aligned，不能直接用 RGB 像素索引深度 |
-| aligned_to_rgb | 需要非空 basis 与目标 RGB 网格；网格/光学帧须匹配本深度，随后与实际配对 RGB 再检查 |
+| aligned_to_rgb | 需要非空 alignment_basis 与目标 RGB 网格；网格/光学帧须匹配本深度，随后与实际配对 RGB 再检查 |
 
 checkDepthRgbAlignment 的状态还包含 invalid_reference、inconsistent_declaration、size_mismatch、frame_mismatch。只有 alignedToRgb() 为真时，声明与实际 RGB 元数据才一致。
 
-这不验证像素内容、CameraInfo、注册算法或采样时差。basis 应来自已核实的驱动/注册配置或标定 ID，不能因为话题含 aligned、分辨率相同，就自动填入“已对齐”。实际配准与未对齐重投影属于后续基于 CameraInfo/TF 的能力。
+这不验证像素内容、CameraInfo、注册算法或采样时差。alignment_basis 应来自已核实的驱动/注册配置或标定 ID，不能因为话题含 aligned、分辨率相同，就自动填入“已对齐”。实际配准与未对齐重投影属于后续基于 CameraInfo/TF 的能力。
 
 共享网格来自 RGB 的公开字段，例如 ImageGeometry{rgb.width, rgb.height, rgb.frame_id}；Depth 不链接 RGB 实现。参见 [共享数据类型](../../common/sensor_types.md)。
 
@@ -126,8 +128,9 @@ int main()
   vln_memory::DepthOptions options;
   options.input_unit = vln_memory::DepthUnit::millimeters;
   options.convention = vln_memory::DepthConvention::optical_z;
-  options.alignment = {vln_memory::DepthAlignment::aligned_to_rgb,
-    rgb_grid, "verified_registered_stream_config"};
+  options.alignment = vln_memory::DepthAlignment::aligned_to_rgb;
+  options.rgb_grid = rgb_grid;
+  options.alignment_basis = "verified_registered_stream_config";
   const auto result = vln_memory::decodeDepth(input, options);
   if (!result.ok()) {
     std::cerr << vln_memory::depthErrorCodeName(result.code) << ": " << result.message;
@@ -172,4 +175,50 @@ int main()
 
 ## 审阅入口
 
-本地仓库：/home/dev/agent/vln_memory，分支 codex/depth-module。RGB 基线提交 f8fe7c4 保留在 main。本次新增模块与配套修改完成后暂存；使用 git diff --cached 查看，尚未自动合并。
+本地仓库：/home/dev/agent/vln_memory。历史 Depth 初始实现位于 codex/depth-module，RGB 基线为 f8fe7c4；当前可读性修改见本页末尾记录。使用 git diff --cached 按 Depth 文件路径查看暂存差异，区分已有跨模块修改。
+
+
+## 2026-10-29 修复与注释复核
+
+强调编码与单位分离、无效原因分支互斥、全无效成功的质量边界以及 float 数组与消息字节的区别。 具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+
+## 2026-10-29 可读性重构
+
+### 实施计划与接口边界
+
+依据仓库 AGENTS.md 的扁平数据、短函数、函数级注释要求，本次只调整 Depth 的表达方式。输入仍是借用视图与显式单位/范围配置；输出仍独立持有米制 optical-z、原始采样身份、注册依据与质量。核心不增加 ROS、RGB 实现、CameraInfo 或 TF 依赖。
+
+1. 移除 DepthAlignmentInfo、DepthStatistics 两个包装类型。DepthOptions/DepthFrame 直接提供 alignment、rgb_grid、alignment_basis；质量直接通过 frame.valid_ratio 等字段访问。
+2. 保留跨模块共用的 SensorStamp、ImageGeometry，以及失败时为空的 optional<DepthFrame>；不重复定义时间或网格，不引入继承和兼容包装。
+3. 解码入口保留布局→语义→容量的检查顺序；像素转换拆为读取循环和单值分类，以提前返回替代多层 if/else。所有辅助函数补用途、输入输出及失败/所有权注释。
+4. 同步修改核心/ROS 测试、RGB/Depth 与 CameraInfo 安装消费者、集中接口手册和完整示例；新增多错误输入的优先级回归。
+5. 验证核心、真实 ROS、安装消费者、完整示例、边界和文档链接；没有真实 bag 的结论仍明确区分。
+
+### 调用方迁移
+
+| 原访问方式 | 当前访问方式 |
+| --- | --- |
+| options.alignment.state | options.alignment |
+| options.alignment.rgb_grid | options.rgb_grid |
+| options.alignment.basis | options.alignment_basis |
+| frame.statistics.valid_ratio | frame.valid_ratio |
+| frame.statistics.* | frame.*（各计数原名保留） |
+
+DepthFrame 的注册字段同样迁移。函数签名、错误码/错误文本、错误优先级、范围端点、NaN 分类与成功含义保持；公开成员布局调整后，外部源码需迁移并重新编译。
+
+时间复杂度仍为 O(width*height)，输出空间为 O(width*height)，逐像素转换额外空间为 O(1)，没有额外扫描或整帧拷贝。
+
+### 本次验证
+
+本次从新目录实际执行，日志位于忽略的 build/depth-readability-20261029/verification.log：
+
+- 严格编译：-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror。
+- 独立无 ROS 核心 CMake/CTest：6/6 通过；真实 ROS 2 Humble CMake/CTest：10/10 通过。
+- Depth 核心：12 组行为检查（含 600 组生成样本）；新增多错误输入优先级检查通过。
+- 安装后独立消费者：核心 4/4、ROS 7/7 通过；运行 ROS 消费者时显式设置本次安装 lib 路径。
+- 本页完整 C++ 示例使用安装后的头文件/库编译、运行通过。
+- Depth 核心 ASan/UBSan 与泄漏检查通过。
+- 错误码/错误文本与校验顺序对照通过；192 个本地文档文件链接可解析，git diff --check 通过。
+
+数据仍为构造消息，没有新增真实 bag/相机验证。此次调整只修改 Depth 及受影响的消费者、测试和文档；保留已有其他模块修改，不自动提交或合并。
