@@ -1,12 +1,12 @@
 # 观测准备层公开接口手册
 
-核查日期：2026-10-29。范围：当前 include/vln_memory/bag、src/bag、CMake 导出目标及安装消费者。本文按实际声明和实现编写；所有 C++ 类型/函数属于 vln_memory 命名空间。完整目标与审查结论分别见 [系统规划](../project/system_plan.md)、[本次核查报告](../reviews/observation_preparation_audit.md)。
+核查日期：2026-10-30。范围：当前 include/vln_memory/bag、src/bag、CMake 导出目标及安装消费者。本文按实际声明和实现编写；所有 C++ 类型/函数属于 vln_memory 命名空间。完整目标与审查结论分别见 [系统规划](../project/system_plan.md)、[本次核查报告](../reviews/observation_preparation_audit.md)。
 
 当前项目验收仅覆盖原设计第 1、2 部分，范围对照见 [当前规划](../project/sections_1_2_scope.md)。本手册只描述其中已经实现的观测准备接口，不代表实体、关系、MemoryEngine 和 Viewer 已实现。
 
 ## 1. 能调用哪些接口
 
-当前接口处理的是**已解码布局字段或已反序列化 ROS 消息**，还没有“传入 bag 路径→输出观测文件”的公开接口。
+传感器接口继续处理已反序列化消息；新增 buildBag 可传入 bag 配置并输出 preparation 图像/JSONL。完整参数及文件契约见 [BagBuilder 接口](bag_builder_api.md)，它还不是正式 Observation 导出。
 
 | 作用 | 公开头文件（include/vln_memory/bag/ 下） | 实现文件（src/bag/ 下） | CMake 目标（vln_memory:: 前缀） |
 | --- | --- | --- | --- |
@@ -21,6 +21,9 @@
 | ROS CameraInfo 适配 | camera_info/camera_info_ros.hpp | camera_info/camera_info_ros.cpp | vln_memory_camera_info_ros |
 | TF 历史索引/链/覆盖 | tf/tf.hpp | tf/tf.cpp | vln_memory_tf |
 | ROS TF 接入 | tf/tf_ros.hpp | tf/tf_ros.cpp | vln_memory_tf_ros |
+| RGB-D 自动配对 | builder/rgbd_sync.hpp | builder/rgbd_sync.cpp | vln_memory_rgbd_sync |
+| 标定候选索引 | builder/camera_info_index.hpp | builder/camera_info_index.cpp | vln_memory_camera_info_index |
+| rosbag 准备闭环 | builder/bag_builder.hpp | builder/bag_builder.cpp 等 | vln_memory_bag_builder |
 
 来源路径示例：[RGB 头](../../include/vln_memory/bag/rgb/rgb.hpp)、[Depth 头](../../include/vln_memory/bag/depth/depth.hpp)、[CameraInfo 头](../../include/vln_memory/bag/camera_info/camera_info.hpp)、[TF 头](../../include/vln_memory/bag/tf/tf.hpp)。头文件声明接口；实现文件执行校验，不能把接口注释中的未来用途视为现有流程。
 
@@ -36,7 +39,7 @@
 | 输入错误 | 返回类型化状态和原因；Rgb/Depth/CameraInfo 解码失败时 optional 数据为空 |
 | 系统异常 | bad_alloc 等资源异常不转换为坏帧；TF 插入遇此类异常应丢弃本次构建索引 |
 | 单位/旋转 | Depth 输出米制 optical-z；TF 平移约定米，四元数 xyzw；矩阵 row-major |
-| 持久化 | 保存状态名称而非枚举序号；JSONL 序列化尚未实现，NaN/Inf 需定义序列化策略，不能直接输出非法 JSON 数字 |
+| 持久化 | 保存状态名称而非枚举序号；builder 已序列化 preparation JSONL；非有限原值为 null+标记，原始 CDR 保留证据，像素 NaN 保存在 NPY |
 
 | 返回类型 | 正确成功判断 | 成功不代表什么 |
 | --- | --- | --- |
@@ -353,3 +356,5 @@ int main()
 ## 13. TF 字段迁移（2026-10-30）
 
 TF 来源和查询/报告上下文已改为顶层字段，TfSource 不再提供。完整迁移表与仍保留的语义类型见 [TF 说明](../modules/tf/tf.md#12-2026-10-30-可读性重构与字段迁移)。旧式 options={scope,coverage} 需改为逐字段填写 clock_id、segment_id、max_interpolation_gap_ns；调用方必须重新编译。
+
+TF 适配器补充 entry_codes，和源 transforms 顺序一一对应，逐条保留插入/重复/拒绝状态；其他索引/冲突规则不变。

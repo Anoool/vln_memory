@@ -55,8 +55,15 @@ target_link_libraries(vln_memory_rgbd_sync PUBLIC vln_memory_sensor_time)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_rgbd_sync PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+# 标定候选检索复用 CameraInfo，不依赖 ROS、YAML 或 JSON。
+add_library(vln_memory_camera_info_index SHARED src/bag/builder/camera_info_index.cpp)
+add_library(vln_memory::vln_memory_camera_info_index ALIAS vln_memory_camera_info_index)
+target_link_libraries(vln_memory_camera_info_index PUBLIC vln_memory_camera_info)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_camera_info_index PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 set(memory_export_targets vln_memory_rgb vln_memory_depth
-  vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync)
+  vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
   find_package(ament_cmake REQUIRED)
@@ -91,6 +98,35 @@ if(VLN_MEMORY_ENABLE_ROS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(vln_memory_tf_ros PRIVATE -Wall -Wextra -Wpedantic)
   endif()
+  # BagBuilder 才依赖磁盘 bag、配置和编码；现有传感器核心仍可无 ROS 构建。
+  find_package(rosbag2_cpp REQUIRED)
+  find_package(rosbag2_storage REQUIRED)
+  find_package(rclcpp REQUIRED)
+  find_package(nlohmann_json REQUIRED)
+  find_package(yaml-cpp REQUIRED)
+  find_package(OpenSSL REQUIRED)
+  find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
+  add_library(vln_memory_bag_builder SHARED
+    src/bag/builder/bag_config.cpp
+    src/bag/builder/bag_reader_ros.cpp
+    src/bag/builder/media_writer.cpp
+    src/bag/builder/jsonl_writer.cpp
+    src/bag/builder/bag_builder.cpp)
+  add_library(vln_memory::vln_memory_bag_builder ALIAS vln_memory_bag_builder)
+  target_link_libraries(vln_memory_bag_builder PUBLIC
+    vln_memory_rgb_ros vln_memory_depth_ros vln_memory_camera_info_ros vln_memory_tf_ros
+    vln_memory_rgbd_sync vln_memory_camera_info_index nlohmann_json::nlohmann_json
+    PRIVATE yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS})
+  target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+  ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(vln_memory_bag_builder PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_executable(bag_builder src/apps/bag_builder_main.cpp)
+  target_link_libraries(bag_builder PRIVATE vln_memory_bag_builder)
+  install(TARGETS bag_builder DESTINATION lib/${PROJECT_NAME})
+  install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+  list(APPEND memory_export_targets vln_memory_bag_builder)
   list(APPEND memory_export_targets vln_memory_rgb_ros vln_memory_depth_ros
     vln_memory_camera_info_ros vln_memory_tf_ros)
 endif()
@@ -98,6 +134,9 @@ endif()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_camera_info_index test/bag/builder/test_camera_info_index.cpp)
+  target_link_libraries(test_camera_info_index PRIVATE vln_memory_camera_info_index)
+  add_test(NAME camera_info_index_core COMMAND test_camera_info_index)
   add_executable(test_rgbd_sync test/bag/builder/test_rgbd_sync.cpp)
   target_link_libraries(test_rgbd_sync PRIVATE vln_memory_rgbd_sync)
   add_test(NAME rgbd_sync_core COMMAND test_rgbd_sync)
@@ -124,6 +163,15 @@ if(BUILD_TESTING)
     # tf2 只用于真实 ROS 对照测试，当前索引/适配库不依赖其缓存。
     find_package(tf2 REQUIRED)
     find_package(rmw REQUIRED)
+    add_executable(test_bag_builder test/bag/builder/test_bag_builder.cpp)
+    target_link_libraries(test_bag_builder PRIVATE vln_memory_bag_builder yaml-cpp ${OpenCV_LIBS})
+    target_include_directories(test_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+    add_test(NAME bag_builder_ros COMMAND test_bag_builder ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(bag_builder_ros PROPERTIES FIXTURES_SETUP bag_builder_dataset)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME bag_output_numpy COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/bag/builder/test_bag_output.py ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(bag_output_numpy PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     add_executable(test_tf_ros test/bag/tf/test_tf_ros.cpp)
     target_link_libraries(test_tf_ros PRIVATE vln_memory_tf_ros)
     ament_target_dependencies(test_tf_ros PUBLIC tf2 rmw)
@@ -151,6 +199,8 @@ install(FILES include/vln_memory/bag/common/sensor_types.hpp
   include/vln_memory/bag/common/sensor_names.hpp
   DESTINATION include/vln_memory/bag/common)
 install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
+  include/vln_memory/bag/builder/bag_types.hpp
+  include/vln_memory/bag/builder/camera_info_index.hpp
   DESTINATION include/vln_memory/bag/builder)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)
@@ -161,6 +211,13 @@ install(FILES include/vln_memory/bag/camera_info/camera_info.hpp
 install(FILES include/vln_memory/bag/tf/tf.hpp
   DESTINATION include/vln_memory/bag/tf)
 if(VLN_MEMORY_ENABLE_ROS)
+  install(FILES
+    include/vln_memory/bag/builder/bag_config.hpp
+    include/vln_memory/bag/builder/bag_reader_ros.hpp
+    include/vln_memory/bag/builder/media_writer.hpp
+    include/vln_memory/bag/builder/jsonl_writer.hpp
+    include/vln_memory/bag/builder/bag_builder.hpp
+    DESTINATION include/vln_memory/bag/builder)
   install(FILES include/vln_memory/bag/tf/tf_ros.hpp
     DESTINATION include/vln_memory/bag/tf)
   install(FILES include/vln_memory/bag/camera_info/camera_info_ros.hpp
@@ -176,7 +233,7 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(VLN_MEMORY_ENABLE_ROS)
   ament_export_targets(export_vln_memory HAS_LIBRARY_TARGET)
-  ament_export_dependencies(sensor_msgs tf2_msgs geometry_msgs)
+  ament_export_dependencies(sensor_msgs tf2_msgs geometry_msgs rosbag2_cpp rosbag2_storage rclcpp nlohmann_json)
   ament_package()
 else()
   include(CMakePackageConfigHelpers)

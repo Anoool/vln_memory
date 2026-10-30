@@ -6,15 +6,15 @@ ROS 2 Humble / C++17 空间语义记忆功能包。**当前交付目标限定为
 
 **当前正在实现观测准备层 bag，已完成该层的 RGB、Depth、CameraInfo，以及 TF 链/覆盖检查和公共时间检查。**
 
-当前源码的逐项验收见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。现阶段仍无 bag reader、自动配对、组合位姿、关键帧与 Observation 导出入口。
+当前源码的逐项验收见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。数值位姿、有效相机模型、关键帧和正式 Observation 仍待实现，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
 
 收敛后的目标、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
 
-RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测准备层与源码组织](docx/project/architecture.md)。RGB/Depth 模块输出标准内存帧；PNG、跨消息同步和 Observation JSONL 在后续 bag 模块统一实现。
+RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测准备层与源码组织](docx/project/architecture.md)。RGB/Depth 输出标准内存帧；builder 已保存媒体并进行时间配对，正式 Observation 在有效模型/位姿补齐后输出。
 
 ## 当前源码布局
 
-头文件和实现分别位于 include/vln_memory/bag/ 与 src/bag/，按 common、rgb、depth、camera_info、tf 分类；模块测试位于 test/bag/。安装后的头文件保留同样结构，例如：
+头文件和实现分别位于 include/vln_memory/bag/ 与 src/bag/，按 common、rgb、depth、camera_info、tf、builder 分类；模块测试位于 test/bag/。安装后的头文件保留同样结构，例如：
 
 ```cpp
 #include <vln_memory/bag/rgb/rgb_ros.hpp>
@@ -23,9 +23,26 @@ RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测
 #include <vln_memory/bag/tf/tf_ros.hpp>
 ```
 
-TF 处理位于本层 tf；后续 bag 读取组装加入 builder 模块。其他系统层暂不生成空目录。
+TF 位于本层 tf，bag 读取与准备组装位于 builder，薄入口位于 src/apps。其他系统层暂不生成空目录。
+
+## BagBuilder 第一版运行
+
+先修改 [config/vln_memory.yaml](config/vln_memory.yaml) 的真实话题、光学 frame、深度单位/注册及同钟分段依据。第一版只支持一个明确段的未压缩 SQLite ROS 2 bag；目录读取 metadata 的全部分卷，单独 .db3 明确标记单文件范围。
+
+```bash
+source /opt/ros/humble/setup.bash
+colcon build --base-paths . --packages-select vln_memory --cmake-args -DBUILD_TESTING=ON
+source install/setup.bash
+ros2 run vln_memory bag_builder --config config/vln_memory.yaml \
+  --bag /absolute/path/recording --output /absolute/path/new_dataset
+```
+
+输出必须是新目录。返回 completed_with_issues 表示数据集完整写出但有坏帧/未配对/缺几何依据，应检查 reports 和 prepared_pairs。完整文件树及包外调用见 [接口手册](docx/interfaces/bag_builder_api.md)，每个文件职责见 [BagBuilder](docx/modules/bag/bag_builder.md)。样例配置仅为格式示例，不能证明设备单位或硬件同步。
 
 ## 当前接口
+
+- `buildBag(BagBuildOptions)`：返回结构化结果和完整 preparation 数据集路径；不含虚构位姿。
+- `pairRgbDepth(...)` / `CameraInfoIndex::select(...)`：独立时间配对与标定候选选择。
 
 - `decodeRgb(RgbImageView, RgbLimits)`：支持 rgb8、bgr8、mono8，输出独立持有的紧密 RGB 数据。
 - `decodeRosRgb(sensor_msgs::msg::Image, RgbLimits)`：ROS 消息薄适配，复用核心校验。
@@ -87,7 +104,7 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 
 ## Git 审阅
 
-本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；TF/核查基线已保存为 e607c97；当前修复与范围规划位于 codex/sensor-validation-comments。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
+本包是独立本地仓库。现有 RGB 已建立 main 基线；Depth 已在 codex/depth-module 本地提交；CameraInfo 已本地提交 d9b030b 于 codex/camera-info-module；TF/核查基线已保存为 e607c97；当前 BagBuilder 在 codex/bag-builder-v1，基线/配对/提取分步保存，本轮不合并主分支。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行。
 
 ```bash
 git status --short --branch

@@ -25,3 +25,11 @@
 ## 实施结果
 
 各阶段完成后补充实际接口、验证结果和提交，不预先写成已完成。
+
+## 首次完整回归
+
+严格编译 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror：ROS 构建 14/14 CTest 通过；包括 8 个核心、4 个真实消息适配、磁盘 bag 构造及独立 Python/NumPy。配对核心版本 28c47a8，既有代码/规划基线 d746af1。
+
+发现并修复 Humble Writer 可写负起点但 MetadataIo 用 uint64 解码失败：仅通过官方 metadata 注入点处理内存副本并恢复有符号起点，输入文件不变；结合 seek 最小记录时间避免静默漏帧。文件身份查表缓存分卷切换，不逐消息做 canonical 文件系统调用。
+
+后续进行整条调用链自审、安装消费、最终文档/格式及必要边界补充，结果在本文件继续追加。

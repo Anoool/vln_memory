@@ -64,6 +64,8 @@ int main()
     fixed.transforms.push_back(transform("base", "camera_optical", 99));
     auto report = ingestRosTf(index, fixed, "/tf_static", "bag_1:message_7");
     expect(report.ok() && report.inserted == 1, "Static TFMessage was not accepted");
+    expect(report.entry_codes == std::vector<TfInsertCode>{TfInsertCode::inserted},
+      "Per-entry insertion status missing");
     tf2_msgs::msg::TFMessage dynamic;
     dynamic.transforms.push_back(transform("map", "base", 3));
     dynamic.transforms.push_back(transform("map", "base", 1));
@@ -100,6 +102,8 @@ int main()
     report = ingestRosTf(index, fixed, "/tf_static", "bag_1:message_9");
     expect(report.ok() && report.duplicates == 1 && index.sampleCount() == 3,
       "Repeated static broadcast expanded history");
+    expect(report.entry_codes == std::vector<TfInsertCode>{TfInsertCode::duplicate},
+      "Per-entry duplicate status missing");
     fixed.transforms[0].header.frame_id = "changed";
     fixed.transforms[0].transform.translation.x = 999;
     const auto owned = index.checkTime("map", "camera_optical", {2, 0}, query);

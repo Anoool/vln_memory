@@ -28,7 +28,7 @@ test/
 
 - include、src、模块测试按“层/模块”对应，头文件安装后保留同样路径。
 - bag/common 放观测准备层共用类型和无 ROS 时间检查；不放相机业务、ROS 订阅或未来实体类型。
-- 后续本层添加 bag/builder；最后一个是 bag 读取和组装入口，避免 bag/bag 的重复含义。
+- 本层已添加 bag/builder；最后一个是 bag 读取和准备组装入口，避免 bag/bag 的重复含义。
 - 原文第 1、2 部分要求的记忆、构建和 Viewer 在真实实现时才添加同级目录；独立在线查询 plugins 暂不开发，不提前生成空类。
 - 函数签名、vln_memory 命名空间和已导出库目标保持，公开 include 路径使用新分类。
 
@@ -40,7 +40,7 @@ test/
 | Depth | 深度图像、明确单位与注册声明 | 米制深度、质量及 RGB 网格检查 | 已实现 |
 | CameraInfo | CameraInfo、真实话题及显式图像绑定 | 完整标定、有效性/网格/frame/时间检查 | 已实现 |
 | TF | TFMessage、真实 topic、clock/segment 及查询时刻 | 坐标链、共同时间覆盖、带来源的历史样本选择 | 链/覆盖已实现；位姿求解后续 |
-| bag 读取与组装（builder） | bag 文件及提取配置 | 组合 Observation、媒体与 JSONL 报告 | 后续实现 |
+| bag 读取与组装（builder） | bag 文件及提取配置 | 原始/标准媒体、配对、标定/TF/来源及 JSONL | 第一版已实现，正式 Observation 后续 |
 
 五模块属于同一个 vln_memory 包。bag 负责反序列化、跨消息同步、来源 ID、PNG/NPY 保存和 JSONL 组装，调用前四个数据处理模块；前四模块不反向依赖 bag，也不相互读取对方的内部状态。
 
@@ -74,7 +74,7 @@ CameraInfoData + 图像元数据 + 显式绑定 -> checkCameraInfoImage -> Camer
 - 话题绑定和光学 frame 由设备配置明确；不根据后缀或尺寸推断关联。
 - 标定 K/D/R/P、ROI/binning 保留原值，实际图像尺寸按操作参数检查；校正 ROI 的不支持情况明确报告。
 - 公共 checkSensorTimes 可独立检查 RGB-D，CameraInfo 在逐帧策略中调用它；静态标定显式复用但不伪造时间相等。
-- Observation 以 RGB 时间索引，Depth 几何使用 Depth 时刻 TF；TF 样本选择已实现，几何求解、图像配对和 JSONL 仍待实现。
+- Observation 以 RGB 时间索引，Depth 几何使用 Depth 时刻 TF；TF 样本选择已实现，几何求解、正式几何/Observation 仍待实现，图像配对和 preparation JSONL 已实现。
 - 详细规划、接口及示例见 [CameraInfo](../modules/camera_info/camera_info.md)，跨模块时间和控制约定见 [sensor_time](../common/sensor_time.md)。
 
 ## 当前 TF 调用链
@@ -136,3 +136,9 @@ CameraInfo 基线在原分支本地提交 d9b030b；TF 与配套修改位于 cod
 ## 共享名称修复与注释
 
 当前 F5 来源话题校验问题已通过 common/sensor_names 统一修复，生产头/实现均已补清楚职责与边界注释；后续功能状态保持。见 [实施记录](sensor_validation_comments_plan.md)。
+
+## BagBuilder 第一版实际框架
+
+include/vln_memory/bag/builder 与 src/bag/builder 对应分类，含 bag_types、bag_config、bag_reader_ros、rgbd_sync、camera_info_index、media_writer、jsonl_writer、bag_builder；薄入口 src/apps/bag_builder_main.cpp，配置 config/vln_memory.yaml。逐文件职责及参数见 [实际接口](../interfaces/bag_builder_api.md)。
+
+TF 适配增加 entry_codes 供逐条导出；其余传感器处理接口不变。来源 CDR 第一遍保留，第二遍转换图像；prepare 产物明确没有数值位姿、有效模型和关键帧。后续 MemoryEngine 不能把它当正式 Observation 消费。

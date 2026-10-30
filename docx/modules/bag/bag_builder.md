@@ -1,0 +1,21 @@
+# bag_builder.hpp / bag_builder.cpp
+
+## 用途与外部接口
+
+[头](../../../include/vln_memory/bag/builder/bag_builder.hpp)、[实现](../../../src/bag/builder/bag_builder.cpp) 串联整个第一版；主接口为 BagBuildResult buildBag(const BagBuildOptions&)。
+
+输入必须声明一个同钟数据段、话题/光学 frame、深度单位/注册依据及独立时间阈值。返回状态/错误/产物路径与数量，不返回整包像素。ok() 表示完整发布，可有 issues；prepared_pairs 只是传感器准备通过数量，不是已计算 map 几何。
+
+## 调用路径
+
+配置检查 → 创建唯一工作目录 → 官方 reader 首遍索引/原始 CDR → rgbd_sync → CameraInfoIndex → 第二遍逐图 decodeRosRgb/decodeRosDepth、实际 RGB 网格核对、历史 TF 查询 → 媒体/JSONL → 引用/输入复核 → 完整 manifest/发布。
+
+采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用原匹配规则；数值位姿/有效模型/关键帧均标明未计算，不输出正式 observations.jsonl。
+
+## 失败和产物
+
+输入与输出路径不得包含彼此，旧输出不覆盖。只在新建 .partial 工作目录中写入；失败返回 work_directory，正常输出路径不发布；成功清空 work_directory。发布保证完整目录的原子可见性，不是断电持久化事务。
+
+坏图像保留 raw/问题；全部无效深度不能准备通过；标定/TF/注册缺项使配对 pending。未使用 Depth 记录为 not_selected_by_policy，不单凭此当坏帧。不可反序列化 TF/标定、容量不足、存储错误或源变化属于整次失败。
+
+输出集合、参数格式和示例见 [接口文档](../../interfaces/bag_builder_api.md)；命令见 [CLI](bag_builder_main.md)，配置见 [配置说明](../../config/vln_memory.md)。测试见 [集成验证](tests/test_bag_builder.md)。

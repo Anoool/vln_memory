@@ -59,6 +59,7 @@ TfMessageReport ingestRosTf(
     input.source_message_id = message_id;
     input.source_transform_index = transform_index;
     const auto inserted = index.insert(std::move(input));
+    report.entry_codes.push_back(inserted.code);
     if (inserted.code == TfInsertCode::inserted) {
       ++report.inserted;
     } else if (inserted.code == TfInsertCode::duplicate) {

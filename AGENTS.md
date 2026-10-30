@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-This ROS 2 Humble/C++17 package mirrors headers in `include/vln_memory/bag/` with implementations in `src/bag/`: `common`, `rgb`, `depth`, `camera_info`, and `tf`. Keep ROS adapters in `*_ros.hpp`/`*_ros.cpp`.
+The ROS 2 Humble/C++17 package mirrors headers in `include/vln_memory/bag/` with implementations in `src/bag/`: `common`, `rgb`, `depth`, `camera_info`, `tf`, and `builder`. Keep ROS adapters in `*_ros.hpp`/`*_ros.cpp`.
 
 Tests mirror modules under `test/bag/`; `test/install_consumer/` validates installed interfaces. Categorize documentation under `docx/{project,common,modules,interfaces,reviews}/`. Ignore generated `build/`, `install/`, and `log/`.
 
 ## Scope & Development Workflow
 
-Read `docx/project/sections_1_2_scope.md` and `docx/project/system_plan.md` before extending functionality. Scope: design sections 1–2. Distinguish implementation from plans.
+Read `docx/project/sections_1_2_scope.md` and `docx/project/system_plan.md` before extending functionality. Scope: design sections 1–2; distinguish implementation from plans.
 
 Plan inputs, outputs, ownership, dependencies, and errors; implement incrementally and review the full call path. Add same-stem module documentation and update `docx/README.md`.
 
@@ -31,7 +31,7 @@ colcon test --packages-select vln_memory
 colcon test-result --verbose
 ```
 
-No production bag-processing executable exists.
+Run `ros2 run vln_memory bag_builder --config config/vln_memory.yaml` after editing sensor bindings.
 
 ## Coding Style & Naming Conventions
 
@@ -44,7 +44,7 @@ Follow `.editorconfig`: UTF-8, LF, two-space indentation. Use `snake_case` filen
 - Name variables for their roles, meaning, and units; avoid vague abbreviations.
 - Add function-level comments to every function, including helpers: explain purpose, inputs, outputs, and relevant ownership, units, and failures.
 
-Preserve original timestamps and provenance. No mandatory formatter or lint gate is configured.
+Preserve timestamps and provenance. No mandatory formatter/lint gate exists.
 
 ## Code Review Requirements
 

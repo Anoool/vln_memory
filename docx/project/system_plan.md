@@ -9,7 +9,7 @@
 目标闭环：
 
 ```text
-ROS 2 bag + config/vln_memory.yaml（配置入口待实现）
+ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
   -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析、关键帧
   -> observations.jsonl + evidence/ + pending/质量报告
   -> MemoryEngine：几何、实体/关系、构建读取与修改工具、模型批次/恢复
@@ -32,7 +32,7 @@ ROS 2 bag + config/vln_memory.yaml（配置入口待实现）
 | CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查 | 标定有效区间索引、有效内参、去畸变/重投影 |
 | TF | 静/动态原始消息、child/时间索引、链/区间交集与样本端点 | 插值/求逆/组合后的 map 相机/底盘位姿及跳变门控 |
 | common | SensorStamp/ImageGeometry、候选时差与统一名称检查 | 观测 provenance、clock/map/版本统一上下文 |
-| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标和已记录的测试 | 正式 BagBuilder/MemoryEngine/Viewer、config 文件和完整产物 |
+| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标和已记录的测试 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
 
 当前 vln_memory 中没有 Entity/Relation/Observation 正式业务类型和持久化，没有原文八个构建工具。vln_agent 的 SessionManager/ToolManager 是可复用基础；EnvironmentMemory 是逐观测历史，不计作永久空间记忆。详见 [范围对照第 6 节](sections_1_2_scope.md)。
 
@@ -41,14 +41,14 @@ ROS 2 bag + config/vln_memory.yaml（配置入口待实现）
 | 阶段 | 原文对应 | 交付 | 验收重点 | 状态 |
 | --- | --- | --- | --- | --- |
 | S0 数据契约/配置 | 1.1–1.6、2.10 | map/clock/来源/版本、Observation 与实体/关系字段规则，配置 schema/加载与校验 | 单位、引用、缺项、版本语义明确；配置不静默猜数据含义 | 待实现 |
-| S1 自动配对与读取 | 2.1、2.10 | 先实现无 ROS rgbd_sync，再 reader、话题类型/编码与时间索引 | 确定配对、平局/一对一、时钟段边界、来源可回查 | 配对只有方案；reader 未实现 |
+| S1 自动配对与读取 | 2.1、2.10 | 先实现无 ROS rgbd_sync，再 reader、话题类型/编码与时间索引 | 确定配对、平局/一对一、时钟段边界、来源可回查 | 第一版读取/配对/来源与准备导出已实现；真实采集验收待完成 |
 | S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 只有前四模块基础 |
 | S3 几何与工作库 | 1.2/1.4/1.6、2.3–2.7 | 点/区域到 map、对象/空间、关系、事务存储、基本索引与版本 | 已知几何答案、永久 ID、代表点、inside/region_id、revision | 待实现 |
 | S4 工具与模型构建 | 1.5、2.1/2.2/2.4/2.6 | 八工具、上下文/图像、批次循环、进度/幂等恢复 | 真实模型服务、多视图 ID 复用、轮数上限/失败不误报完成、重复 call_id 不重复写 | 待实现 |
 | S5 纠错/标注与发布 | 2.7–2.10 | 四纠错、关系刷新、注释历史、完整记忆产物和原子 manifest | 整体提交/引用修复、人工信息保留、几何缓存失效、半成品不发布 | 待实现 |
 | S6 Viewer 与闭环验收 | 2.1/2.9/2.10 | 地图/关系/图像/轨迹联动、按实体/关系/时间定位观测、人工命名与回读 | 同一发布版本可检查，标注走共用写入路径，重开后结果一致 | 待实现 |
 
-S0 的字段契约先定清，再逐个落地真实模块，不为所有阶段生成空类。最近可继续实现的小模块仍是 [RGB-D 自动配对](rgbd_sync_plan.md)；该方案现在明确归属于 S1，不再把它当整个第 1、2 部分的交付范围。
+S0 的字段契约先定清，再逐个落地真实模块，不为所有阶段生成空类。RGB-D 自动配对与第一版 reader/准备导出已实现，实际接口见 [BagBuilder](../interfaces/bag_builder_api.md)；该方案现在明确归属于 S1，不再把它当整个第 1、2 部分的交付范围。
 
 ## 4. S0–S2：观测准备层如何收口
 
@@ -57,7 +57,7 @@ S0 的字段契约先定清，再逐个落地真实模块，不为所有阶段�
 - 观察视角与物体自身朝向分开；参照不足返回待补充/未知，不猜测语义正面。该约定保留，完整第 3.4 节视角问答暂不开发。
 - 世界几何属于同一 map；map_id、geometry_revision、米/弧度、坐标轴和时钟段在配置/manifest 中明确。相同 map_id 不足以证明不同 bag 已配准。
 - 正式区分源消息采样时间、bag 记录时间、处理时间，统一来源消息 ID；零时刻真实保留，未知时钟不跨域关联。
-- config/vln_memory.yaml 是最终交付物，包含 dataset/topics/frames/preprocess/build/model/geometry。当前未生成该文件或解析器，不把原文 YAML 示例算已支持配置。
+- config/vln_memory.yaml 是最终交付物，包含 dataset/topics/frames/preprocess/build/model/geometry。当前已实现该文件的 bag 段及解析/校验；其他系统层配置仍未实现，不把原文完整 YAML 示例算已支持。
 - 原文示例的 sync_tolerance_ms=30、depth_scale_to_m=0.001、keyframe_distance_m=0.8、keyframe_yaw_deg=25 都需按实际采集配置确认。深度单位/比例冲突应拒绝；已有米制深度不能再乘 0.001；角度配置转换到内部弧度须明确。
 - 未注册深度需要自己的标定话题和 frame，不能因为示例只有一个 camera_info 字段就默认共用 RGB 内参。
 
@@ -136,7 +136,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 ## 8. 目录与依赖约定
 
-真实源码仍以 include/vln_memory/bag、src/bag 和 test/bag 分类，详细树见 [当前架构](architecture.md)。最近增加的模块应位于 bag/builder/rgbd_sync；其余 reader/组装在 builder 分步落实。
+真实源码仍以 include/vln_memory/bag、src/bag 和 test/bag 分类，详细树见 [当前架构](architecture.md)。新增模块已位于 bag/builder，包含配对、读取、标定选择、配置、媒体/JSONL 和调度；数值几何/正式 Observation 继续分步落实。
 
 后续真实业务实现时才创建 memory（模型/几何/存储/修改）、engine（上下文/会话适配/工具构建）、viewer（检查标注）、apps（薄命令入口）与 config。当前不创建 plugins 在线查询目录，也不注册未实现工具，不生成空目标。vln_agent 不反向依赖这些准备库，模型会话适配保持单向复用。
 
@@ -158,6 +158,6 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 ## 10. 当前最近行动
 
-先按已有 [rgbd_sync 方案](rgbd_sync_plan.md) 审阅数据契约并实现配对核心，再接入真实 reader 和 S2 观测收口。S0 的字段/来源/配置约定随这一步落实，避免再产生与原文 Observation/版本语义不兼容的数据。
+2026-10-30 已实现 [BagBuilder 第一版](../interfaces/bag_builder_api.md)：同一明确时钟段的未压缩 SQLite bag 两遍读取、配对、标定候选选择、TF 覆盖/端点、CDR/PNG/NPY/JSONL，尚无正式 Observation。构造磁盘测试通过不等于真实设备录包验收。
 
-本轮只更新范围、进度对照与规划，没有把未来模块写成已实现，也没有修改用户原设计附件或运行源码。
+下一步用真实短 bag 核对配置/时间/注册/来源，再按 S2 补数值位姿、有效相机模型和关键帧，之后继续 MemoryEngine/实体关系/Viewer。原文第 1、2 部分仍未完成。

@@ -35,3 +35,8 @@ endif()
 
 add_executable(rgbd_sync_consumer rgbd_sync_consumer.cpp)
 target_link_libraries(rgbd_sync_consumer PRIVATE vln_memory::vln_memory_rgbd_sync)
+
+if(TARGET vln_memory::vln_memory_bag_builder)
+  add_executable(bag_builder_consumer bag_builder_consumer.cpp)
+  target_link_libraries(bag_builder_consumer PRIVATE vln_memory::vln_memory_bag_builder)
+endif()

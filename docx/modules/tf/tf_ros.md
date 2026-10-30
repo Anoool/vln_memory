@@ -74,3 +74,7 @@ builder 第一遍完成该段数据的收集后再对图像做 checkTime；缺�
 ## 2026-10-30 可读性整理
 
 接入函数逐字段写入 source_topic/source_message_id/source_transform_index，消息内循环使用 transform_index；查询示例使用扁平 TfTimeOptions。真实 ROS header 时间、条目顺序、部分成功和输出所有权保持。字段迁移见 [TF 核心第 12 节](tf.md#12-2026-10-30-可读性重构与字段迁移)。
+
+## BagBuilder 第一版逐条报告扩展
+
+TfMessageReport 新增 vector<TfInsertCode> entry_codes，与源 transforms 顺序一一对应；processed 时每条的 inserted/duplicate/拒绝均保留。issues 仍只列失败，原有 ok()/计数/冲突语义不变。空消息 entry_codes 为空；绑定失败不处理条目。该字段使 builder 可在 tf.jsonl 准确导出状态，测试覆盖首次插入与重复。

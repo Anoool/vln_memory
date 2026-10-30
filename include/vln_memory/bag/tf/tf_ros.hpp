@@ -44,6 +44,8 @@ struct TfMessageReport
   std::size_t inserted{0};
   std::size_t duplicates{0};
   std::vector<TfMessageIssue> issues;
+  // 与源 transforms 顺序一一对应，保留每条 inserted/duplicate/失败状态供离线导出。
+  std::vector<TfInsertCode> entry_codes;
   /** @brief processed 且没有 issues 才表示全部条目通过；空消息是合法零条处理。 */
   bool ok() const noexcept {return code == TfMessageCode::processed && issues.empty();}
 };

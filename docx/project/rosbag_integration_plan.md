@@ -1,5 +1,6 @@
-# BagBuilder：rosbag 读取与现有模块整合方案（待审阅）
+# BagBuilder：rosbag 读取与现有模块整合方案（编码前设计记录）
 
+实施更新：2026-10-30 第一版已落地，实际接口/支持边界见 [BagBuilder 手册](../interfaces/bag_builder_api.md) 和 [实施记录](bag_builder_v1_implementation.md)。以下保留原规划，不作为当前全部已实现能力声明。
 日期：2026-10-30。本文基于当前工作区的实际头文件、实现、ROS 适配、测试、安装目标及系统规划编写。本轮只形成方案，不新增功能代码；下文的新文件、类型、命令和产物均为计划。
 
 相关约束：[Repository Guidelines](../../AGENTS.md)、[系统规划](system_plan.md)、[第 1、2 部分范围](sections_1_2_scope.md)、[既有 RGB-D 配对方案](rgbd_sync_plan.md)、[已实现接口手册](../interfaces/observation_preparation_api.md)。

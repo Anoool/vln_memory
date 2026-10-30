@@ -1,0 +1,54 @@
+# BagBuilder 第一版配置。先核对设备/采集依据，再替换下面的路径、话题和语义。
+# 只支持一个明确时钟段；不会自动标定时钟或物理注册 Depth。
+bag:
+  input: /absolute/path/to/recording
+  output: /absolute/path/to/new_preparation_dataset
+  storage_id: sqlite3
+  clock_id: camera_and_tf_clock
+  clock_relation: same_clock
+  clock_basis: "请填写设备与 TF 使用同一时间域的采集依据"
+  segment_id: recording_segment_1
+  segment_basis: "请填写本段没有时钟重启、TF 重置或静态标定变化的依据"
+  sync_tolerance_ns: 0             # 默认严格相等；根据实际采集明确设置近似容差。
+  tf_max_gap_ns: 0                 # 0 只接受精确动态 TF；与 RGB-D 容差独立。
+  max_header_reorder_ns: 0         # 图像超出该回退量会终止，不跨未知 epoch 排序。
+  map_frame: map
+  body_frame: base_link
+  tf_topic: /tf
+  tf_static_topic: /tf_static
+  min_valid_depth_ratio: 0.0       # 即便为 0，全无效深度仍不能通过准备质量检查。
+  rgb_camera:
+    image_topic: /camera/color/image_raw
+    camera_info_topic: /camera/color/camera_info
+    optical_frame: camera_color_optical_frame
+    binding_basis: "请填写 RGB 流与该标定/光学 frame 的设备依据"
+    image_domain: raw
+    time_policy: synchronized
+    max_delta_ns: 0
+  depth_camera:
+    image_topic: /camera/depth/image_raw
+    camera_info_topic: /camera/depth/camera_info
+    optical_frame: camera_depth_optical_frame
+    binding_basis: "请填写 Depth 流与该标定/光学 frame 的设备依据"
+    image_domain: raw
+    time_policy: synchronized
+    max_delta_ns: 0
+  depth:
+    input_unit: millimeters        # 编码不能证明单位；已有米制值应使用 meters。
+    convention: optical_z
+    alignment: unknown             # 不以相同尺寸宣称已注册，未知时保留并进入 pending。
+    alignment_basis: "尚未确认物理注册"
+    min_depth_m: 0.0
+    # max_depth_m 不填表示不截断正有限值。
+    # aligned_to_rgb 必须另外填 rgb_width/rgb_height/rgb_frame 以及真实依据。
+  limits:
+    max_messages: 1000000
+    max_frames: 200000
+    max_calibrations: 100000
+    max_tf_entries: 1000000
+    max_serialized_bytes: 134217728
+    max_output_bytes: 10737418240
+    max_pixels: 16777216
+    max_input_bytes: 134217728
+    max_tf_edges: 4096
+    max_tf_samples: 1000000

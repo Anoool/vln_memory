@@ -5,8 +5,12 @@
 | 内容 | 入口 |
 | --- | --- |
 | 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
+| BagBuilder 第一版实际接口、参数与文件格式 | [BagBuilder 接口](interfaces/bag_builder_api.md) |
+| BagBuilder 第一版实施与验证记录 | [实施记录](project/bag_builder_v1_implementation.md) |
+| CLI 入口与运行 | [bag_builder_main](modules/bag/bag_builder_main.md) |
+| 实际 YAML 配置/单位/独立时间阈值 | [vln_memory](config/vln_memory.md) |
 | RGB-D 时间配对核心与真实接口 | [rgbd_sync](modules/bag/rgbd_sync.md) |
-| BagBuilder：rosbag 读取、五模块整合及分步验收方案（待审阅） | [整合方案](project/rosbag_integration_plan.md) |
+| BagBuilder：rosbag 读取、五模块整合的设计依据 | [整合方案](project/rosbag_integration_plan.md) |
 | RGB-D 自动时间配对的分步方案与实施依据 | [配对方案](project/rgbd_sync_plan.md) |
 | 当前问题修复、注释改进与验证 | [修复实施记录](project/sensor_validation_comments_plan.md) |
 | 统一的已解析话题名称规则 | [sensor_names](common/sensor_names.md) |
@@ -73,10 +77,26 @@ docx/
 | Depth | modules/depth/ | 已实现 |
 | CameraInfo | modules/camera_info/ | 已实现 |
 | TF | modules/tf/ | 链/覆盖已实现；位姿求解后续 |
-| bag | modules/bag/ | 实现时建立 |
+| bag | modules/bag/ | 第一版读取/转换/配对/准备导出已实现；完整 Observation 后续 |
 
 源码说明保留源文件名，模块测试放各自 tests/。共享约定进入 common/，项目约定进入 project/；模块的详细验证记录随模块保存。
 
 ## 当前开发位置
 
 当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，现有同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf 及 common 分类，不为尚未实现的其他层建立空说明。
+
+## BagBuilder 文件导航
+
+| 文件 | 说明 |
+| --- | --- |
+| 共享身份与运行结果 | [bag_types](modules/bag/bag_types.md) |
+| 配置加载和校验 | [bag_config](modules/bag/bag_config.md) |
+| 官方 reader、分卷及跨遍来源 | [bag_reader_ros](modules/bag/bag_reader_ros.md) |
+| 标定检索/版本歧义 | [camera_info_index](modules/bag/camera_info_index.md) |
+| 媒体与字节预算 | [media_writer](modules/bag/media_writer.md) |
+| JSONL 数值/引用契约 | [jsonl_writer](modules/bag/jsonl_writer.md) |
+| 完整调度与发布 | [bag_builder](modules/bag/bag_builder.md) |
+| 磁盘集成/特殊场景回归 | [test_bag_builder](modules/bag/tests/test_bag_builder.md) |
+| 独立 NumPy/JSON/摘要验证 | [test_bag_output](modules/bag/tests/test_bag_output.md) |
+| 标定索引核心测试 | [test_camera_info_index](modules/bag/tests/test_camera_info_index.md) |
+| 安装后接口调用 | [bag_builder_consumer](modules/bag/tests/bag_builder_consumer.md) |
