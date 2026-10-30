@@ -102,3 +102,18 @@ B/C 编码前分别确定输入输出、所有权、错误和文件格式；保�
 已通读同步头文件、实现、测试以及 builder 的来源索引/配对/JSONL/发布路径；确认 exact 字段、两个原始 stamp 和主要统计已存在。没有为了严格同步重复增加 mode、同步器类或改写来源时间。
 
 本轮只新增本规划与导航入口，原审计报告和 bag-builder-v1 保留。现有核心测试通过、真实数据交集重新核对为零；驱动采集配置未改、压缩接入/证据字段/新采集均仍待实现或设备验收。方案将用户要求的严格同步放在当前最高优先级，同时如实保留其采集端依赖。
+
+## 8. 零容差实施前拆分（2026-10-30）
+
+本轮用户已要求实际修复并坚持零容差，按下列接口边界逐步实施：
+
+1. BagBuilder 配置/API 校验只接受 sync_tolerance_ns=0，非零直接 invalid_config；既有通用 pairRgbDepth 独立 API 保留兼容，但 builder 不调用近似策略。
+2. 新增 builder/image_decoder_ros.hpp/.cpp，负责压缩负载的格式、尺寸/字节预算预检和逐帧解码。首轮支持 JPEG RGB8/BGR8，以及 16UC1 compressedDepth PNG；其他编码明确拒绝。PNG/JPEG 头部先检查解码尺寸，再使用已有 OpenCV 与官方 compressedDepth codec，不能无边界解压。
+3. reader 首遍只读取压缩消息 header/布局与来源，不缓存所有像素；第二遍逐帧解码后复用现有 RGB/Depth。坏负载保留可用 header 与 CDR，记录解码错误，不伪装为坏 CDR或改配别的帧。
+4. BagImageRecord 增加扁平的原消息类型、format、负载解码错误字段；BagBuildResult/summary/manifest/CLI 明确时间戳匹配状态。保留提取完成但零配对的证据，不假造严格 RGB-D 数据集；物理同步状态保持 unknown。
+5. 原始 Image、混合/压缩流、精确相等与相差 1ns、重复时间一对一、坏压缩负载、非零容差配置均做回归；独立 Python 检查所有已发布 pair 的 delta 为零和引用守恒。
+6. 真实 camera_record 完整运行正式 builder，预期 3474 RGB、3415 Depth、6889 解码、0 对；逐帧核对原始时间与图像/深度。D8 校验失败及物理尺度/注册未知继续如实报告。
+
+源码仍属于五模块中的 builder；新适配文件公开注释说明所有权、预算和错误；分类文档同名放 docx/modules/bag/，测试说明在其 tests/。不修改原 bag，不改动原 header，不改采集设备参数。
+
+自审：复用现有时间核心；不新增同义模式开关，不通过扩大阈值处理旧 bag；只增加支持真实输入和明确验收状态所需接口，解码保持逐帧内存，元数据查找不全表扫描。以上为编码前方案，完成后追加实际验证结果。
