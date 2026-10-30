@@ -31,7 +31,7 @@ struct BagScan
 };
 
 /** @brief 同步借用 Image 仅在回调期间有效；nullptr 表示首遍反序列化失败。 */
-using BagImageConsumer = std::function<void(const BagImageRecord &, const sensor_msgs::msg::Image *)>;
+using BagImageConsumer = std::function<void (const BagImageRecord &, const sensor_msgs::msg::Image *)>;
 
 /** @brief 扫描所有配置消息、保存原始 CDR/标定/TF，返回拥有型索引；失败抛 BagBuildError。 */
 BagScan scanBag(const BagBuildOptions & options, OutputFiles & output);

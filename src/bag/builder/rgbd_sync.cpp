@@ -61,13 +61,16 @@ FramePointers sortedFrames(const RgbdStreamIndex & stream)
 {
   FramePointers frames;
   frames.reserve(stream.frames.size());
-  for (const auto & frame : stream.frames) {frames.push_back(&frame);}
-  std::sort(frames.begin(), frames.end(), [](const auto * left, const auto * right) {
-    if (stampNs(left->stamp) != stampNs(right->stamp)) {
-      return stampNs(left->stamp) < stampNs(right->stamp);
-    }
-    return left->message_order < right->message_order;
-  });
+  for (const auto & frame : stream.frames) {
+    frames.push_back(&frame);
+  }
+  std::sort(
+    frames.begin(), frames.end(), [](const auto * left, const auto * right) {
+      if (stampNs(left->stamp) != stampNs(right->stamp)) {
+        return stampNs(left->stamp) < stampNs(right->stamp);
+      }
+      return left->message_order < right->message_order;
+    });
   return frames;
 }
 
@@ -77,12 +80,14 @@ std::size_t nearestDepth(
 {
   const auto begin = depth.begin() + static_cast<FramePointers::difference_type>(first_allowed);
   const auto query_ns = stampNs(rgb_stamp);
-  const auto next = std::lower_bound(begin, depth.end(), query_ns,
+  const auto next = std::lower_bound(
+    begin, depth.end(), query_ns,
     [](const auto * frame, std::int64_t value) {return stampNs(frame->stamp) < value;});
   auto best = next;
   if (next != begin) {
     const auto previous_ns = stampNs((*std::prev(next))->stamp);
-    const auto previous = std::lower_bound(begin, next, previous_ns,
+    const auto previous = std::lower_bound(
+      begin, next, previous_ns,
       [](const auto * frame, std::int64_t value) {return stampNs(frame->stamp) < value;});
     if (best == depth.end() ||
       distanceNs((*previous)->stamp, rgb_stamp) <= distanceNs((*best)->stamp, rgb_stamp))
@@ -118,21 +123,26 @@ RgbdSyncReport matchFrames(
   for (const auto * frame : rgb) {
     const auto candidate = nearestDepth(depth, first_allowed, frame->stamp);
     if (candidate == depth.size()) {
-      report.unmatched_rgb.push_back({*frame, unmatchedReason(depth, frame->stamp,
-        static_cast<std::uint64_t>(options.max_delta_ns))});
+      report.unmatched_rgb.push_back(
+        {*frame, unmatchedReason(
+            depth, frame->stamp,
+            static_cast<std::uint64_t>(options.max_delta_ns))});
       continue;
     }
     const auto timing = checkSensorTimes(frame->stamp, depth[candidate]->stamp, time);
     if (!timing.matched()) {
-      report.unmatched_rgb.push_back({*frame, unmatchedReason(depth, frame->stamp,
-        static_cast<std::uint64_t>(options.max_delta_ns))});
+      report.unmatched_rgb.push_back(
+        {*frame, unmatchedReason(
+            depth, frame->stamp,
+            static_cast<std::uint64_t>(options.max_delta_ns))});
       continue;
     }
     report.pairs.push_back({*frame, *depth[candidate], *timing.delta_ns});
     selected[candidate] = true;
     first_allowed = candidate + 1;
     if (*timing.delta_ns == 0) {++report.exact_count;}
-    report.max_abs_delta_ns = std::max(report.max_abs_delta_ns,
+    report.max_abs_delta_ns = std::max(
+      report.max_abs_delta_ns,
       distanceNs(frame->stamp, depth[candidate]->stamp));
   }
   for (std::size_t index = 0; index < depth.size(); ++index) {

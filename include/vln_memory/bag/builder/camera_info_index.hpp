@@ -52,6 +52,7 @@ public:
   /** @brief 二分选最近候选或核对全段静态一致，再调用 checkCameraInfoImage。 */
   CameraInfoSelection select(
     const CameraImageReference & image, const CameraInfoMatchOptions & options) const;
+
 private:
   const std::vector<BagCameraInfoRecord> & records_;
   std::map<std::string, detail::CalibrationHistory> histories_;

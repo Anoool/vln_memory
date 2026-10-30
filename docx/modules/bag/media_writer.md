@@ -17,3 +17,5 @@ writeDepth(files,message_id,DepthFrame) → 相对 NPY 路径；二维 height×w
 ## 验证
 
 [磁盘回归](tests/test_bag_builder.md) 用 OpenCV 回读红/蓝像素；[独立 NumPy](tests/test_bag_output.md) 检查 dtype/shape、1m/2m/3m 和 NaN。另检查预算失败不发布。
+
+OutputFiles 是串行写入接口，不可从多个线程并发调用；工作目录由本次 builder 独占。

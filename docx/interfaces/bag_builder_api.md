@@ -29,6 +29,7 @@ target_link_libraries(your_target PRIVATE vln_memory::vln_memory_bag_builder)
 ```cpp
 #include <vln_memory/bag/builder/bag_builder.hpp>
 
+/** @brief 从明确配置提取准备数据；真实服务应记录 result 的错误和质量计数。 */
 int main(int argc, char ** argv)
 {
   if (argc != 2) {return 2;}
@@ -47,7 +48,7 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 
 | 参数 | 格式与约束 |
 | --- | --- |
-| bag_uri | 未压缩 SQLite ROS 2 目录（metadata.yaml + 所有分卷）或独立 .db3；只读关闭状态，不可边录边提取 |
+| bag_uri | 未压缩 SQLite ROS 2 目录（metadata.yaml + 所有分卷）或独立 .db3；只读关闭状态，不可边录边提取；发布当前支持 Linux/Ubuntu/WSL |
 | output_directory | 不存在的新目录；不能与输入路径包含彼此；失败只保留独立 .partial 工作目录 |
 | clock/segment | 单个明确同钟段和采集依据；不自动对齐时钟/跨 epoch 排序；允许重排量由 max_header_reorder_ns 声明 |
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
@@ -72,12 +73,12 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | --- | --- | --- |
 | bag_manifest.json | 数据集类型、完成状态、bag_id、源分卷/指纹、话题清单、有效配置、TF 覆盖、文件清单 | 先确认 artifact_kind=bag_preparation；不等同正式 memory manifest |
 | messages.jsonl | 每条配置消息的身份/记录时间/序号/摘要/原始 CDR 路径 | message_id 是所有其他来源引用的根，包括坏 CDR 和空 TFMessage |
-| frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像 |
+| frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像；source_data_bytes 为源像素字节数，numeric_quality_passed 只表示数值质量 |
 | rgbd_pairs.jsonl | 一对两图 ID/原始 stamp/有符号 delta_ns、标定 ID、策略、准备状态及原因 | pair_id；frames 中各自查询端点仍为自身采样时刻 |
 | camera_info.jsonl | 每条原始完整 K/D/R/P/ROI/binning 和来源/校验结果 | calibration_id=来源 message_id，重复广播来源不合并消失 |
 | tf.jsonl | 每条 TransformStamped 原始父子/时间/几何/来源条目/insert_code | source.message_id + transform_index；静态与动态显式区分 |
 | reports/issues.jsonl | stage/code/message 与消息/配对引用 | 按稳定码处理，无需解析中文/英文文本 |
-| reports/pending.jsonl | 不可准备配对、未配对 RGB、未使用 Depth | unused_depth 的 is_bad_frame=false；需要另查解码/质量 |
+| reports/pending.jsonl | 坏帧/数值深度质量、不可准备配对、未配对 RGB、未使用 Depth | unused_depth 的 is_bad_frame=false；需要另查解码/质量 |
 | reports/summary.json | 实际数量、有效时间索引数量、配对/未配对/问题及 TF 统计 | 两流配对守恒针对 valid_time_*，不含无法解析的 Image |
 | evidence/raw/*.cdr | 选定消息完整原始序列化字节 | messages 中 topic/type（类型由 manifest inventory 提供）/格式/摘要共同解释 |
 | evidence/rgb/*.png | 标准 RGB8，无裁剪/缩放 | 保留原图像素坐标 |
@@ -94,3 +95,7 @@ prepared_for_geometry 要求两图解码、各自标定、各自 map 相机 TF �
 ## 7. 检查方法
 
 构建并运行 CTest；磁盘构造回归产物在 build/.../test_artifacts/latest.txt 指向目录，带 demo_config.yaml。独立 NumPy 校验与安装消费者见 [测试说明](../modules/bag/tests/test_bag_builder.md)。真实设备 bag 的物理同步/注册/标定仍待单独验收。
+
+注册配置须使 RGB/Depth 的 optical_frame 与声明目标一致；共享 CameraInfo 只接受明确的 aligned_to_rgb 声明。manifest 保留独立的全部资源阈值，容量以十进制字符串存储。
+
+第一版实际测试/安装/内存检查边界及可查看样例见 [验收记录](../reviews/bag_builder_v1_verification.md)。

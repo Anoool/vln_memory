@@ -72,47 +72,63 @@ void readSize(const YAML::Node & map, const char * key, std::size_t & value)
   value = static_cast<std::size_t>(parsed);
 }
 
+/** @brief 尺寸同样严格按非负整数解析，避免 -1 被无符号转换为超大宽高。 */
+void readDimension(const YAML::Node & map, const char * key, std::uint32_t & value)
+{
+  if (!map[key]) {return;}
+  const auto parsed = readCapacity(map[key]);
+  if (parsed > std::numeric_limits<std::uint32_t>::max()) {
+    throw BagBuildError("invalid_config", "Image dimension exceeds uint32 range");
+  }
+  value = static_cast<std::uint32_t>(parsed);
+}
+
 /** @brief 加载单个相机的显式绑定/图像域/标定策略；不从话题后缀猜测。 */
 void readCamera(const YAML::Node & node, CameraInfoMatchOptions & camera)
 {
-  checkKeys(node, {"image_topic", "camera_info_topic", "optical_frame", "binding_basis",
-    "image_domain", "time_policy", "max_delta_ns"});
+  checkKeys(
+    node, {"image_topic", "camera_info_topic", "optical_frame", "binding_basis",
+      "image_domain", "time_policy", "max_delta_ns"});
   readScalar(node, "image_topic", camera.image_topic);
   readScalar(node, "camera_info_topic", camera.camera_info_topic);
   readScalar(node, "optical_frame", camera.optical_frame);
   readScalar(node, "binding_basis", camera.binding_basis);
   readScalar(node, "max_delta_ns", camera.max_delta_ns);
   const auto domain = node["image_domain"].as<std::string>();
-  if (domain == "raw") {camera.image_domain = CameraImageDomain::raw;}
-  else if (domain == "rectified") {camera.image_domain = CameraImageDomain::rectified;}
-  else {throw BagBuildError("invalid_config", "image_domain must be raw or rectified");}
+  if (domain == "raw") {camera.image_domain = CameraImageDomain::raw;} else if (domain == "rectified") {
+    camera.image_domain = CameraImageDomain::rectified;
+  } else {throw BagBuildError("invalid_config", "image_domain must be raw or rectified");}
   const auto policy = node["time_policy"].as<std::string>();
-  if (policy == "synchronized") {camera.time_policy = CameraInfoTimePolicy::synchronized;}
-  else if (policy == "static_calibration") {camera.time_policy = CameraInfoTimePolicy::static_calibration;}
-  else {throw BagBuildError("invalid_config", "Unsupported calibration time_policy");}
+  if (policy == "synchronized") {
+    camera.time_policy = CameraInfoTimePolicy::synchronized;
+  } else if (policy == "static_calibration") {camera.time_policy = CameraInfoTimePolicy::static_calibration;} else {
+    throw BagBuildError("invalid_config", "Unsupported calibration time_policy");
+  }
 }
 
 /** @brief 加载深度含义和声明；只有显式 aligned_to_rgb 才接受目标网格。 */
 void readDepth(const YAML::Node & node, DepthOptions & depth)
 {
-  checkKeys(node, {"input_unit", "convention", "alignment", "alignment_basis", "rgb_width",
-    "rgb_height", "rgb_frame", "min_depth_m", "max_depth_m"});
+  checkKeys(
+    node, {"input_unit", "convention", "alignment", "alignment_basis", "rgb_width",
+      "rgb_height", "rgb_frame", "min_depth_m", "max_depth_m"});
   const auto unit = node["input_unit"].as<std::string>();
-  if (unit == "meters") {depth.input_unit = DepthUnit::meters;}
-  else if (unit == "millimeters") {depth.input_unit = DepthUnit::millimeters;}
-  else {throw BagBuildError("invalid_config", "Depth input_unit must be meters or millimeters");}
+  if (unit == "meters") {depth.input_unit = DepthUnit::meters;} else if (unit == "millimeters") {
+    depth.input_unit = DepthUnit::millimeters;
+  } else {throw BagBuildError("invalid_config", "Depth input_unit must be meters or millimeters");}
   if (node["convention"].as<std::string>() != "optical_z") {
     throw BagBuildError("invalid_config", "Only optical_z depth is supported");
   }
   depth.convention = DepthConvention::optical_z;
   const auto alignment = node["alignment"].as<std::string>();
-  if (alignment == "unknown") {depth.alignment = DepthAlignment::unknown;}
-  else if (alignment == "not_aligned") {depth.alignment = DepthAlignment::not_aligned;}
-  else if (alignment == "aligned_to_rgb") {depth.alignment = DepthAlignment::aligned_to_rgb;}
-  else {throw BagBuildError("invalid_config", "Unsupported depth alignment");}
+  if (alignment == "unknown") {depth.alignment = DepthAlignment::unknown;} else if (alignment == "not_aligned") {
+    depth.alignment = DepthAlignment::not_aligned;
+  } else if (alignment == "aligned_to_rgb") {depth.alignment = DepthAlignment::aligned_to_rgb;} else {
+    throw BagBuildError("invalid_config", "Unsupported depth alignment");
+  }
   readScalar(node, "alignment_basis", depth.alignment_basis);
-  readScalar(node, "rgb_width", depth.rgb_grid.width);
-  readScalar(node, "rgb_height", depth.rgb_grid.height);
+  readDimension(node, "rgb_width", depth.rgb_grid.width);
+  readDimension(node, "rgb_height", depth.rgb_grid.height);
   readScalar(node, "rgb_frame", depth.rgb_grid.frame_id);
   readScalar(node, "min_depth_m", depth.min_depth_m);
   readScalar(node, "max_depth_m", depth.max_depth_m);
@@ -121,8 +137,9 @@ void readDepth(const YAML::Node & node, DepthOptions & depth)
 /** @brief 加载容量与图像/TF 预算；限制为正，最终统一校验。 */
 void readLimits(const YAML::Node & node, BagBuildOptions & options)
 {
-  checkKeys(node, {"max_messages", "max_frames", "max_calibrations", "max_serialized_bytes",
-    "max_output_bytes", "max_tf_entries", "max_pixels", "max_input_bytes", "max_tf_edges", "max_tf_samples"});
+  checkKeys(
+    node, {"max_messages", "max_frames", "max_calibrations", "max_serialized_bytes",
+      "max_output_bytes", "max_tf_entries", "max_pixels", "max_input_bytes", "max_tf_edges", "max_tf_samples"});
   readSize(node, "max_messages", options.max_messages);
   readSize(node, "max_frames", options.max_frames);
   readSize(node, "max_calibrations", options.max_calibrations);
@@ -216,9 +233,21 @@ std::vector<std::string> validateBagBuildOptions(const BagBuildOptions & options
   {
     errors.push_back("Distinct typed stream/TF topics required; only CameraInfo topics may be shared");
   }
+  if (options.depth.alignment == DepthAlignment::aligned_to_rgb &&
+    (options.depth.rgb_grid.frame_id != options.rgb_camera.optical_frame ||
+    options.depth_camera.optical_frame != options.rgb_camera.optical_frame))
+  {
+    errors.push_back("Registered depth and both camera bindings must name the declared RGB optical frame");
+  }
+  if (options.rgb_camera.camera_info_topic == options.depth_camera.camera_info_topic &&
+    options.depth.alignment != DepthAlignment::aligned_to_rgb)
+  {
+    errors.push_back("Sharing CameraInfo requires an explicit registered RGB grid/basis");
+  }
   if (!std::isfinite(options.min_valid_depth_ratio) || options.min_valid_depth_ratio < 0 ||
     options.min_valid_depth_ratio > 1 || options.max_messages == 0 || options.max_frames == 0 ||
-    options.max_calibrations == 0 || options.max_tf_entries == 0 || options.max_serialized_bytes == 0 || options.max_output_bytes == 0 ||
+    options.max_calibrations == 0 || options.max_tf_entries == 0 || options.max_serialized_bytes == 0 ||
+    options.max_output_bytes == 0 ||
     options.rgb_limits.max_pixels == 0 || options.rgb_limits.max_input_bytes == 0 ||
     options.depth_limits.max_pixels == 0 || options.depth_limits.max_input_bytes == 0 ||
     options.tf_limits.max_edges == 0 || options.tf_limits.max_samples == 0)
@@ -235,10 +264,11 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
     const auto root = YAML::LoadFile(yaml_path);
     checkKeys(root, {"bag"});
     const auto node = root["bag"];
-    checkKeys(node, {"input", "output", "storage_id", "clock_id", "clock_basis", "segment_id",
-      "segment_basis", "clock_relation", "map_frame", "body_frame", "sync_tolerance_ns", "tf_max_gap_ns",
-      "max_header_reorder_ns", "rgb_camera", "depth_camera", "depth", "tf_topic", "tf_static_topic",
-      "min_valid_depth_ratio", "limits"});
+    checkKeys(
+      node, {"input", "output", "storage_id", "clock_id", "clock_basis", "segment_id",
+        "segment_basis", "clock_relation", "map_frame", "body_frame", "sync_tolerance_ns", "tf_max_gap_ns",
+        "max_header_reorder_ns", "rgb_camera", "depth_camera", "depth", "tf_topic", "tf_static_topic",
+        "min_valid_depth_ratio", "limits"});
     BagBuildOptions options;
     readScalar(node, "input", options.bag_uri);
     readScalar(node, "output", options.output_directory);

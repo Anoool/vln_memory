@@ -10,7 +10,11 @@ namespace
 template<typename Values>
 bool nonfinite(const Values & values)
 {
-  for (const auto value : values) {if (!std::isfinite(value)) {return true;}}
+  for (const auto value : values) {
+    if (!std::isfinite(value)) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -47,7 +51,7 @@ nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record)
     {"distortion_model", data.distortion_model}, {"d", data.d}, {"k", data.k}, {"r", data.r}, {"p", data.p},
     {"binning_x", data.binning_x}, {"binning_y", data.binning_y},
     {"roi", {{"x_offset", roi.x_offset}, {"y_offset", roi.y_offset}, {"width", roi.width},
-      {"height", roi.height}, {"do_rectify", roi.do_rectify}}},
+        {"height", roi.height}, {"do_rectify", roi.do_rectify}}},
     {"validation_code", cameraInfoErrorCodeName(record.validation_code)},
     {"validation_message", record.validation_message},
     {"source_nonfinite", nonfinite(data.d) || nonfinite(data.k) || nonfinite(data.r) || nonfinite(data.p)}};

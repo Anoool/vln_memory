@@ -19,3 +19,5 @@
 坏图像保留 raw/问题；全部无效深度不能准备通过；标定/TF/注册缺项使配对 pending。未使用 Depth 记录为 not_selected_by_policy，不单凭此当坏帧。不可反序列化 TF/标定、容量不足、存储错误或源变化属于整次失败。
 
 输出集合、参数格式和示例见 [接口文档](../../interfaces/bag_builder_api.md)；命令见 [CLI](bag_builder_main.md)，配置见 [配置说明](../../config/vln_memory.md)。测试见 [集成验证](tests/test_bag_builder.md)。
+
+审查更新：坏帧及数值质量不通过会有独立 pending 行；文件发布用 Linux renameat2(RENAME_NOREPLACE)，即使并发出现空目录也拒绝覆盖。numeric_quality_passed 不表示标定/TF/物理注册已经通过。

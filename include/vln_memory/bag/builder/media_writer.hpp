@@ -31,6 +31,7 @@ public:
   void close();
   /** @brief 返回实际已写字节数，不含文件系统元数据。 */
   std::uint64_t bytesWritten() const noexcept {return written_bytes_;}
+
 private:
   /** @brief 校验相对路径及预算，不允许绝对路径或 .. 越界。 */
   std::filesystem::path targetPath(const std::string & relative_path) const;

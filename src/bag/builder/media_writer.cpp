@@ -12,11 +12,11 @@ namespace
 /** @brief 编码器收到的大小必须符合已验证拥有型帧，公开字段被改坏时拒绝。 */
 void checkRgbFrame(const RgbFrame & frame)
 {
-  const auto bytes = static_cast<std::uint64_t>(frame.width) * frame.height * 3;
   if (frame.width == 0 || frame.height == 0 || frame.encoding != "rgb8" ||
     frame.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
     frame.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
-    bytes != frame.pixels.size() || static_cast<std::uint64_t>(frame.width) * 3 != frame.step)
+    static_cast<std::uint64_t>(frame.width) * frame.height * 3 != frame.pixels.size() ||
+    static_cast<std::uint64_t>(frame.width) * 3 != frame.step)
   {
     throw BagBuildError("invalid_frame", "Invalid tight RGB8 frame passed to writer");
   }

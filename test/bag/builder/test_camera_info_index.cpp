@@ -1,6 +1,7 @@
 #include "vln_memory/bag/builder/camera_info_index.hpp"
 
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace
@@ -56,17 +57,33 @@ void selectionCases()
   expect(selected.matched() && selected.calibration_id == "calibration_0", "Tie must prefer earlier time");
   records[0].data.k[0] = 2;
   config.time_policy = CameraInfoTimePolicy::static_calibration;
-  expect(CameraInfoIndex(records).select(image, config).code == "static_calibration_changed", "Static model change hidden");
+  expect(
+    CameraInfoIndex(records).select(
+      image,
+      config).code == "static_calibration_changed", "Static model change hidden");
   records[0].data.stamp = {1, 0};
   config.time_policy = CameraInfoTimePolicy::synchronized;
   expect(CameraInfoIndex(records).select(image, config).code == "ambiguous_calibration", "Same-stamp conflict hidden");
   records = {calibration(1, 0), calibration(2, 1)};
   records[1].data.k[0] = 0;
   selected = CameraInfoIndex(records).select(image, config);
-  expect(selected.code == "invalid_camera_info" && selected.calibration_id == "calibration_1",
+  expect(
+    selected.code == "invalid_camera_info" && selected.calibration_id == "calibration_1",
     "Invalid nearest candidate must not fall back to older valid model");
+  auto nonfinite = calibration(1, 0);
+  nonfinite.data.d[0] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<BagCameraInfoRecord> single_bad{nonfinite};
+  auto fixed = config;
+  fixed.time_policy = CameraInfoTimePolicy::static_calibration;
+  expect(
+    CameraInfoIndex(single_bad).select(image, fixed).code == "invalid_camera_info",
+    "One invalid model must not be reported as a model change");
   records[1].data.stamp.nanosec = 1000000000U;
-  expect(CameraInfoIndex(records).select(image, config).code == "invalid_calibration_stamp", "Unknown version boundary ignored");
+  expect(
+    CameraInfoIndex(records).select(
+      image,
+      config).code == "invalid_calibration_stamp",
+    "Unknown version boundary ignored");
 }
 }
 

@@ -1,6 +1,14 @@
 #include "vln_memory/bag/builder/bag_builder.hpp"
 
 #include <chrono>
+#include <cerrno>
+#include <cstring>
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 #include <filesystem>
 #include <map>
 #include <set>
@@ -80,7 +88,7 @@ fs::path createWorkDirectory(const BagBuildOptions & options)
 void initializeOutput(OutputFiles & output)
 {
   for (const auto * path : {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl",
-    "tf.jsonl", "reports/issues.jsonl", "reports/pending.jsonl"})
+      "tf.jsonl", "reports/issues.jsonl", "reports/pending.jsonl"})
   {
     output.ensureLines(path);
   }
@@ -109,7 +117,8 @@ RgbdSyncReport synchronize(const BagBuildOptions & options, const BagScan & scan
   sync.clock_basis = options.clock_basis;
   sync.max_delta_ns = options.sync_tolerance_ns;
   sync.max_frames = options.max_frames;
-  auto result = pairRgbDepth(streamIndex(options, scan, options.rgb_camera.image_topic),
+  auto result = pairRgbDepth(
+    streamIndex(options, scan, options.rgb_camera.image_topic),
     streamIndex(options, scan, options.depth_camera.image_topic), sync);
   if (!result.ok()) {throw BagBuildError(rgbdSyncCodeName(result.code), result.message);}
   return std::move(*result.report);
@@ -119,7 +128,9 @@ RgbdSyncReport synchronize(const BagBuildOptions & options, const BagScan & scan
 std::map<std::string, ImageGeometry> pairedRgbGrids(const BagScan & scan, const RgbdSyncReport & sync)
 {
   std::map<std::string, const BagImageRecord *> images;
-  for (const auto & image : scan.images) {images.emplace(image.source.message_id, &image);}
+  for (const auto & image : scan.images) {
+    images.emplace(image.source.message_id, &image);
+  }
   std::map<std::string, ImageGeometry> grids;
   for (const auto & pair : sync.pairs) {
     const auto & image = *images.at(pair.rgb.message_id);
@@ -129,7 +140,8 @@ std::map<std::string, ImageGeometry> pairedRgbGrids(const BagScan & scan, const 
 }
 
 /** @brief RGB 解码成功即写 PNG，返回值不携带像素；失败保持已有核心错误码。 */
-ConvertedFrame convertRgb(const BagImageRecord & image, const sensor_msgs::msg::Image & message,
+ConvertedFrame convertRgb(
+  const BagImageRecord & image, const sensor_msgs::msg::Image & message,
   const BagBuildOptions & options, OutputFiles & output)
 {
   ConvertedFrame result;
@@ -144,7 +156,8 @@ ConvertedFrame convertRgb(const BagImageRecord & image, const sensor_msgs::msg::
 }
 
 /** @brief 深度解码/保存并检查真正配对网格，NaN 不进入 JSON 数值字段。 */
-ConvertedFrame convertDepth(const BagImageRecord & image, const sensor_msgs::msg::Image & message,
+ConvertedFrame convertDepth(
+  const BagImageRecord & image, const sensor_msgs::msg::Image & message,
   const BagBuildOptions & options, const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles & output)
 {
   ConvertedFrame result;
@@ -176,11 +189,11 @@ ConvertedFrame convertDepth(const BagImageRecord & image, const sensor_msgs::msg
 }
 
 /** @brief 选择标定、查询原始时刻 TF 并写入元数据；不计算/伪造位姿。 */
-void attachGeometryChecks(const BagImageRecord & image, bool is_rgb, const BagBuildOptions & options,
+void attachGeometryChecks(
+  const BagImageRecord & image, bool is_rgb, const BagBuildOptions & options,
   const BagScan & scan, const CameraInfoIndex & calibrations, PreparedFrame & prepared, Json & record)
 {
-  const auto & camera = options.depth_camera;
-  const CameraInfoMatchOptions * binding = &camera;
+  const CameraInfoMatchOptions * binding = &options.depth_camera;
   if (is_rgb) {binding = &options.rgb_camera;}
   const CameraImageReference reference{image.source.topic, image.width, image.height, image.frame_id, image.stamp};
   const auto selected = calibrations.select(reference, *binding);
@@ -209,16 +222,56 @@ void attachGeometryChecks(const BagImageRecord & image, bool is_rgb, const BagBu
   }
 }
 
-/** @brief 处理单张图，核心转换/几何元数据检查分开；仅小型 PreparedFrame 跨回调持有。 */
-PreparedFrame processImage(const BagImageRecord & image, const sensor_msgs::msg::Image * message,
+/** @brief 单帧原始布局与数值转换结果；坏 CDR 明确没有可用 header。 */
+Json frameRecord(const BagImageRecord & image, bool is_rgb, bool metadata_available, const ConvertedFrame & converted)
+{
+  Json record{{"source", sourceJson(image.source)}, {"kind", "depth"},
+    {"stamp", stampJson(image.stamp)}, {"frame_id", image.frame_id}, {"width", image.width}, {"height", image.height},
+    {"source_encoding", image.encoding}, {"source_step", image.step}, {"source_is_bigendian", image.is_bigendian},
+    {"source_data_bytes", image.data_bytes},
+    {"decode_code", converted.code}, {"decode_message", converted.message}, {"media_path", nullptr},
+    {"details", converted.details}, {"pose_computed", false}, {"effective_model_computed", false}};
+  record["metadata_available"] = metadata_available;
+  record["numeric_quality_passed"] = !converted.media_path.empty() && converted.depth_quality;
+  if (!metadata_available) {record["stamp"] = nullptr;}
+  if (is_rgb) {record["kind"] = "rgb";}
+  return record;
+}
+
+/** @brief 每个坏帧/全无效深度独立可查；未配对策略与像素质量分别报告。 */
+void reportConversionIssues(
+  const BagImageRecord & image, bool metadata_available, const ConvertedFrame & converted,
+  OutputFiles & output, std::vector<BagIssue> & issues)
+{
+  if (converted.media_path.empty()) {
+    if (metadata_available) {
+      issues.push_back({"decode", converted.code, converted.message, image.source.message_id, {}});
+    }
+    writeJsonLine(
+      output, "reports/pending.jsonl", {{"kind", "invalid_frame"},
+        {"message_id", image.source.message_id}, {"reason", converted.code}});
+  } else if (!converted.depth_quality) {
+    issues.push_back(
+      {"quality", "insufficient_valid_depth", "Decoded depth fails numeric quality threshold",
+        image.source.message_id, {}});
+    writeJsonLine(
+      output, "reports/pending.jsonl", {{"kind", "invalid_depth_quality"},
+        {"message_id", image.source.message_id}, {"reason", "insufficient_valid_depth"}});
+  }
+}
+
+/** @brief 分开转换、几何检查和报告，像素在转换辅助函数结束时释放。 */
+PreparedFrame processImage(
+  const BagImageRecord & image, const sensor_msgs::msg::Image * message,
   const BagBuildOptions & options, const BagScan & scan, const CameraInfoIndex & calibrations,
   const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles & output, std::vector<BagIssue> & issues)
 {
   const bool is_rgb = image.source.topic == options.rgb_camera.image_topic;
   ConvertedFrame converted;
   if (message != nullptr) {
-    if (is_rgb) {converted = convertRgb(image, *message, options, output);}
-    else {converted = convertDepth(image, *message, options, rgb_grids, output);}
+    if (is_rgb) {converted = convertRgb(image, *message, options, output);} else {
+      converted = convertDepth(image, *message, options, rgb_grids, output);
+    }
   } else {converted.message = image.deserialization_error;}
   PreparedFrame prepared;
   prepared.message_id = image.source.message_id;
@@ -227,21 +280,12 @@ PreparedFrame processImage(const BagImageRecord & image, const sensor_msgs::msg:
   prepared.depth_quality = converted.depth_quality;
   prepared.alignment_checked = converted.alignment_checked;
   prepared.aligned = converted.aligned;
-  Json record{{"source", sourceJson(image.source)}, {"kind", "depth"},
-    {"stamp", stampJson(image.stamp)}, {"frame_id", image.frame_id}, {"width", image.width}, {"height", image.height},
-    {"source_encoding", image.encoding}, {"source_step", image.step}, {"source_is_bigendian", image.is_bigendian},
-    {"decode_code", converted.code}, {"decode_message", converted.message}, {"media_path", nullptr},
-    {"details", converted.details}, {"pose_computed", false}, {"effective_model_computed", false}};
-  record["metadata_available"] = message != nullptr;
-  record["quality_passed"] = !converted.media_path.empty() && converted.depth_quality;
-  if (message == nullptr) {record["stamp"] = nullptr;}
-  if (is_rgb) {record["kind"] = "rgb";}
+  auto record = frameRecord(image, is_rgb, message != nullptr, converted);
   if (!converted.media_path.empty()) {
     record["media_path"] = converted.media_path;
     attachGeometryChecks(image, is_rgb, options, scan, calibrations, prepared, record);
-  } else if (message != nullptr) {
-    issues.push_back({"decode", converted.code, converted.message, image.source.message_id, {}});
   }
+  reportConversionIssues(image, message != nullptr, converted, output, issues);
   writeJsonLine(output, "frames.jsonl", std::move(record));
   return prepared;
 }
@@ -263,7 +307,8 @@ std::vector<std::string> pairReasons(const PreparedFrame & rgb, const PreparedFr
 }
 
 /** @brief 写配对/待处理，引用 frames.jsonl 的具体两图和标定；不会输出正式 Observation。 */
-void writePairs(const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
+void writePairs(
+  const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
   OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
 {
   for (const auto & pair : sync.pairs) {
@@ -277,8 +322,7 @@ void writePairs(const RgbdSyncReport & sync, const std::map<std::string, Prepare
       {"exact", pair.delta_ns == 0}, {"policy", "rgb_monotonic_one_to_one_nearest_v1"},
       {"rgb_calibration_id", rgb.calibration_id}, {"depth_calibration_id", depth.calibration_id},
       {"status", "pending"}, {"reasons", reasons}, {"pose_computed", false}, {"effective_model_computed", false}};
-    if (reasons.empty()) {record["status"] = "prepared_for_geometry"; ++result.prepared_pairs;}
-    else {
+    if (reasons.empty()) {record["status"] = "prepared_for_geometry"; ++result.prepared_pairs;} else {
       writeJsonLine(output, "reports/pending.jsonl", record);
       issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, pair_id});
     }
@@ -292,48 +336,69 @@ void writeUnmatched(const RgbdSyncReport & sync, OutputFiles & output, std::vect
 {
   for (const auto & unmatched : sync.unmatched_rgb) {
     const auto code = rgbdUnmatchedReasonName(unmatched.reason);
-    writeJsonLine(output, "reports/pending.jsonl", {{"kind", "unmatched_rgb"},
-      {"message_id", unmatched.rgb.message_id}, {"stamp", stampJson(unmatched.rgb.stamp)}, {"reason", code}});
+    writeJsonLine(
+      output, "reports/pending.jsonl", {{"kind", "unmatched_rgb"},
+        {"message_id", unmatched.rgb.message_id}, {"stamp", stampJson(unmatched.rgb.stamp)}, {"reason", code}});
     issues.push_back({"sync", code, "RGB has no selected depth", unmatched.rgb.message_id, {}});
   }
   for (const auto & depth : sync.unused_depth) {
-    writeJsonLine(output, "reports/pending.jsonl", {{"kind", "unused_depth"}, {"message_id", depth.message_id},
-      {"stamp", stampJson(depth.stamp)}, {"reason", "not_selected_by_policy"}, {"is_bad_frame", false}});
+    writeJsonLine(
+      output, "reports/pending.jsonl", {{"kind", "unused_depth"}, {"message_id", depth.message_id},
+        {"stamp", stampJson(depth.stamp)}, {"reason", "not_selected_by_policy"}, {"is_bad_frame", false}});
   }
+}
+
+/** @brief 容量使用精确十进制字符串，分别保留各处理阶段实际上限。 */
+Json effectiveLimits(const BagBuildOptions & options)
+{
+  return {{"max_messages", std::to_string(options.max_messages)}, {"max_frames", std::to_string(options.max_frames)},
+    {"max_calibrations", std::to_string(options.max_calibrations)}, {"max_tf_entries", std::to_string(
+        options.max_tf_entries)},
+    {"max_serialized_bytes", std::to_string(options.max_serialized_bytes)},
+    {"max_output_bytes", std::to_string(options.max_output_bytes)},
+    {"rgb_max_pixels", std::to_string(options.rgb_limits.max_pixels)},
+    {"rgb_max_input_bytes", std::to_string(options.rgb_limits.max_input_bytes)},
+    {"depth_max_pixels", std::to_string(options.depth_limits.max_pixels)},
+    {"depth_max_input_bytes", std::to_string(options.depth_limits.max_input_bytes)},
+    {"max_tf_edges", std::to_string(options.tf_limits.max_edges)},
+    {"max_tf_samples", std::to_string(options.tf_limits.max_samples)}};
 }
 
 /** @brief 记录实际有效配置，不写 API 凭据；null max 深度表示无上界。 */
 Json effectiveOptions(const BagBuildOptions & options)
 {
   const auto camera = [](const CameraInfoMatchOptions & value) {
-    Json result{{"image_topic", value.image_topic}, {"camera_info_topic", value.camera_info_topic},
-      {"optical_frame", value.optical_frame}, {"binding_basis", value.binding_basis},
-      {"max_delta_ns", std::to_string(value.max_delta_ns)}, {"image_domain", "raw"}, {"time_policy", "synchronized"}};
-    if (value.image_domain == CameraImageDomain::rectified) {result["image_domain"] = "rectified";}
-    if (value.time_policy == CameraInfoTimePolicy::static_calibration) {result["time_policy"] = "static_calibration";}
-    return result;
-  };
+      Json result{{"image_topic", value.image_topic}, {"camera_info_topic", value.camera_info_topic},
+        {"optical_frame", value.optical_frame}, {"binding_basis", value.binding_basis},
+        {"max_delta_ns", std::to_string(value.max_delta_ns)}, {"image_domain", "raw"}, {"time_policy", "synchronized"}};
+      if (value.image_domain == CameraImageDomain::rectified) {result["image_domain"] = "rectified";}
+      if (value.time_policy == CameraInfoTimePolicy::static_calibration) {result["time_policy"] = "static_calibration";}
+      return result;
+    };
   Json depth{{"input_unit", depthUnitName(options.depth.input_unit)}, {"convention", "optical_z"},
     {"min_depth_m", options.depth.min_depth_m}, {"max_depth_m", options.depth.max_depth_m},
     {"alignment_basis", options.depth.alignment_basis}, {"alignment", "unknown"},
     {"rgb_grid", {{"width", options.depth.rgb_grid.width}, {"height", options.depth.rgb_grid.height},
-      {"frame_id", options.depth.rgb_grid.frame_id}}}};
-  if (options.depth.alignment == DepthAlignment::aligned_to_rgb) {depth["alignment"] = "aligned_to_rgb";}
-  else if (options.depth.alignment == DepthAlignment::not_aligned) {depth["alignment"] = "not_aligned";}
+        {"frame_id", options.depth.rgb_grid.frame_id}}}};
+  if (options.depth.alignment == DepthAlignment::aligned_to_rgb) {
+    depth["alignment"] = "aligned_to_rgb";
+  } else if (options.depth.alignment == DepthAlignment::not_aligned) {depth["alignment"] = "not_aligned";}
   return {{"clock_id", options.clock_id}, {"clock_basis", options.clock_basis}, {"clock_relation", "same_clock"},
     {"segment_id", options.segment_id}, {"segment_basis", options.segment_basis},
     {"map_frame", options.map_frame}, {"body_frame", options.body_frame},
-    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"tf_max_gap_ns", std::to_string(options.tf_max_gap_ns)},
+    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"tf_max_gap_ns", std::to_string(
+        options.tf_max_gap_ns)},
     {"max_header_reorder_ns", std::to_string(options.max_header_reorder_ns)},
     {"rgb_camera", camera(options.rgb_camera)}, {"depth_camera", camera(options.depth_camera)}, {"depth", depth},
     {"min_valid_depth_ratio", options.min_valid_depth_ratio}, {"tf_topic", options.tf_topic},
-    {"tf_static_topic", options.tf_static_topic}};
+    {"tf_static_topic", options.tf_static_topic}, {"limits", effectiveLimits(options)}};
 }
 
 /** @brief 分段/所需链的共同覆盖仅计算一次，逐帧查询不重扫全量历史。 */
 Json coverageReports(const BagBuildOptions & options, const BagScan & scan)
 {
-  std::set<std::string> sources{options.body_frame, options.rgb_camera.optical_frame, options.depth_camera.optical_frame};
+  std::set<std::string> sources{options.body_frame, options.rgb_camera.optical_frame,
+    options.depth_camera.optical_frame};
   Json reports = Json::array();
   for (const auto & source : sources) {
     const auto chain = scan.tf_index.inspectChain(options.map_frame, source, {options.tf_max_gap_ns});
@@ -341,9 +406,10 @@ Json coverageReports(const BagBuildOptions & options, const BagScan & scan)
     for (const auto & interval : chain.intervals) {
       intervals.push_back({{"start", stampJson(interval.start)}, {"end", stampJson(interval.end)}});
     }
-    reports.push_back({{"target_frame", options.map_frame}, {"source_frame", source},
-      {"code", tfChainCodeName(chain.code)}, {"coverage_status", tfCoverageStatusName(chain.coverage_status)},
-      {"frames", chain.frames}, {"failed_frame", chain.failed_frame}, {"intervals", intervals}});
+    reports.push_back(
+      {{"target_frame", options.map_frame}, {"source_frame", source},
+        {"code", tfChainCodeName(chain.code)}, {"coverage_status", tfCoverageStatusName(chain.coverage_status)},
+        {"frames", chain.frames}, {"failed_frame", chain.failed_frame}, {"intervals", intervals}});
   }
   return reports;
 }
@@ -364,7 +430,9 @@ Json summaryRecord(const BagScan & scan, const RgbdSyncReport & sync, const BagB
 }
 
 /** @brief 写完整数据集说明及来源，字段/版本明确区分 preparation 和正式 memory。 */
-void writeManifest(const BagBuildOptions & options, const BagScan & scan, const BagBuildResult & result, OutputFiles & output)
+void writeManifest(
+  const BagBuildOptions & options, const BagScan & scan, const BagBuildResult & result,
+  OutputFiles & output)
 {
   Json sources = Json::array();
   for (const auto & file : scan.source_files) {
@@ -372,21 +440,25 @@ void writeManifest(const BagBuildOptions & options, const BagScan & scan, const 
   }
   Json topics = Json::array();
   for (const auto & topic : scan.topics) {
-    topics.push_back({{"name", topic.name}, {"type", topic.type}, {"serialization_format", topic.serialization_format},
-      {"offered_qos_profiles", topic.offered_qos_profiles}, {"declared_count", std::to_string(topic.declared_count)},
-      {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
+    topics.push_back(
+      {{"name", topic.name}, {"type", topic.type}, {"serialization_format", topic.serialization_format},
+        {"offered_qos_profiles", topic.offered_qos_profiles}, {"declared_count", std::to_string(topic.declared_count)},
+        {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
-  writeJsonFile(output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 1},
-    {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
-    {"metadata_sha256", scan.metadata_sha256}, {"source_files", sources}, {"topics", topics},
-    {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
-    {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
-      "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"}},
-    {"pose_computed", false}, {"effective_model_computed", false}, {"keyframes_selected", false}});
+  writeJsonFile(
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 1},
+      {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
+      {"metadata_sha256", scan.metadata_sha256}, {"source_files", sources}, {"topics", topics},
+      {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
+      {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
+          "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"}},
+      {"pose_computed", false}, {"effective_model_computed", false}, {"keyframes_selected", false}});
 }
 
 /** @brief 校验实际保存的原始/标准文件引用，避免在引用断裂时发布。 */
-void validateReferences(const fs::path & root, const BagScan & scan, const std::map<std::string, PreparedFrame> & frames)
+void validateReferences(
+  const fs::path & root, const BagScan & scan, const std::map<std::string,
+  PreparedFrame> & frames)
 {
   for (const auto & message : scan.messages) {
     if (!fs::is_regular_file(root / ("evidence/raw/" + message.message_id + ".cdr"))) {
@@ -398,6 +470,22 @@ void validateReferences(const fs::path & root, const BagScan & scan, const std::
       throw BagBuildError("broken_reference", "Missing normalized image evidence");
     }
   }
+}
+
+/** @brief Ubuntu/WSL 原生不覆盖原子改名；并发出现空目录也不能被替换。 */
+void publishDirectory(const fs::path & work, const fs::path & final_path)
+{
+#ifdef __linux__
+  if (::syscall(SYS_renameat2, AT_FDCWD, work.c_str(), AT_FDCWD, final_path.c_str(), RENAME_NOREPLACE) != 0) {
+    const auto error = errno;
+    if (error == EEXIST || error == ENOTEMPTY) {throw BagBuildError("output_exists", "Output appeared during build");}
+    throw BagBuildError("io_error", "Atomic publication failed: " + std::string(std::strerror(error)));
+  }
+#else
+  (void)work;
+  (void)final_path;
+  throw BagBuildError("unsupported_platform", "First-version publication requires Linux renameat2");
+#endif
 }
 
 /** @brief 将扫描、配对、逐图转换和发布串联；大对象只在本次运行生命周期内拥有。 */
@@ -413,30 +501,33 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
   const CameraInfoIndex calibrations(scan.calibrations);
   std::map<std::string, PreparedFrame> frames;
   auto issues = std::move(scan.issues);
-  readBagImages(options, scan, [&](const auto & image, const auto * message) {
-    auto prepared = processImage(image, message, options, scan, calibrations, rgb_grids, output, issues);
-    if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;}
-    else {++result.depth_frames;}
-    if (!prepared.media_path.empty()) {++result.decoded_frames;}
-    frames.emplace(image.source.message_id, std::move(prepared));
-  });
+  readBagImages(
+    options, scan, [&](const auto & image, const auto * message) {
+      auto prepared = processImage(image, message, options, scan, calibrations, rgb_grids, output, issues);
+      if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;} else {++result.depth_frames;}
+      if (!prepared.media_path.empty()) {++result.decoded_frames;}
+      frames.emplace(image.source.message_id, std::move(prepared));
+    });
   if (result.rgb_frames == 0 || result.depth_frames == 0) {
     issues.push_back({"scan", "empty_image_stream", "A configured image stream contains no messages", {}, {}});
   }
   writePairs(sync, frames, output, result, issues);
   writeUnmatched(sync, output, issues);
-  for (const auto & issue : issues) {writeJsonLine(output, "reports/issues.jsonl", issueJson(issue));}
+  for (const auto & issue : issues) {
+    writeJsonLine(output, "reports/issues.jsonl", issueJson(issue));
+  }
   result.issue_count = issues.size();
   result.status = BagBuildStatus::completed;
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
-  verifyBagSources(options, scan);
   writeJsonFile(output, "reports/summary.json", summaryRecord(scan, sync, result));
   writeManifest(options, scan, result, output);
   output.close();
   const auto final_path = fs::weakly_canonical(options.output_directory);
-  if (fs::exists(final_path) || fs::is_symlink(final_path)) {throw BagBuildError("output_exists", "Output appeared during build");}
-  fs::rename(work, final_path);
+  if (fs::exists(final_path) || fs::is_symlink(final_path)) {
+    throw BagBuildError("output_exists", "Output appeared during build");
+  }
+  publishDirectory(work, final_path);
   result.output_directory = final_path.string();
   result.work_directory.clear();
   result.code = "ok";

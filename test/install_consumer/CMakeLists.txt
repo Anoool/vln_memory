@@ -40,3 +40,7 @@ if(TARGET vln_memory::vln_memory_bag_builder)
   add_executable(bag_builder_consumer bag_builder_consumer.cpp)
   target_link_libraries(bag_builder_consumer PRIVATE vln_memory::vln_memory_bag_builder)
 endif()
+
+# 复用行为测试源，但只通过安装导出目标解析公开头和依赖。
+add_executable(camera_info_index_consumer ../bag/builder/test_camera_info_index.cpp)
+target_link_libraries(camera_info_index_consumer PRIVATE vln_memory::vln_memory_camera_info_index)

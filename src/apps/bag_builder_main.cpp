@@ -27,9 +27,7 @@ int main(int argc, char ** argv)
         usage(); return 2;
       }
       const std::string value(argv[++index]);
-      if (flag == "--config") {config = value;}
-      else if (flag == "--bag") {input = value;}
-      else {output = value;}
+      if (flag == "--config") {config = value;} else if (flag == "--bag") {input = value;} else {output = value;}
     }
     if (config.empty()) {usage(); return 2;}
     auto options = vln_memory::loadBagBuildOptions(config);

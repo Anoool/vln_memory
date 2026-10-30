@@ -5,6 +5,7 @@
 | 内容 | 入口 |
 | --- | --- |
 | 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
+| BagBuilder 第一版实际验收、样例及 Git 版本 | [验收记录](reviews/bag_builder_v1_verification.md) |
 | BagBuilder 第一版实际接口、参数与文件格式 | [BagBuilder 接口](interfaces/bag_builder_api.md) |
 | BagBuilder 第一版实施与验证记录 | [实施记录](project/bag_builder_v1_implementation.md) |
 | CLI 入口与运行 | [bag_builder_main](modules/bag/bag_builder_main.md) |

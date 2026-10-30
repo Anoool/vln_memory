@@ -1,5 +1,6 @@
 # CMakeLists.txt：观测准备层构建与导出
 
+当前新增目标与安装/测试数量以文末“BagBuilder 第一版”小节为准；前面保留各模块引入时的阶段记录。
 ## 实施前规划与自审
 
 builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo/TF 核心、公共时间检查及各自 ROS 适配。两条构建路径复用同一核心源文件和测试，避免出现测试版本与正式版本行为不同。
@@ -61,3 +62,15 @@ vln_memory::vln_memory_tf 显式公开 C++17/include，不依赖 ROS；vln_memor
 ## 统一名称检查修复
 
 新增 header-only 的 common/sensor_names.hpp 并随公共头安装，无新增运行库。sensor_names_core 独立无 ROS 测试使核心数量变为 6；真实 ROS 总数为 10。rmw 仅作为 test_tf_ros 对照测试依赖，运行目标不依赖 rmw。当前编辑器格式约定见根目录 .editorconfig，修复说明见 [实施记录](sensor_validation_comments_plan.md)。
+
+## BagBuilder 第一版新增目标与安装验证
+
+- vln_memory::vln_memory_rgbd_sync：无 ROS，公开传递 sensor_time。
+- vln_memory::vln_memory_camera_info_index：无 ROS，公开传递 CameraInfo。
+- vln_memory::vln_memory_bag_builder：仅 ROS 构建，集成配置/官方 reader/媒体/JSONL/调度。公开导出 rosbag2_cpp、rosbag2_storage、rclcpp、rcutils、消息/JSON 头依赖；YAML、OpenSSL、OpenCV 是实现依赖。
+- bag_builder 可执行文件安装到 lib/vln_memory，config 安装到 share/vln_memory/config。
+- Linux 安装共享库设置 $ORIGIN，以解析同目录的传递依赖。
+
+现有核心仍可 VLN_MEMORY_ENABLE_ROS=OFF 构建；第一版共有 8 个核心、14 个 ROS 构建 CTest。test/install_consumer 只查安装包：核心 6 个消费者、ROS 10 个；完整 builder 消费者还可传 YAML 与新输出目录实际处理 bag。
+
+实际接口和参数见 [BagBuilder](../interfaces/bag_builder_api.md)，验证范围见 [验收记录](../reviews/bag_builder_v1_verification.md)。

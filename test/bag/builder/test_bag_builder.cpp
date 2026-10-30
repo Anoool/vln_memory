@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <rclcpp/serialization.hpp>
+#include <rcutils/error_handling.h>
 #include <rosbag2_cpp/writer.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
@@ -79,7 +80,8 @@ sensor_msgs::msg::Image rgb(std::int32_t sec)
 }
 
 /** @brief 深度是小端 uint16 毫米，允许 0 验证 NaN 保留和质量统计。 */
-sensor_msgs::msg::Image depth(std::int32_t sec, std::uint32_t nanosec,
+sensor_msgs::msg::Image depth(
+  std::int32_t sec, std::uint32_t nanosec,
   std::uint16_t first, std::uint16_t second)
 {
   auto image = rgb(sec);
@@ -120,17 +122,21 @@ geometry_msgs::msg::TransformStamped transform(
 }
 
 /** @brief 将独立字节交给官方 Writer，支持负记录时间及坏 CDR 边界测试。 */
-void writeBytes(rosbag2_cpp::Writer & writer, const std::string & topic, std::int64_t record_ns,
+void writeBytes(
+  rosbag2_cpp::Writer & writer, const std::string & topic, std::int64_t record_ns,
   const std::uint8_t * data, std::size_t bytes)
 {
-  auto buffer = std::shared_ptr<rcutils_uint8_array_t>(new rcutils_uint8_array_t(
-    rcutils_get_zero_initialized_uint8_array()), [](auto * value) {
+  auto buffer = std::shared_ptr<rcutils_uint8_array_t>(
+    new rcutils_uint8_array_t(
+      rcutils_get_zero_initialized_uint8_array()), [](auto * value) {
       const auto status = rcutils_uint8_array_fini(value);
       (void)status;
       delete value;
     });
   auto allocator = rcutils_get_default_allocator();
-  expect(rcutils_uint8_array_init(buffer.get(), bytes, &allocator) == RCUTILS_RET_OK, "Fixture buffer allocation failed");
+  expect(
+    rcutils_uint8_array_init(buffer.get(), bytes, &allocator) == RCUTILS_RET_OK,
+    "Fixture buffer allocation failed");
   if (bytes > 0) {std::memcpy(buffer->buffer, data, bytes);}
   buffer->buffer_length = bytes;
   auto raw = std::make_shared<rosbag2_storage::SerializedBagMessage>();
@@ -142,7 +148,8 @@ void writeBytes(rosbag2_cpp::Writer & writer, const std::string & topic, std::in
 
 /** @brief 使用真实 ROS 类型支持生成 CDR；测试不手工伪造有效消息序列化。 */
 template<typename Message>
-void writeMessage(rosbag2_cpp::Writer & writer, const std::string & topic,
+void writeMessage(
+  rosbag2_cpp::Writer & writer, const std::string & topic,
   std::int64_t record_ns, const Message & value)
 {
   rclcpp::SerializedMessage serialized;
@@ -186,8 +193,9 @@ void createFixture(const fs::path & path, FixtureKind kind)
   if (kind == FixtureKind::invalid_depth) {first = 0;}
   writeMessage(writer, "/depth", 1000000000LL, depth(10, 4000000, first, 0));
   writeMessage(writer, "/rgb", 2000000000LL, rgb(11));
-  if (kind == FixtureKind::invalid_depth) {writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 0, 0));}
-  else {writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 2000, 3000));}
+  if (kind == FixtureKind::invalid_depth) {
+    writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 0, 0));
+  } else {writeMessage(writer, "/depth", 2000000000LL, depth(10, 996000000, 2000, 3000));}
   writeMessage(writer, "/rgb", 3000000000LL, rgb(12));
   writeMessage(writer, "/depth", 4000000000LL, depth(14, 0, 0, 0));
   const std::array<std::uint8_t, 4> bad_cdr{0xff, 0xff, 0xff, 0xff};
@@ -239,7 +247,8 @@ std::vector<Json> readLines(const fs::path & path)
 void checkNormal(const fs::path & output, const BagBuildResult & result)
 {
   expect(result.ok(), "Normal fixture build failed: " + result.code + " " + result.message);
-  expect(result.rgb_frames == 4 && result.depth_frames == 3 && result.decoded_frames == 6,
+  expect(
+    result.rgb_frames == 4 && result.depth_frames == 3 && result.decoded_frames == 6,
     "Frame/decode counts incorrect");
   expect(result.pairs == 2 && result.prepared_pairs == 2, "Valid sensor preparation pairs missing");
   const auto manifest = readJson(output / "bag_manifest.json");
@@ -255,14 +264,16 @@ void checkNormal(const fs::path & output, const BagBuildResult & result)
     if (frame.at("kind") == "rgb" && frame.at("decode_code") == "none") {
       const auto image = cv::imread((output / frame.at("media_path").get<std::string>()).string());
       expect(image.rows == 1 && image.cols == 2, "PNG dimensions wrong");
-      expect(image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 255) &&
+      expect(
+        image.at<cv::Vec3b>(0, 0) == cv::Vec3b(0, 0, 255) &&
         image.at<cv::Vec3b>(0, 1) == cv::Vec3b(255, 0, 0), "PNG red/blue channels swapped");
     }
   }
   const auto summary = readJson(output / "reports/summary.json");
   expect(summary.at("tf_duplicates") == 1 && summary.at("tf_unique_samples") == 3, "TF duplicate provenance wrong");
   const auto pairs = readLines(output / "rgbd_pairs.jsonl");
-  expect(pairs[0].at("delta_ns") == "4000000" && pairs[1].at("delta_ns") == "-4000000",
+  expect(
+    pairs[0].at("delta_ns") == "4000000" && pairs[1].at("delta_ns") == "-4000000",
     "Header time pairing used record time or wrong sign");
 }
 
@@ -309,18 +320,29 @@ void configCases(const fs::path & root, const fs::path & config)
 {
   auto options = loadBagBuildOptions(config.string());
   expect(validateBagBuildOptions(options).empty(), "Fixture YAML not usable");
-  for (const auto * variant : {"unknown", "negative", "duplicate"}) {
+  auto conflicting = options;
+  conflicting.depth.rgb_grid.frame_id = "different_optical_frame";
+  expect(!validateBagBuildOptions(conflicting).empty(), "Conflicting registration configuration accepted");
+  conflicting = options;
+  conflicting.depth_camera.camera_info_topic = conflicting.rgb_camera.camera_info_topic;
+  conflicting.depth.alignment = DepthAlignment::unknown;
+  conflicting.depth.rgb_grid = {};
+  expect(!validateBagBuildOptions(conflicting).empty(), "Unregistered depth silently shared RGB calibration");
+  for (const auto * variant : {"unknown", "negative", "negative_grid", "duplicate"}) {
     const auto path = root / (std::string(variant) + ".yaml");
     auto yaml = YAML::LoadFile(config.string());
-    if (std::string(variant) == "unknown") {yaml["bag"]["typo"] = true;}
-    else if (std::string(variant) == "negative") {yaml["bag"]["limits"]["max_frames"] = -1;}
+    if (std::string(variant) == "unknown") {yaml["bag"]["typo"] = true;} else if (std::string(variant) == "negative") {
+      yaml["bag"]["limits"]["max_frames"] = -1;
+    } else if (std::string(variant) == "negative_grid") {yaml["bag"]["depth"]["rgb_width"] = -1;}
     std::ofstream output(path);
-    if (std::string(variant) == "duplicate") {output << "bag:\n  input: a\n  input: b\n";}
-    else {output << yaml;}
+    if (std::string(variant) == "duplicate") {output << "bag:\n  input: a\n  input: b\n";} else {output << yaml;}
     output.close();
     bool rejected = false;
-    try {loadBagBuildOptions(path.string());}
-    catch (const BagBuildError & error) {rejected = error.code() == "invalid_config";}
+    try {
+      loadBagBuildOptions(path.string());
+    } catch (const BagBuildError & error) {
+      rejected = error.code() == "invalid_config";
+    }
     expect(rejected, "Invalid YAML was not rejected: " + std::string(variant));
   }
 }
@@ -339,8 +361,9 @@ void failureAndQualityCases(const fs::path & root)
     const auto result = buildBag(fixtureOptions(input, output));
     if (variant.first == FixtureKind::wrong_type || variant.first == FixtureKind::time_reset) {
       expect(!result.ok() && !fs::exists(output), "Fatal failure published output");
-      if (variant.first == FixtureKind::wrong_type) {expect(result.code == "topic_type_mismatch", "Wrong type misclassified");}
-      else {expect(result.code == "ambiguous_time_segment", "Clock reset was silently sorted away");}
+      if (variant.first == FixtureKind::wrong_type) {
+        expect(result.code == "topic_type_mismatch", "Wrong type misclassified");
+      } else {expect(result.code == "ambiguous_time_segment", "Clock reset was silently sorted away");}
     } else {
       expect(result.ok() && result.prepared_pairs == 0 && result.pairs == 2, "Quality/conflict did not gate pairs");
       const auto pairs = readLines(output / "rgbd_pairs.jsonl");
@@ -364,8 +387,13 @@ void sourceChangeCase(const fs::path & root)
   altered.put('x');
   altered.close();
   bool rejected = false;
-  try {readBagImages(options, scan, [](const auto &, const auto *) {});}
-  catch (const BagBuildError & error) {rejected = error.code() == "source_changed";}
+  try {
+    readBagImages(
+      options, scan, [](const auto &, const auto *) {
+      });
+  } catch (const BagBuildError & error) {
+    rejected = error.code() == "source_changed";
+  }
   expect(rejected, "Changed source accepted by second pass");
 }
 
@@ -375,7 +403,9 @@ void integrationCases(const fs::path & root)
   const auto input = root / "normal_bag";
   createFixture(input, FixtureKind::normal);
   auto options = fixtureOptions(input, root / "normal_out");
-  checkNormal(root / "normal_out", buildBag(options));
+  const auto normal = buildBag(options);
+  expect(!rcutils_error_is_set(), "Message decoding left stale global ROS error state");
+  checkNormal(root / "normal_out", normal);
   const auto duplicate = buildBag(options);
   expect(!duplicate.ok() && duplicate.code == "output_exists", "Existing output overwritten");
   options.output_directory = (root / "repeat_out").string();
@@ -383,13 +413,15 @@ void integrationCases(const fs::path & root)
   options.output_directory = (root / "budget_fail").string();
   options.max_output_bytes = 1;
   const auto budget = buildBag(options);
-  expect(!budget.ok() && budget.code == "limit_exceeded" && !fs::exists(root / "budget_fail"),
+  expect(
+    !budget.ok() && budget.code == "limit_exceeded" && !fs::exists(root / "budget_fail"),
     "Budget failure published complete output");
   const auto manifest = readJson(root / "normal_out/bag_manifest.json");
   const auto single_file = manifest.at("source_files")[0].at("path").get<std::string>();
   auto single = fixtureOptions(single_file, root / "single_out");
   expect(buildBag(single).ok(), "Single SQLite file extraction failed");
-  expect(readJson(root / "single_out/bag_manifest.json").at("input_scope") == "single_storage_file",
+  expect(
+    readJson(root / "single_out/bag_manifest.json").at("input_scope") == "single_storage_file",
     "Single file was falsely described as complete directory bag");
   auto demo = fixtureOptions(input, root / "cli_out");
   writeFixtureConfig(root / "demo_config.yaml", demo);

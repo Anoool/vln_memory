@@ -29,16 +29,17 @@ void analyzeHistory(
   detail::CalibrationHistory & history, const std::vector<BagCameraInfoRecord> & records)
 {
   auto & ordered = history.ordered;
-  std::sort(ordered.begin(), ordered.end(), [&records](std::size_t left, std::size_t right) {
-    const auto left_ns = stampNs(records[left].data.stamp);
-    const auto right_ns = stampNs(records[right].data.stamp);
-    if (left_ns != right_ns) {return left_ns < right_ns;}
-    return records[left].source.message_order < records[right].source.message_order;
-  });
+  std::sort(
+    ordered.begin(), ordered.end(), [&records](std::size_t left, std::size_t right) {
+      const auto left_ns = stampNs(records[left].data.stamp);
+      const auto right_ns = stampNs(records[right].data.stamp);
+      if (left_ns != right_ns) {return left_ns < right_ns;}
+      return records[left].source.message_order < records[right].source.message_order;
+    });
   for (std::size_t index = 0; index < ordered.size(); ++index) {
     const auto & record = records[ordered[index]];
     if (record.data.stamp.nanosec >= 1000000000U) {history.invalid_stamp = true;}
-    if (!sameModel(records[ordered.front()].data, record.data)) {history.static_consistent = false;}
+    if (index > 0 && !sameModel(records[ordered.front()].data, record.data)) {history.static_consistent = false;}
     if (index > 0) {
       const auto & previous = records[ordered[index - 1]];
       if (stampNs(previous.data.stamp) == stampNs(record.data.stamp) && !sameModel(previous.data, record.data)) {
@@ -55,8 +56,8 @@ std::size_t nearestRecord(
 {
   const auto & ordered = history.ordered;
   const auto by_stamp = [&records](std::size_t index, std::int64_t value) {
-    return stampNs(records[index].data.stamp) < value;
-  };
+      return stampNs(records[index].data.stamp) < value;
+    };
   const auto query = stampNs(stamp);
   const auto next = std::lower_bound(ordered.begin(), ordered.end(), query, by_stamp);
   if (next == ordered.begin()) {return *next;}
@@ -77,7 +78,9 @@ CameraInfoIndex::CameraInfoIndex(const std::vector<BagCameraInfoRecord> & record
   for (std::size_t index = 0; index < records.size(); ++index) {
     histories_[records[index].data.topic].ordered.push_back(index);
   }
-  for (auto & entry : histories_) {analyzeHistory(entry.second, records_);}
+  for (auto & entry : histories_) {
+    analyzeHistory(entry.second, records_);
+  }
 }
 
 /** @brief 选择不跳过无效候选，静态模式不掩盖模型变化，最后复用实际相机匹配规则。 */

@@ -43,6 +43,9 @@ def check_dataset(root):
     for frame in frames:
         assert frame["source"]["message_id"] in message_ids
         assert not frame["pose_computed"]
+        if not frame["metadata_available"]:
+            assert frame["stamp"] is None
+            assert frame["decode_code"] == "deserialize_failed"
         if frame["media_path"] is None:
             assert frame["decode_code"] != "none"
             continue

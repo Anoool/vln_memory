@@ -21,6 +21,7 @@ public:
   : std::runtime_error(message), code_(std::move(code)) {}
   /** @brief 返回拥有的错误码引用，生命周期与本异常一致。 */
   const std::string & code() const noexcept {return code_;}
+
 private:
   std::string code_;
 };
@@ -49,6 +50,7 @@ struct BagImageRecord
   std::string encoding;
   std::uint32_t step{0};
   std::uint8_t is_bigendian{0};
+  std::size_t data_bytes{0};
   std::string deserialization_error;
 };
 

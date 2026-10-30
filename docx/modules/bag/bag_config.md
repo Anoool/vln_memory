@@ -19,3 +19,5 @@ max_messages/max_frames/max_calibrations/max_tf_entries/max_serialized_bytes/max
 ## 使用
 
 配置示例见 [vln_memory.yaml](../../config/vln_memory.md)。固定标定策略需要段内不变依据；近似同步容差必须按实际采集填写。原始/已注册深度要选正确的 CameraInfo，不能从编码猜毫米或从宽高猜注册。
+
+额外配置约束：尺寸按非负十进制解析再检查 uint32 范围；已注册声明必须与 RGB/Depth 两个光学 frame 一致；未注册 Depth 不允许静默共用 RGB CameraInfo。

@@ -33,3 +33,29 @@
 发现并修复 Humble Writer 可写负起点但 MetadataIo 用 uint64 解码失败：仅通过官方 metadata 注入点处理内存副本并恢复有符号起点，输入文件不变；结合 seek 最小记录时间避免静默漏帧。文件身份查表缓存分卷切换，不逐消息做 canonical 文件系统调用。
 
 后续进行整条调用链自审、安装消费、最终文档/格式及必要边界补充，结果在本文件继续追加。
+
+## 整体框架复核与改进
+
+完整读取闭环已保存为 87f915c。继续通读配置→索引→选择→转换→JSONL→发布：
+
+- 提前拒绝注册目标与两相机 optical_frame 矛盾，以及未注册深度共用 RGB 标定；尺寸解析拒绝负数/溢出。
+- 单个含 NaN 的坏标定不误报为“静态模型变化”；添加对应核心回归。
+- 坏 CDR 没有可用 header，导出 metadata_available=false/stamp=null；坏帧及全无效数值深度独立进入 pending。
+- 图像转换、记录组装和问题上报拆成短函数；保留 source_data_bytes 方便人工检查布局。
+- 分卷路径仅在切换时解析；完整源文件 SHA 从五遍减为三遍，第二遍仍逐条核对来源/摘要，最终仍做完整校验。
+- 发布使用 Linux 原子不覆盖 renameat2，关闭后的完整目录才对外可见；这不承诺断电持久化或断点恢复。
+- manifest 保存所有有效预算/阈值。依赖键按照 [ROS 官方 rosdep 数据](https://github.com/ros/rosdistro/blob/master/rosdep/base.yaml) 使用 nlohmann-json-dev（CMake 包仍为 nlohmann_json）；未初始化本机 rosdep 全局数据库。
+
+后续安装/内存检查完成后追加最终证据。
+
+安装后实际运行发现：仅调用 rgbd_sync 的独立核心消费者，其可执行文件 RUNPATH 不能自动用于第二层 sensor_time 依赖。已为 Linux 安装共享库设置 $ORIGIN，使库自身解析同目录依赖；重新安装后需运行全部消费者验证，不仅编译。
+
+## 最终验证
+
+无 ROS 核心 8/8，标准 colcon 测试 14 项零失败/跳过；安装后独立核心 6 个、ROS 10 个消费者实际运行。Linux $ORIGIN 修复已通过不加载本包环境的核心消费者验证；已安装 CLI 和包外 buildBag 均实际导出合成分卷样例。
+
+配对/标定索引 ASan/UBSan + LeakSanitizer 通过；完整 ROS 链 ASan/UBSan（detect_leaks=0）通过。ROS detect_leaks=1 有 389 字节 class_loader 退出诊断，独立官方 SequentialReader（不链接本项目）同样复现，未掩盖为通过。详见 [验收记录](../reviews/bag_builder_v1_verification.md)。
+
+本地 review 样例在 build/bag-v1-demo/，实际 CLI 结果 4 RGB/3 Depth、6 成功媒体、2 对 ±4ms 配对、2 对准备通过、3 条问题；数值位姿/有效模型/关键帧仍为 false。原始设计附件未修改。
+
+收口检查：CLI/API 的 28 个实际产物逐字节一致，304 个仓库文档链接有效，AGENTS.md 399 词。最终源码/接口按整条调用路径复核，生产函数分离校验、检索、转换、报告与发布，新增 C++ 风格检查通过。

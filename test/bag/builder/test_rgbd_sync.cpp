@@ -51,13 +51,16 @@ void knownAnswers()
   auto result = pairRgbDepth(stream("rgb", {4, 6}), stream("depth", {0, 5}), options(6));
   expect(result.ok() && result.report->pairs.size() == 1, "Greedy policy changed");
   expect(result.report->pairs[0].depth.stamp.nanosec == 5, "Nearest depth not selected");
-  expect(result.report->unmatched_rgb[0].reason == RgbdUnmatchedReason::unavailable_by_policy,
+  expect(
+    result.report->unmatched_rgb[0].reason == RgbdUnmatchedReason::unavailable_by_policy,
     "Policy exclusion not reported");
   result = pairRgbDepth(stream("rgb", {5, 5}), stream("depth", {4, 6, 6}), options(1));
   expect(result.ok() && result.report->pairs.size() == 2, "Tie/boundary pairing failed");
-  expect(result.report->pairs[0].delta_ns == -1 && result.report->pairs[1].depth.message_order == 1,
+  expect(
+    result.report->pairs[0].delta_ns == -1 && result.report->pairs[1].depth.message_order == 1,
     "Tie should select earlier time then earlier source");
-  expect(result.report->unused_depth.size() == 1 && result.report->max_abs_delta_ns == 1,
+  expect(
+    result.report->unused_depth.size() == 1 && result.report->max_abs_delta_ns == 1,
     "Conservation/statistics failed");
   result = pairRgbDepth(stream("rgb", {1}), stream("depth", {2}), options(0));
   expect(result.ok() && result.report->pairs.empty(), "Exact policy accepted unequal stamps");
@@ -73,11 +76,13 @@ void inputBoundaries()
   rgb.frames[0].stamp = {std::numeric_limits<std::int32_t>::min(), 0};
   depth.frames[0].stamp = {std::numeric_limits<std::int32_t>::max(), 999999999};
   auto result = pairRgbDepth(rgb, depth, options(std::numeric_limits<std::int64_t>::max()));
-  expect(result.ok() && result.report->pairs.size() == 1 && result.report->pairs[0].delta_ns > 0,
+  expect(
+    result.ok() && result.report->pairs.size() == 1 && result.report->pairs[0].delta_ns > 0,
     "Full stamp range overflowed");
   rgb.frames[0].stamp.nanosec = 1000000000U;
   result = pairRgbDepth(rgb, depth, options(0));
-  expect(!result.ok() && !result.report && result.code == RgbdSyncCode::invalid_reference,
+  expect(
+    !result.ok() && !result.report && result.code == RgbdSyncCode::invalid_reference,
     "Invalid nanosec accepted");
   rgb = stream("rgb", {1, 2});
   depth = stream("depth", {1});
@@ -101,9 +106,9 @@ std::vector<std::string> oracle(
   RgbdStreamIndex rgb, RgbdStreamIndex depth, std::uint32_t tolerance_ns)
 {
   const auto earlier = [](const auto & left, const auto & right) {
-    if (left.stamp.nanosec != right.stamp.nanosec) {return left.stamp.nanosec < right.stamp.nanosec;}
-    return left.message_order < right.message_order;
-  };
+      if (left.stamp.nanosec != right.stamp.nanosec) {return left.stamp.nanosec < right.stamp.nanosec;}
+      return left.message_order < right.message_order;
+    };
   std::sort(rgb.frames.begin(), rgb.frames.end(), earlier);
   std::sort(depth.frames.begin(), depth.frames.end(), earlier);
   std::size_t first = 0;

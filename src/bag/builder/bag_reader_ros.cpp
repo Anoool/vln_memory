@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -14,6 +15,7 @@
 #include <utility>
 #include <openssl/evp.h>
 #include <rclcpp/serialization.hpp>
+#include <rcutils/error_handling.h>
 #include <rclcpp/serialized_message.hpp>
 #include <rosbag2_cpp/readers/sequential_reader.hpp>
 #include <rosbag2_storage/metadata_io.hpp>
@@ -78,8 +80,9 @@ std::string fileDigest(const fs::path & path)
   std::array<char, 65536> buffer{};
   while (input) {
     input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    if (input.gcount() > 0 && EVP_DigestUpdate(digest.get(), buffer.data(),
-      static_cast<std::size_t>(input.gcount())) != 1)
+    if (input.gcount() > 0 && EVP_DigestUpdate(
+        digest.get(), buffer.data(),
+        static_cast<std::size_t>(input.gcount())) != 1)
     {
       throw BagBuildError("hash_error", "Cannot hash input file");
     }
@@ -136,7 +139,8 @@ public:
 /** @brief 使用官方可注入 MetadataIo 的构造入口；存储和序列化仍是标准实现。 */
 Reader makeReader()
 {
-  return Reader(std::make_unique<rosbag2_storage::StorageFactory>(),
+  return Reader(
+    std::make_unique<rosbag2_storage::StorageFactory>(),
     std::make_shared<rosbag2_cpp::SerializationFormatConverterFactory>(), std::make_unique<SignedMetadataIo>());
 }
 
@@ -149,6 +153,8 @@ void openReader(const BagBuildOptions & options, Reader & reader)
   try {
     reader.open(storage, {"", ""});
     reader.seek(std::numeric_limits<rcutils_time_point_value_t>::min());
+  } catch (const std::bad_alloc &) {
+    throw;
   } catch (const std::exception & error) {
     throw BagBuildError("bag_open_failed", error.what());
   }
@@ -234,17 +240,19 @@ void inspectTopics(const BagBuildOptions & options, const Reader & reader, BagSc
       }
       selected_count += topic.message_count;
     }
-    scan.topics.push_back({value.name, value.type, value.serialization_format, value.offered_qos_profiles,
-      topic.message_count, 0, selected != expected.end()});
+    scan.topics.push_back(
+      {value.name, value.type, value.serialization_format, value.offered_qos_profiles,
+        topic.message_count, 0, selected != expected.end()});
   }
   for (const auto & required : {options.rgb_camera.image_topic, options.depth_camera.image_topic,
-    options.rgb_camera.camera_info_topic, options.depth_camera.camera_info_topic})
+      options.rgb_camera.camera_info_topic, options.depth_camera.camera_info_topic})
   {
     if (present.count(required) == 0) {throw BagBuildError("missing_topic", "Missing required topic " + required);}
   }
-  std::sort(scan.topics.begin(), scan.topics.end(), [](const auto & left, const auto & right) {
-    return left.name < right.name;
-  });
+  std::sort(
+    scan.topics.begin(), scan.topics.end(), [](const auto & left, const auto & right) {
+      return left.name < right.name;
+    });
 }
 
 /** @brief 同步反序列化，只有此步骤的消息格式错误可按单条报告；分配失败直接上抛。 */
@@ -255,10 +263,17 @@ std::optional<Message> deserialize(const RawMessage & raw, std::string & error)
     rclcpp::SerializedMessage serialized(*raw.serialized_data);
     Message message;
     rclcpp::Serialization<Message> decoder;
+    // 一次调用独立消费底层错误状态，成功的类型支持回退也可能留下诊断。
+    if (rcutils_error_is_set()) {rcutils_reset_error();}
     decoder.deserialize_message(&serialized, &message);
+    if (rcutils_error_is_set()) {rcutils_reset_error();}
     return message;
-  } catch (const std::bad_alloc &) {throw;}
-  catch (const std::exception & exception) {error = exception.what();}
+  } catch (const std::bad_alloc &) {
+    throw;
+  } catch (const std::exception & exception) {
+    error = exception.what();
+    rcutils_reset_error();
+  }
   return std::nullopt;
 }
 
@@ -280,7 +295,9 @@ SourceCursor makeCursor(const BagScan & scan)
   for (std::size_t index = 0; index < scan.source_files.size(); ++index) {
     cursor.files.emplace(scan.source_files[index].path, index);
   }
-  for (std::size_t index = 0; index < scan.topics.size(); ++index) {cursor.topics.emplace(scan.topics[index].name, index);}
+  for (std::size_t index = 0; index < scan.topics.size(); ++index) {
+    cursor.topics.emplace(scan.topics[index].name, index);
+  }
   return cursor;
 }
 
@@ -321,7 +338,8 @@ BagMessageRef sourceReference(
 }
 
 /** @brief 添加源关联问题，保留原始字节；问题最终统一写 reports/。 */
-void addIssue(BagScan & scan, const BagMessageRef & source, const std::string & stage,
+void addIssue(
+  BagScan & scan, const BagMessageRef & source, const std::string & stage,
   const std::string & code, const std::string & message)
 {
   scan.issues.push_back({stage, code, message, source.message_id, {}});
@@ -342,7 +360,8 @@ void checkImageOrder(
 }
 
 /** @brief Image 首遍仅保存拥有型布局/身份；无像素转换，失败也保留一条图像记录。 */
-void indexImage(const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
+void indexImage(
+  const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
   const BagBuildOptions & options, std::map<std::string, std::int64_t> & high_water)
 {
   if (scan.images.size() >= options.max_frames) {throw BagBuildError("limit_exceeded", "Image index limit exceeded");}
@@ -359,6 +378,7 @@ void indexImage(const RawMessage & raw, const BagMessageRef & source, BagScan & 
     record.encoding = image->encoding;
     record.step = image->step;
     record.is_bigendian = image->is_bigendian;
+    record.data_bytes = image->data.size();
     checkImageOrder(record, high_water, options);
   }
   scan.images.push_back(std::move(record));
@@ -386,23 +406,27 @@ CameraInfoData rawCameraInfo(const sensor_msgs::msg::CameraInfo & message, const
 }
 
 /** @brief 保存所有标定（包含坏候选）及来源，原始 CDR 已由扫描主循环保存。 */
-void indexCameraInfo(const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
+void indexCameraInfo(
+  const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
   const BagBuildOptions & options, OutputFiles & output)
 {
-  if (scan.calibrations.size() >= options.max_calibrations) {throw BagBuildError("limit_exceeded", "Calibration limit exceeded");}
+  if (scan.calibrations.size() >= options.max_calibrations) {
+    throw BagBuildError("limit_exceeded", "Calibration limit exceeded");
+  }
   std::string error;
   const auto message = deserialize<sensor_msgs::msg::CameraInfo>(raw, error);
   if (!message) {
     addIssue(scan, source, "deserialize", "deserialize_failed", error);
-    throw BagBuildError("unreadable_calibration", "Cannot establish calibration version boundary: " + source.message_id);
+    throw BagBuildError(
+            "unreadable_calibration",
+            "Cannot establish calibration version boundary: " + source.message_id);
   }
   BagCameraInfoRecord record;
   record.source = source;
   auto decoded = decodeRosCameraInfo(*message, source.topic);
   record.validation_code = decoded.code;
   record.validation_message = decoded.message;
-  if (decoded.ok()) {record.data = std::move(*decoded.info);}
-  else {
+  if (decoded.ok()) {record.data = std::move(*decoded.info);} else {
     record.data = rawCameraInfo(*message, source.topic);
     addIssue(scan, source, "camera_info", cameraInfoErrorCodeName(decoded.code), decoded.message);
   }
@@ -411,7 +435,8 @@ void indexCameraInfo(const RawMessage & raw, const BagMessageRef & source, BagSc
 }
 
 /** @brief 原始 TF 条目导出，NaN/Inf 由 JSON 库写 null 并标记；原字节在 CDR。 */
-nlohmann::json transformJson(const BagMessageRef & source, const geometry_msgs::msg::TransformStamped & value,
+nlohmann::json transformJson(
+  const BagMessageRef & source, const geometry_msgs::msg::TransformStamped & value,
   std::size_t index, TfInsertCode code, bool is_static)
 {
   const auto & translation = value.transform.translation;
@@ -419,8 +444,12 @@ nlohmann::json transformJson(const BagMessageRef & source, const geometry_msgs::
   const std::array<double, 3> xyz{translation.x, translation.y, translation.z};
   const std::array<double, 4> xyzw{rotation.x, rotation.y, rotation.z, rotation.w};
   bool nonfinite = false;
-  for (const auto number : xyz) {nonfinite = nonfinite || !std::isfinite(number);}
-  for (const auto number : xyzw) {nonfinite = nonfinite || !std::isfinite(number);}
+  for (const auto number : xyz) {
+    nonfinite = nonfinite || !std::isfinite(number);
+  }
+  for (const auto number : xyzw) {
+    nonfinite = nonfinite || !std::isfinite(number);
+  }
   return {{"source", sourceJson(source)}, {"transform_index", index}, {"static", is_static},
     {"stamp", stampJson({value.header.stamp.sec, value.header.stamp.nanosec})},
     {"parent_frame", value.header.frame_id}, {"child_frame", value.child_frame_id},
@@ -429,7 +458,8 @@ nlohmann::json transformJson(const BagMessageRef & source, const geometry_msgs::
 }
 
 /** @brief 复用已有 TF 适配和冲突规则，逐条输出状态；资源失败不能按坏帧忽略。 */
-void indexTf(const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
+void indexTf(
+  const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
   const BagBuildOptions & options, OutputFiles & output)
 {
   std::string error;
@@ -441,7 +471,8 @@ void indexTf(const RawMessage & raw, const BagMessageRef & source, BagScan & sca
     throw BagBuildError("limit_exceeded", "Raw TF entry limit exceeded");
   }
   scan.tf_entries += message->transforms.size();
-  const auto report = ingestRosTf(scan.tf_index, *message, source.topic, source.message_id,
+  const auto report = ingestRosTf(
+    scan.tf_index, *message, source.topic, source.message_id,
     {options.tf_topic, options.tf_static_topic});
   scan.tf_inserted += report.inserted;
   scan.tf_duplicates += report.duplicates;
@@ -453,8 +484,10 @@ void indexTf(const RawMessage & raw, const BagMessageRef & source, BagScan & sca
     throw BagBuildError("tf_adapter_error", "TF adapter did not process the complete message");
   }
   for (std::size_t index = 0; index < message->transforms.size(); ++index) {
-    writeJsonLine(output, "tf.jsonl", transformJson(source, message->transforms[index], index,
-      report.entry_codes[index], source.topic == options.tf_static_topic));
+    writeJsonLine(
+      output, "tf.jsonl", transformJson(
+        source, message->transforms[index], index,
+        report.entry_codes[index], source.topic == options.tf_static_topic));
   }
 }
 
@@ -495,19 +528,30 @@ void checkSameSource(const BagMessageRef & expected, const BagMessageRef & actua
   }
 }
 
+/** @brief 跨阶段快速核对大小/日志/metadata；最终再用完整 SHA 校验所有字节。 */
+void checkSourceStats(const BagBuildOptions & options, const BagScan & scan)
+{
+  for (const auto & file : scan.source_files) {
+    rejectActiveSqlite(file.path);
+    if (!fs::is_regular_file(file.path) || fs::file_size(file.path) != file.bytes) {
+      throw BagBuildError("source_changed", "Input storage file size changed");
+    }
+  }
+  if (!scan.metadata_sha256.empty() &&
+    fileDigest(fs::path(options.bag_uri) / "metadata.yaml") != scan.metadata_sha256)
+  {
+    throw BagBuildError("source_changed", "Input metadata changed");
+  }
+}
+
 }  // namespace
 
 /** @brief 输入不变检查包含整个主库和 metadata，活动 journal 不属于可消费输入。 */
 void verifyBagSources(const BagBuildOptions & options, const BagScan & scan)
 {
+  checkSourceStats(options, scan);
   for (const auto & file : scan.source_files) {
-    rejectActiveSqlite(file.path);
-    if (!fs::is_regular_file(file.path) || fs::file_size(file.path) != file.bytes || fileDigest(file.path) != file.sha256) {
-      throw BagBuildError("source_changed", "Input storage file changed");
-    }
-  }
-  if (!scan.metadata_sha256.empty() && fileDigest(fs::path(options.bag_uri) / "metadata.yaml") != scan.metadata_sha256) {
-    throw BagBuildError("source_changed", "Input metadata changed");
+    if (fileDigest(file.path) != file.sha256) {throw BagBuildError("source_changed", "Input storage file changed");}
   }
 }
 
@@ -517,11 +561,18 @@ BagScan scanBag(const BagBuildOptions & options, OutputFiles & output)
   const auto errors = validateBagBuildOptions(options);
   if (!errors.empty()) {throw BagBuildError("invalid_config", errors.front());}
   checkInput(options);
+  std::string metadata_before_open;
+  if (fs::is_directory(options.bag_uri)) {
+    metadata_before_open = fileDigest(fs::path(options.bag_uri) / "metadata.yaml");
+  }
   auto reader = makeReader();
   openReader(options, reader);
   BagScan scan;
   scan.tf_index = TfIndex({options.clock_id, options.segment_id}, options.tf_limits);
   inspectSources(options, reader, scan);
+  if (metadata_before_open != scan.metadata_sha256) {
+    throw BagBuildError("source_changed", "Metadata changed while opening");
+  }
   inspectTopics(options, reader, scan);
   scanMessages(options, reader, scan, output);
   reader.close();
@@ -533,7 +584,7 @@ BagScan scanBag(const BagBuildOptions & options, OutputFiles & output)
 void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer)
 {
   if (!consumer) {throw BagBuildError("invalid_consumer", "Image consumer is required");}
-  verifyBagSources(options, scan);
+  checkSourceStats(options, scan);
   auto reader = makeReader();
   openReader(options, reader);
   auto cursor = makeCursor(scan);

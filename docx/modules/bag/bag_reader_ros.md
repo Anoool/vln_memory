@@ -21,3 +21,5 @@ verifyBagSources(options, scan) → void：复核 SHA-256、字节数、metadata
 绑定缺失/类型错误、缺分卷、压缩/非 SQLite、超限、声明计数不符或来源改变均拒绝。坏 Image 可保留并继续；无法反序列化 CameraInfo/TF 时版本/历史边界不可信，整次失败。图像回退超过 max_header_reorder_ns 失败，不自动跨 epoch 排序。
 
 第一遍仍完整反序列化 Image，临时有 data 分配；整体是两遍顺序 I/O，源文件指纹有额外读取成本。无真实设备录包验收承诺，磁盘测试用官方 Writer 构造。
+
+框架审查后源文件完整 SHA-256 读取保留在初始身份、首遍结束、第二遍结束三处；第二遍开始用大小/日志/metadata 快检，过程中逐消息核对内容摘要。删除重复的整包 SHA 扫描，未降低最终完整输入校验。

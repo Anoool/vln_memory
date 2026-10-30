@@ -258,8 +258,9 @@ TfMessageReport ingestRosTf(
 | 返回 code | processed / invalid_binding / unexpected_topic / missing_message_id |
 | inserted,duplicates | size_t，本消息的插入、重复数 |
 | issues | vector<TfMessageIssue>；每项 transform_index、TfInsertCode code、message |
+| entry_codes | vector<TfInsertCode>；按原 transforms 顺序保存每条插入/重复/拒绝 |
 
-code=processed 可以有 issues，只有 ok() 才表示所有条目通过。消息允许部分成功，不是整包事务回滚；调用方不得忽略 issues。空消息是零条处理，不生成坐标边。完整话题类型校验/反序列化仍由未来 bag reader 负责。
+code=processed 可以有 issues，只有 ok() 才表示所有条目通过。消息允许部分成功，不是整包事务回滚；调用方不得忽略 issues。空消息是零条处理，不生成坐标边。完整话题类型校验/反序列化由 builder 的实际 bag reader 负责，TF 适配本身仍不打开 bag。
 
 ## 9. 名称转换接口
 
@@ -276,11 +277,11 @@ code=processed 可以有 issues，只有 ok() 才表示所有条目通过。消�
 
 ## 10. 跨模块引用顺序与尚缺接口
 
-当前可以手工组合：解码 RGB/Depth → checkSensorTimes → checkDepthRgbAlignment → 解码并核对每张图的 CameraInfo → TfIndex::checkTime 分别检查 RGB/Depth 原始时刻。核查时的四模块串联已运行通过，但仍然只是内存数据和样本依据。
+仍可手工组合四模块；现在 buildBag 已自动完成 bag 读取、时间配对、两图各自标定选择/TF 原时刻检查、媒体和 preparation JSONL。详细流程见 [实际 BagBuilder 接口](bag_builder_api.md)。
 
-完整 Observation 还要增加：bag 元数据/类型检查和反序列化、自动同步/标定版本选择、TF 数值插值/求逆/组合、质量门控、关键帧选择、媒体与 JSONL 保存、来源和恢复状态。这些接口目前不存在，不能调用假定的 BagBuilder::build 或 ObservationWriter。
+完整 Observation 仍缺 TF 数值插值/求逆/组合、有效投影模型、关键帧及正式观测组装；断点恢复也未实现。已有入口为 buildBag 函数，不存在假定的 BagBuilder::build 类方法或 ObservationWriter。
 
-缺空 frame/全无效深度/未知时钟/未满足标定或 TF 等情况，要由未来组装层分配 pending 与质量状态，不得只检查解码 ok() 就发布可定位观测。当前每条图像没有 topic/bag_message_id 通用来源封装，也没有跨模块 clock/map 上下文类型；builder 需要统一维护这些信息。
+builder 已为坏帧、无效深度/标定/TF 等分配 pending 与质量状态；未知时钟配置不能进行关联。单帧 RgbFrame/DepthFrame 本身仍不携带来源，BagMessageRef 统一维护 topic/message_id，BagBuildOptions 维护 clock/segment。map_id/geometry_revision 与正式观测几何仍需下一阶段落实，不能只凭解码 ok() 发布可定位观测。
 
 ## 11. 下游构建与最小调用示例
 
