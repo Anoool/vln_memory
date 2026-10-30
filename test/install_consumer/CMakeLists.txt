@@ -32,3 +32,6 @@ if(TARGET vln_memory::vln_memory_tf_ros)
   add_executable(tf_ros_consumer tf_ros_consumer.cpp)
   target_link_libraries(tf_ros_consumer PRIVATE vln_memory::vln_memory_tf_ros)
 endif()
+
+add_executable(rgbd_sync_consumer rgbd_sync_consumer.cpp)
+target_link_libraries(rgbd_sync_consumer PRIVATE vln_memory::vln_memory_rgbd_sync)

@@ -48,8 +48,15 @@ target_include_directories(vln_memory_tf PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_tf PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+# 无 ROS 的配对核心，前四传感器模块不反向依赖 builder。
+add_library(vln_memory_rgbd_sync SHARED src/bag/builder/rgbd_sync.cpp)
+add_library(vln_memory::vln_memory_rgbd_sync ALIAS vln_memory_rgbd_sync)
+target_link_libraries(vln_memory_rgbd_sync PUBLIC vln_memory_sensor_time)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_rgbd_sync PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 set(memory_export_targets vln_memory_rgb vln_memory_depth
-  vln_memory_sensor_time vln_memory_camera_info vln_memory_tf)
+  vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync)
 
 if(VLN_MEMORY_ENABLE_ROS)
   find_package(ament_cmake REQUIRED)
@@ -91,6 +98,9 @@ endif()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_rgbd_sync test/bag/builder/test_rgbd_sync.cpp)
+  target_link_libraries(test_rgbd_sync PRIVATE vln_memory_rgbd_sync)
+  add_test(NAME rgbd_sync_core COMMAND test_rgbd_sync)
   add_executable(test_sensor_names test/bag/common/test_sensor_names.cpp)
   target_compile_features(test_sensor_names PRIVATE cxx_std_17)
   target_include_directories(test_sensor_names PRIVATE include)
@@ -140,6 +150,8 @@ install(FILES include/vln_memory/bag/common/sensor_types.hpp
   include/vln_memory/bag/common/sensor_time.hpp
   include/vln_memory/bag/common/sensor_names.hpp
   DESTINATION include/vln_memory/bag/common)
+install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
+  DESTINATION include/vln_memory/bag/builder)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)
 install(FILES include/vln_memory/bag/depth/depth.hpp

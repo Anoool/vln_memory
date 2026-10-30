@@ -5,8 +5,9 @@
 | 内容 | 入口 |
 | --- | --- |
 | 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
+| RGB-D 时间配对核心与真实接口 | [rgbd_sync](modules/bag/rgbd_sync.md) |
 | BagBuilder：rosbag 读取、五模块整合及分步验收方案（待审阅） | [整合方案](project/rosbag_integration_plan.md) |
-| RGB-D 自动时间配对的分步方案（待实现） | [配对方案](project/rgbd_sync_plan.md) |
+| RGB-D 自动时间配对的分步方案与实施依据 | [配对方案](project/rgbd_sync_plan.md) |
 | 当前问题修复、注释改进与验证 | [修复实施记录](project/sensor_validation_comments_plan.md) |
 | 统一的已解析话题名称规则 | [sensor_names](common/sensor_names.md) |
 | 当前真实能力、缺口与逐模块核查结果 | [源码核查报告](reviews/observation_preparation_audit.md) |
