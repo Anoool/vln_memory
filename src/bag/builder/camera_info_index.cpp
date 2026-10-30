@@ -1,4 +1,4 @@
-#include "vln_memory/bag/builder/camera_info_index.hpp"
+#include <vln_memory/bag/builder/camera_info_index.hpp>
 
 #include <algorithm>
 #include <cmath>

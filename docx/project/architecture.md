@@ -10,13 +10,21 @@ include/vln_memory/bag/
 ├── rgb/{rgb,rgb_ros}.hpp
 ├── depth/{depth,depth_ros}.hpp
 ├── camera_info/{camera_info,camera_info_ros}.hpp
-└── tf/{tf,tf_ros}.hpp
+├── tf/{tf,tf_ros}.hpp
+└── builder/
+    ├── bag_{builder,config,reader_ros,types}.hpp
+    ├── {rgbd_sync,camera_info_index,image_decoder_ros}.hpp
+    └── {media_writer,jsonl_writer}.hpp
 src/bag/
 ├── common/sensor_time.cpp
 ├── rgb/{rgb,rgb_ros}.cpp
 ├── depth/{depth,depth_ros}.cpp
 ├── camera_info/{camera_info,camera_info_ros}.cpp
-└── tf/{tf,tf_ros}.cpp
+├── tf/{tf,tf_ros}.cpp
+└── builder/
+    ├── bag_{builder,config,reader_ros}.cpp
+    ├── {rgbd_sync,camera_info_index,image_decoder_ros}.cpp
+    └── {media_writer,jsonl_writer}.cpp
 test/
 ├── bag/common/test_sensor_time.cpp
 ├── bag/rgb/{test_rgb,test_rgb_ros}.cpp
@@ -27,6 +35,7 @@ test/
 ```
 
 - include、src、模块测试按“层/模块”对应，头文件安装后保留同样路径。
+- 公共头写 `<vln_memory/bag/...>`，实际相对 `include/` 搜索根；每个库直接声明该根。详见 [路径说明](header_include_paths.md)。
 - bag/common 放观测准备层共用类型和无 ROS 时间检查；不放相机业务、ROS 订阅或未来实体类型。
 - 本层已添加 bag/builder；最后一个是 bag 读取和准备组装入口，避免 bag/bag 的重复含义。
 - 原文第 1、2 部分要求的记忆、构建和 Viewer 在真实实现时才添加同级目录；独立在线查询 plugins 暂不开发，不提前生成空类。

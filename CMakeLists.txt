@@ -4,33 +4,21 @@ project(vln_memory VERSION 0.1.0 LANGUAGES CXX)
 # 默认作为 ROS 2 包构建；关闭后可独立验证 RGB/Depth/CameraInfo/TF 核心。
 option(VLN_MEMORY_ENABLE_ROS "Build the ROS 2 sensor adapters and ament package" ON)
 
-# 核心库公开 C++17 和头文件路径，使下游只链接目标即可使用接口。
+# 核心库和实际实现依赖；公共 C++17/头搜索根在全部库定义后统一直接设置。
 add_library(vln_memory_rgb SHARED src/bag/rgb/rgb.cpp)
 add_library(vln_memory::vln_memory_rgb ALIAS vln_memory_rgb)
-target_compile_features(vln_memory_rgb PUBLIC cxx_std_17)
-target_include_directories(vln_memory_rgb PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_rgb PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 # Depth 只依赖共享数据类型，不链接 RGB 实现；bag 层以后组合两种输出。
 add_library(vln_memory_depth SHARED src/bag/depth/depth.cpp)
 add_library(vln_memory::vln_memory_depth ALIAS vln_memory_depth)
-target_compile_features(vln_memory_depth PUBLIC cxx_std_17)
-target_include_directories(vln_memory_depth PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_depth PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 # 时间检查可独立给 RGB-D/TF 配对调用，CameraInfo 公开传递这个依赖。
 add_library(vln_memory_sensor_time SHARED src/bag/common/sensor_time.cpp)
 add_library(vln_memory::vln_memory_sensor_time ALIAS vln_memory_sensor_time)
-target_compile_features(vln_memory_sensor_time PUBLIC cxx_std_17)
-target_include_directories(vln_memory_sensor_time PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
 add_library(vln_memory_camera_info SHARED src/bag/camera_info/camera_info.cpp)
 add_library(vln_memory::vln_memory_camera_info ALIAS vln_memory_camera_info)
 target_link_libraries(vln_memory_camera_info PUBLIC vln_memory_sensor_time)
@@ -41,10 +29,6 @@ endif()
 # TF 索引只使用公共数据类型，保持无 ROS、无几何求解依赖。
 add_library(vln_memory_tf SHARED src/bag/tf/tf.cpp)
 add_library(vln_memory::vln_memory_tf ALIAS vln_memory_tf)
-target_compile_features(vln_memory_tf PUBLIC cxx_std_17)
-target_include_directories(vln_memory_tf PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_tf PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -141,6 +125,17 @@ if(VLN_MEMORY_ENABLE_ROS)
     vln_memory_camera_info_ros vln_memory_tf_ros)
 endif()
 
+# 每个实际库直接声明自己的公共头搜索根，不依赖其他库间接提供本包 include。
+# 例如 <vln_memory/bag/rgb/rgb.hpp> 对应源码 include/vln_memory/bag/rgb/rgb.hpp。
+# BUILD_INTERFACE 是当前编译的 -I；INSTALL_INTERFACE 相对安装前缀，供下游使用。
+# 此处只声明头路径/C++ 标准，真正的实现依赖仍由各 target_link_libraries 保留。
+foreach(memory_target IN LISTS memory_export_targets)
+  target_compile_features(${memory_target} PUBLIC cxx_std_17)
+  target_include_directories(${memory_target} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+endforeach()
+
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
@@ -152,7 +147,7 @@ if(BUILD_TESTING)
   add_test(NAME rgbd_sync_core COMMAND test_rgbd_sync)
   add_executable(test_sensor_names test/bag/common/test_sensor_names.cpp)
   target_compile_features(test_sensor_names PRIVATE cxx_std_17)
-  target_include_directories(test_sensor_names PRIVATE include)
+  target_include_directories(test_sensor_names PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   add_test(NAME sensor_names_core COMMAND test_sensor_names)
   add_executable(test_rgb test/bag/rgb/test_rgb.cpp)
   target_link_libraries(test_rgb PRIVATE vln_memory_rgb)

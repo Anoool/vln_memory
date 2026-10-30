@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "vln_memory/bag/common/sensor_time.hpp"
+#include <vln_memory/bag/common/sensor_time.hpp>
 
 /**
  * @file

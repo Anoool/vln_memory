@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vln_memory/bag/builder/bag_config.hpp"
+#include <vln_memory/bag/builder/bag_config.hpp>
 
 namespace vln_memory
 {

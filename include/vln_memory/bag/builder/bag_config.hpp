@@ -5,11 +5,11 @@
 #include <string>
 #include <vector>
 
-#include "vln_memory/bag/builder/bag_types.hpp"
-#include "vln_memory/bag/camera_info/camera_info.hpp"
-#include "vln_memory/bag/depth/depth.hpp"
-#include "vln_memory/bag/rgb/rgb.hpp"
-#include "vln_memory/bag/tf/tf.hpp"
+#include <vln_memory/bag/builder/bag_types.hpp>
+#include <vln_memory/bag/camera_info/camera_info.hpp>
+#include <vln_memory/bag/depth/depth.hpp>
+#include <vln_memory/bag/rgb/rgb.hpp>
+#include <vln_memory/bag/tf/tf.hpp>
 
 namespace vln_memory
 {

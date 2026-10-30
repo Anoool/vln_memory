@@ -23,6 +23,7 @@
 | 原设计第 1、2 部分的收敛实施规划 | [系统整体规划](project/system_plan.md) |
 | 当前观测准备层、源码分类与开发/Git 约定 | [当前架构](project/architecture.md) |
 | 构建目标、安装与导出 | [CMakeLists 说明](project/CMakeLists.md) |
+| 公共头实际位置、include 搜索根及独立编译验证 | [头文件路径说明](project/header_include_paths.md) |
 | 采样时间与图像网格 | [共享数据类型](common/sensor_types.md) |
 | RGB 输入输出、错误码、分步审阅、示例与验证 | [RGB 核心](modules/rgb/rgb.md) |
 | ROS Image 怎样接入 RGB | [RGB ROS 适配](modules/rgb/rgb_ros.md) |

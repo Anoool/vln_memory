@@ -1,4 +1,4 @@
-#include "vln_memory/bag/camera_info/camera_info.hpp"
+#include <vln_memory/bag/camera_info/camera_info.hpp>
 
 #include <iostream>
 #include <limits>

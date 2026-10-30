@@ -7,7 +7,7 @@
 #include <vector>
 #include <utility>
 
-#include "vln_memory/bag/common/sensor_types.hpp"
+#include <vln_memory/bag/common/sensor_types.hpp>
 
 namespace vln_memory
 {

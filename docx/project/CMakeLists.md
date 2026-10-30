@@ -1,6 +1,6 @@
 # CMakeLists.txt：观测准备层构建与导出
 
-当前新增目标与安装/测试数量以文末“BagBuilder 第一版”小节为准；前面保留各模块引入时的阶段记录。
+当前公共头路径配置以文末“2026-10-31 统一公共头搜索根”小节为准；前面保留各模块引入时的阶段记录。
 ## 实施前规划与自审
 
 builder 尚未生成空目标。当前建立独立 RGB/Depth/CameraInfo/TF 核心、公共时间检查及各自 ROS 适配。两条构建路径复用同一核心源文件和测试，避免出现测试版本与正式版本行为不同。
@@ -78,3 +78,22 @@ vln_memory::vln_memory_tf 显式公开 C++17/include，不依赖 ROS；vln_memor
 ## 零容差压缩输入接入
 
 ROS builder 新增 image_decoder_ros.cpp，使用 cv_bridge 和 compressed_depth_image_transport。Humble 2.5.5 未导出 codec 链接 target，从其已找到的包前缀定位头/库，不写死 /opt/ros/humble。新增 image_decoder_ros 测试，公开新头并验证安装后消费者；无 ROS 核心目标不增加这些依赖。
+
+## 2026-10-31 统一公共头搜索根
+
+所有实际库在 memory_export_targets 清单内逐一直接声明以下属性，不再仅依赖另一个库间接提供本包头文件路径：
+
+```cmake
+foreach(memory_target IN LISTS memory_export_targets)
+  target_compile_features(${memory_target} PUBLIC cxx_std_17)
+  target_include_directories(${memory_target} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+endforeach()
+```
+
+例如 `<vln_memory/bag/builder/bag_builder.hpp>` 实际查找 `<仓库>/include/vln_memory/bag/builder/bag_builder.hpp`，安装后查找 `<prefix>/include/vln_memory/bag/builder/bag_builder.hpp`。cpp 所在 src/bag 不是头文件搜索根。
+
+PUBLIC 同时供本库编译和下游使用；target_link_libraries 继续保留真实实现依赖。没有把头复制到 src，也没有将引用改成 include/vln_memory 或跨目录 ../。
+
+详细路径对应、人工编译和验证见 [头文件搜索说明](header_include_paths.md)。导出的函数、库目标、安装结构和零容差行为不变。

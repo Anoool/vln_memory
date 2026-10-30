@@ -1,4 +1,4 @@
-#include "vln_memory/bag/builder/bag_config.hpp"
+#include <vln_memory/bag/builder/bag_config.hpp>
 
 #include <charconv>
 #include <cmath>
@@ -7,7 +7,7 @@
 #include <utility>
 #include <yaml-cpp/yaml.h>
 
-#include "vln_memory/bag/common/sensor_names.hpp"
+#include <vln_memory/bag/common/sensor_names.hpp>
 
 namespace vln_memory
 {

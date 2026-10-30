@@ -45,4 +45,31 @@
 
 ## 验证结果
 
-待本轮构建、测试与安装消费完成后填写。
+已完成：
+
+- 80 处公共 include 在 51 个 C++ 文件中统一为尖括号；逐文件与修改前比较，除该语法外正文完全一致。原函数签名、处理算法与零容差逻辑不变。
+- 91 处公共头引用全部能映射到真实 include/vln_memory/... 文件；源码 src 下没有重复头。
+- 实际编译数据库中，17 个库源码编译项都有仓库 include 根；10 个 ROS 安装消费者使用安装前缀/include，不含源码 include 根。
+- 编译器实际依赖文件确认 bag_builder.cpp 包含的是 /home/dev/agent/vln_memory/include/vln_memory/bag/builder/bag_builder.hpp。
+- 直接执行 g++ -I<仓库>/include 编译配对核心和现有测试，不通过 CMake，600 个参考算法案例及边界检查通过。
+- ROS 构建与 15/15 CTest 通过；安装后的 10 个独立消费者全部编译并运行通过。
+- 全新无 ROS 构建 8/8 CTest，安装后的 6 个独立消费者通过；临时构建/安装目录已自动清理。
+
+证据位于 build/rgbd-strict-20261030/header_include_verification.json、header_ros_build.log、header_core_verification.log、header_consumer_build.log。ROS 编译数据库为 build/rgbd-strict-ros/compile_commands.json，编辑器可使用真实编译参数解析头文件。
+
+本轮没有重新生成真实 bag 媒体，也没有恢复已清理的大型数据。使用 codex/explicit-header-paths 分支，原功能和清理提交保留，不自动合并。
+
+## 对照示例
+
+```cpp
+#include <vln_memory/bag/builder/bag_builder.hpp>
+```
+
+```cmake
+# 每个实际库都直接获得自己的根目录，既用于本库也传递给下游。
+target_include_directories(your_target PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+```
+
+上面的 your_target 是解释性示例；实际 CMake 使用 memory_export_targets 循环对每个库设置同样属性，未新增中间目标或更改安装树。

@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-#include "vln_memory/bag/builder/bag_types.hpp"
-#include "vln_memory/bag/camera_info/camera_info.hpp"
+#include <vln_memory/bag/builder/bag_types.hpp>
+#include <vln_memory/bag/camera_info/camera_info.hpp>
 
 namespace vln_memory
 {

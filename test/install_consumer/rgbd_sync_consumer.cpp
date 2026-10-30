@@ -1,4 +1,4 @@
-#include "vln_memory/bag/builder/rgbd_sync.hpp"
+#include <vln_memory/bag/builder/rgbd_sync.hpp>
 
 /** @brief 只通过安装后的接口验证配对目标和时间依赖传递。 */
 int main()

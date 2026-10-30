@@ -25,6 +25,8 @@ RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测
 
 TF 位于本层 tf，bag 读取与准备组装位于 builder，薄入口位于 src/apps。其他系统层暂不生成空目录。
 
+公共头的 `vln_memory/bag/...` 相对编译器的 `include/` 搜索根，实际位于 `include/vln_memory/bag/...`，不表示头文件位于 src/bag。所有库直接声明源码/安装后的搜索根，解释与验证见 [头文件路径说明](docx/project/header_include_paths.md)。
+
 ## BagBuilder 零容差版本运行
 
 先修改 [config/vln_memory.yaml](config/vln_memory.yaml) 的真实话题、光学 frame、深度单位/注册及同钟分段依据。第一版只支持一个明确段的未压缩 SQLite ROS 2 bag；目录读取 metadata 的全部分卷，单独 .db3 明确标记单文件范围。

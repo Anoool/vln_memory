@@ -1,4 +1,4 @@
-#include "vln_memory/bag/camera_info/camera_info_ros.hpp"
+#include <vln_memory/bag/camera_info/camera_info_ros.hpp>
 
 #include <iostream>
 #include <string>

@@ -2,7 +2,7 @@
 
 #include <sensor_msgs/msg/image.hpp>
 
-#include "vln_memory/bag/depth/depth.hpp"
+#include <vln_memory/bag/depth/depth.hpp>
 
 /**
  * @file

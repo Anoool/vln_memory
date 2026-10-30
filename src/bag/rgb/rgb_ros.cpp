@@ -1,4 +1,4 @@
-#include "vln_memory/bag/rgb/rgb_ros.hpp"
+#include <vln_memory/bag/rgb/rgb_ros.hpp>
 
 /**
  * @file

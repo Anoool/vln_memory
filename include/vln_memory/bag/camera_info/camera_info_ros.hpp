@@ -3,7 +3,7 @@
 #include <string_view>
 #include <sensor_msgs/msg/camera_info.hpp>
 
-#include "vln_memory/bag/camera_info/camera_info.hpp"
+#include <vln_memory/bag/camera_info/camera_info.hpp>
 
 /**
  * @file

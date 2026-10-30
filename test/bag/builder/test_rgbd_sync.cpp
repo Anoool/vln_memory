@@ -1,4 +1,4 @@
-#include "vln_memory/bag/builder/rgbd_sync.hpp"
+#include <vln_memory/bag/builder/rgbd_sync.hpp>
 
 #include <algorithm>
 #include <iostream>

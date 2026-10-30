@@ -1,4 +1,4 @@
-#include "vln_memory/bag/builder/image_decoder_ros.hpp"
+#include <vln_memory/bag/builder/image_decoder_ros.hpp>
 
 #include <algorithm>
 #include <array>
