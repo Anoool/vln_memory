@@ -94,12 +94,78 @@ def check_dataset(root):
     assert summary["valid_time_depth"] == summary["pairs"] + summary["unused_depth"]
 
 
+def check_nearest_dataset(root):
+    """Recompute signed deltas and uniqueness from original CDR and exported frames."""
+    import struct
+    messages = {}
+    for message in read_lines(root / "messages.jsonl"):
+        messages[message["message_id"]] = message
+    frames = {}
+    for frame in read_lines(root / "frames.jsonl"):
+        message_id = frame["source"]["message_id"]
+        frames[message_id] = frame
+        if frame["metadata_available"]:
+            raw = (root / messages[message_id]["raw_path"]).read_bytes()
+            # ROS CDR encapsulation precedes Header stamp; support recorded byte order.
+            endian = ">"
+            if raw[1] & 1:
+                endian = "<"
+            sec, nanosec = struct.unpack_from(endian + "iI", raw, 4)
+            assert frame["stamp"] == {"sec": sec, "nanosec": nanosec}
+            if "map_camera_tf" in frame:
+                assert frame["map_camera_tf"]["stamp"] == frame["stamp"]
+    check_pair_times(root, frames)
+
+
+def check_pair_times(root, frames):
+    """Check unique pairs, signed deltas, actual equality and report conservation."""
+    used_rgb = set()
+    used_depth = set()
+    summary = read_json(root / "reports/summary.json")
+    tolerance_ns = int(summary["sync_tolerance_ns"])
+    count = 0
+    exact_count = 0
+    max_abs_delta = 0
+    for pair in read_lines(root / "rgbd_pairs.jsonl"):
+        rgb_id = pair["rgb_message_id"]
+        depth_id = pair["depth_message_id"]
+        assert rgb_id not in used_rgb and depth_id not in used_depth
+        used_rgb.add(rgb_id)
+        used_depth.add(depth_id)
+        assert pair["rgb_stamp"] == frames[rgb_id]["stamp"]
+        assert pair["depth_stamp"] == frames[depth_id]["stamp"]
+        rgb_ns = pair["rgb_stamp"]["sec"] * 1000000000 + pair["rgb_stamp"]["nanosec"]
+        depth_ns = pair["depth_stamp"]["sec"] * 1000000000 + pair["depth_stamp"]["nanosec"]
+        delta_ns = depth_ns - rgb_ns
+        assert int(pair["delta_ns"]) == delta_ns
+        assert abs(delta_ns) <= tolerance_ns
+        assert pair["exact"] == (delta_ns == 0)
+        assert pair["sync_tolerance_ns"] == str(tolerance_ns)
+        assert pair["policy"] == summary["timestamp_match_policy"]
+        assert pair["capture_sync_status"] == "unknown"
+        max_abs_delta = max(max_abs_delta, abs(delta_ns))
+        count += 1
+        if delta_ns == 0:
+            exact_count += 1
+    assert summary["pairs"] == count
+    assert summary["exact_pairs"] == exact_count
+    assert summary["approximate_pairs"] == count - exact_count
+    assert int(summary["max_abs_delta_ns"]) == max_abs_delta
+    assert summary["valid_time_rgb"] == count + summary["unmatched_rgb"]
+    assert summary["valid_time_depth"] == count + summary["unused_depth"]
+
+
 def main():
     """Find the latest C++ fixture, verify it, then compare two deterministic exports."""
     parent = Path(sys.argv[1])
     root = Path((parent / "latest.txt").read_text().strip())
     check_dataset(root / "normal_out")
     check_dataset(root / "repeat_out")
+    for prefix in ("near_raw", "near_compressed"):
+        for tolerance_ns in (0, 1, 2):
+            check_nearest_dataset(root / f"{prefix}_{tolerance_ns}_out")
+    check_nearest_dataset(root / "nearest_exact_out")
+    check_nearest_dataset(root / "nearest_empty_out")
     first_files = sorted((root / "normal_out").rglob("*"))
     for path in first_files:
         if path.is_file():

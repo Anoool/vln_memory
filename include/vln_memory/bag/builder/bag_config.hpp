@@ -30,7 +30,7 @@ struct BagBuildOptions
   SensorClockRelation clock_relation{SensorClockRelation::unknown};
   std::string map_frame{"map"};
   std::string body_frame{"base_link"};
-  // BagBuilder 只允许 0；保留字段便于读取旧配置，非零在启动前明确拒绝。
+  // 非负整数纳秒；0 为严格匹配，正值为最近候选的最大允许时差，不改写原始时间。
   std::int64_t sync_tolerance_ns{0};
   std::int64_t tf_max_gap_ns{0};
   std::int64_t max_header_reorder_ns{0};

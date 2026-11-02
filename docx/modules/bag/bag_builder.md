@@ -22,8 +22,12 @@
 
 审查更新：坏帧及数值质量不通过会有独立 pending 行；文件发布用 Linux renameat2(RENAME_NOREPLACE)，即使并发出现空目录也拒绝覆盖。numeric_quality_passed 不表示标定/TF/物理注册已经通过。
 
-## 零容差版本
+## 可配置最近配对（builder_version=3）
 
-配置和 C++ API 只接受 sync_tolerance_ns=0；synchronize 固定传 0，并检查所有返回对均精确。writePairs 的 exact=true、delta_ns="0"，策略为 exact_header_one_to_one_v1；schema 仍为 bag_preparation/1，manifest builder_version=2。
+synchronize 将 sync_tolerance_ns 传入已有 pairRgbDepth，检查最大绝对差不超过门限；0 模式额外检查严格不变量。writePairs 按 delta_ns==0 填 exact，并保存 policy、sync_tolerance_ns、两个原始 stamp。RGB 是索引参考，两图标定/TF 分别查询自身时刻。
 
-原始/压缩两种图像都复用既有核心；坏压缩体保留 header 及错误，未配对媒体仍导出。timestamp_match_status 与 capture_sync_status 分别表示消息匹配和采集证据，后者当前保持 unknown。零配对完整提取会附 no_exact_rgbd_pairs，不能当作可用 RGB-D 数据集。详见 [验收](../../reviews/rgbd_zero_tolerance_verification.md)。
+0 策略为 exact_header_one_to_one_v1，正门限为 rgb_reference_monotonic_nearest_one_to_one_v1；后者不保证全局最优，实际相等的一对仍 exact=true。summary/manifest/CLI 共用策略名接口，JSON schema 仍为 bag_preparation/1。
+
+empty_stream/partial/all_paired 仅说明有效时间索引覆盖；无对时零模式为 no_exact_pairs/问题 no_exact_rgbd_pairs，正门限为 no_pairs/问题 no_rgbd_pairs。capture_sync_status 保持 unknown。prepared_for_geometry 仍未计算数值位姿或运动补偿，也不证明曝光同步。
+
+两种图像均逐帧转换，坏帧不改配，未配对媒体仍保存。当前与历史结果见 [最近配对](../../reviews/rgbd_nearest_pairing_verification.md)、[历史零容差](../../reviews/rgbd_zero_tolerance_verification.md)。

@@ -19,6 +19,10 @@ ros2 run vln_memory bag_builder --config /absolute/path/vln_memory.yaml \
 
 命令存在 rosbag2 日志，不能把全部 stdout 当一份纯 JSON。C++/其他模块应直接调用 buildBag 或读取文件契约。
 
-## 零容差版本输出
+## 时间配对输出
 
-CLI JSON 增加 timestamp_match_policy=exact_header_one_to_one_v1、timestamp_match_status、capture_sync_status=unknown。no_exact_pairs 表示没有相等 header 的对；exit 0 仍仅代表提取完整发布，可带问题。非零 RGB-D 容差在 YAML 加载时拒绝，不会悄悄改成 0 或近似配对。
+CLI 根据配置输出 timestamp_match_policy 和十进制字符串 sync_tolerance_ns：0 为 exact_header_one_to_one_v1，正值为 rgb_reference_monotonic_nearest_one_to_one_v1。no_exact_pairs 仅用于零门限无对，no_pairs 用于正门限无对；capture_sync_status 保持 unknown。
+
+YAML 的 sync_tolerance_ns: 30000000 允许至多 30 ms（含边界）的最近候选，改 0 恢复严格。exit 0 只表示完整发布，应检查实际对数、delta 和问题报告。
+
+colcon 环境按上例加载 install/setup.bash。直接 cmake --install 的独立前缀运行可执行文件时，需另将其 lib 加入 LD_LIBRARY_PATH，或使用构建目录的可执行文件。

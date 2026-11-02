@@ -115,23 +115,29 @@ RgbdSyncReport synchronize(const BagBuildOptions & options, const BagScan & scan
   RgbdSyncOptions sync;
   sync.clock_relation = options.clock_relation;
   sync.clock_basis = options.clock_basis;
-  sync.max_delta_ns = 0;  // 产品约束：只筛选原始 header 完全相等的两帧，不自动降级。
+  sync.max_delta_ns = options.sync_tolerance_ns;  // 显式门限；只选择来源，不修改两图原始 stamp。
   sync.max_frames = options.max_frames;
   auto result = pairRgbDepth(
     streamIndex(options, scan, options.rgb_camera.image_topic),
     streamIndex(options, scan, options.depth_camera.image_topic), sync);
   if (!result.ok()) {throw BagBuildError(rgbdSyncCodeName(result.code), result.message);}
-  if (result.report->exact_count != result.report->pairs.size() || result.report->max_abs_delta_ns != 0) {
-    throw BagBuildError("strict_sync_violation", "Nonzero RGB-D delta must never pass BagBuilder");
+  if (result.report->max_abs_delta_ns > static_cast<std::uint64_t>(options.sync_tolerance_ns)) {
+    throw BagBuildError("sync_tolerance_violation", "RGB-D pairing exceeded the configured time tolerance");
+  }
+  if (options.sync_tolerance_ns == 0 && result.report->exact_count != result.report->pairs.size()) {
+    throw BagBuildError("strict_sync_violation", "Non-exact RGB-D pair passed zero tolerance");
   }
   return std::move(*result.report);
 }
 
 /** @brief 只描述原 header 配对覆盖，不把解码、标定或设备曝光同步混入此状态。 */
-std::string timestampMatchStatus(const RgbdSyncReport & sync)
+std::string timestampMatchStatus(const RgbdSyncReport & sync, std::int64_t tolerance_ns)
 {
   if (sync.rgb_count == 0 || sync.depth_count == 0) {return "empty_stream";}
-  if (sync.pairs.empty()) {return "no_exact_pairs";}
+  if (sync.pairs.empty()) {
+    if (tolerance_ns == 0) {return "no_exact_pairs";}
+    return "no_pairs";
+  }
   if (sync.pairs.size() == sync.rgb_count && sync.pairs.size() == sync.depth_count) {return "all_paired";}
   return "partial";
 }
@@ -332,7 +338,8 @@ std::vector<std::string> pairReasons(const PreparedFrame & rgb, const PreparedFr
 
 /** @brief 写配对/待处理，引用 frames.jsonl 的具体两图和标定；不会输出正式 Observation。 */
 void writePairs(
-  const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
+  const BagBuildOptions & options, const RgbdSyncReport & sync,
+  const std::map<std::string, PreparedFrame> & frames,
   OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
 {
   for (const auto & pair : sync.pairs) {
@@ -343,7 +350,8 @@ void writePairs(
     Json record{{"pair_id", pair_id}, {"rgb_message_id", pair.rgb.message_id},
       {"depth_message_id", pair.depth.message_id}, {"rgb_stamp", stampJson(pair.rgb.stamp)},
       {"depth_stamp", stampJson(pair.depth.stamp)}, {"delta_ns", std::to_string(pair.delta_ns)},
-      {"exact", true}, {"policy", "exact_header_one_to_one_v1"}, {"capture_sync_status", "unknown"},
+      {"exact", pair.delta_ns == 0}, {"policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
+      {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"capture_sync_status", "unknown"},
       {"rgb_calibration_id", rgb.calibration_id}, {"depth_calibration_id", depth.calibration_id},
       {"status", "pending"}, {"reasons", reasons}, {"pose_computed", false}, {"effective_model_computed", false}};
     if (reasons.empty()) {record["status"] = "prepared_for_geometry"; ++result.prepared_pairs;} else {
@@ -439,13 +447,16 @@ Json coverageReports(const BagBuildOptions & options, const BagScan & scan)
 }
 
 /** @brief 汇总输入、算法和质量数量；配对守恒只针对有效时间引用输入。 */
-Json summaryRecord(const BagScan & scan, const RgbdSyncReport & sync, const BagBuildResult & result)
+Json summaryRecord(
+  const BagBuildOptions & options, const BagScan & scan,
+  const RgbdSyncReport & sync, const BagBuildResult & result)
 {
   return {{"status", bagBuildStatusName(result.status)}, {"messages_scanned", scan.messages.size()},
     {"rgb_frames", result.rgb_frames}, {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
     {"valid_time_rgb", sync.rgb_count}, {"valid_time_depth", sync.depth_count}, {"pairs", result.pairs},
     {"exact_pairs", sync.exact_count}, {"approximate_pairs", sync.pairs.size() - sync.exact_count},
-    {"timestamp_match_policy", "exact_header_one_to_one_v1"},
+    {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
+    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
     {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"},
     {"unmatched_rgb", sync.unmatched_rgb.size()}, {"unused_depth", sync.unused_depth.size()},
     {"max_abs_delta_ns", std::to_string(sync.max_abs_delta_ns)}, {"prepared_pairs", result.prepared_pairs},
@@ -472,9 +483,10 @@ void writeManifest(
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
   writeJsonFile(
-    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 2},
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 3},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
-      {"timestamp_match_policy", "exact_header_one_to_one_v1"},
+      {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
+      {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
       {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"},
       {"metadata_sha256", scan.metadata_sha256}, {"source_files", sources}, {"topics", topics},
       {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
@@ -525,7 +537,7 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
   initializeOutput(output);
   auto scan = scanBag(options, output);
   const auto sync = synchronize(options, scan);
-  result.timestamp_match_status = timestampMatchStatus(sync);
+  result.timestamp_match_status = timestampMatchStatus(sync, options.sync_tolerance_ns);
   const auto rgb_grids = pairedRgbGrids(scan, sync);
   const CameraInfoIndex calibrations(scan.calibrations);
   std::map<std::string, PreparedFrame> frames;
@@ -542,8 +554,10 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
   }
   if (result.timestamp_match_status == "no_exact_pairs") {
     issues.push_back({"sync", "no_exact_rgbd_pairs", "No equal original RGB/Depth header timestamps", {}, {}});
+  } else if (result.timestamp_match_status == "no_pairs") {
+    issues.push_back({"sync", "no_rgbd_pairs", "No RGB/Depth pairs within the configured tolerance", {}, {}});
   }
-  writePairs(sync, frames, output, result, issues);
+  writePairs(options, sync, frames, output, result, issues);
   writeUnmatched(sync, output, issues);
   for (const auto & issue : issues) {
     writeJsonLine(output, "reports/issues.jsonl", issueJson(issue));
@@ -552,7 +566,7 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
   result.status = BagBuildStatus::completed;
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
-  writeJsonFile(output, "reports/summary.json", summaryRecord(scan, sync, result));
+  writeJsonFile(output, "reports/summary.json", summaryRecord(options, scan, sync, result));
   writeManifest(options, scan, result, output);
   output.close();
   const auto final_path = fs::weakly_canonical(options.output_directory);

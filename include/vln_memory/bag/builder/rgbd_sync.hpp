@@ -81,6 +81,12 @@ struct RgbdSyncResult
 
 /** @brief 返回稳定静态错误名，无分配；未知枚举返回 unknown。 */
 const char * rgbdSyncCodeName(RgbdSyncCode code) noexcept;
+/**
+ * @brief 按配置门限返回策略静态名；0 为 exact，正值为 RGB 基准单调最近候选。
+ * @param max_delta_ns 最大允许绝对时差，整数纳秒；负值返回 unknown。
+ * @note 名称描述选择规则，不代表实际每对都近似，也不证明设备曝光同步。
+ */
+const char * rgbdSyncPolicyName(std::int64_t max_delta_ns) noexcept;
 /** @brief 返回未配对原因静态名；调用方无需释放。 */
 const char * rgbdUnmatchedReasonName(RgbdUnmatchedReason reason) noexcept;
 

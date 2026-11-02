@@ -22,6 +22,8 @@ max_messages/max_frames/max_calibrations/max_tf_entries/max_serialized_bytes/max
 
 额外配置约束：尺寸按非负十进制解析再检查 uint32 范围；已注册声明必须与 RGB/Depth 两个光学 frame 一致；未注册 Depth 不允许静默共用 RGB CameraInfo。
 
-## 零容差约束
+## 最近时间配对（builder_version=3）
 
-sync_tolerance_ns 保留字段但仅允许 0，YAML 加载和 validateBagBuildOptions/buildBag 的 C++ 入口都拒绝非零；没有自动回退。CameraInfo max_delta_ns 和 tf_max_gap_ns 独立，不因此锁为零。配置只声明单位与时钟依据，不能由帧率或设备名猜测。
+sync_tolerance_ns 为非负 int64 纳秒最大绝对时差。0 严格，正值显式开启最近候选；YAML 省略/C++ 默认仍为 0，负数/小数/溢出拒绝。示例显式 30000000（30 ms 试用值），不自动扩大门限。C++ 设置 options.sync_tolerance_ns = 30000000 后调用 buildBag(options)。
+
+输出保留原始时间和真实差值；标定与 TF 阈值独立。配置不能证明曝光同步。实际效果见 [最近配对验收](../../reviews/rgbd_nearest_pairing_verification.md)。

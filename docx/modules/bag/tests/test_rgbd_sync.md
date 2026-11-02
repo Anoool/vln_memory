@@ -6,4 +6,4 @@
 
 ## 零容差专项回归
 
-新增 strictEquality：真实零时刻有效；同刻多来源仍一对一，不复用 Depth；未知/不同 clock 即使 stamp 相同也拒绝。BagBuilder 仅用零容差，通用核心 API 的既有近似策略回归保留兼容。
+新增 strictEquality：真实零时刻有效；同刻多来源仍一对一，不复用 Depth；未知/不同 clock 即使 stamp 相同也拒绝。BagBuilder 当前可按显式门限调用本核心，算法保持兼容；新增 rgbdSyncPolicyName 的负/零/正门限检查。

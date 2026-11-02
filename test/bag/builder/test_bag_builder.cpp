@@ -28,7 +28,7 @@ using namespace vln_memory;
 using Json = nlohmann::json;
 enum class FixtureKind {
   normal, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
-  compressed, mixed_compressed, bad_compressed, offset_depth
+  compressed, mixed_compressed, bad_compressed, offset_depth, near_depth, near_compressed, far_depth
 };
 
 /** @brief Release 同样检查测试条件，失败描述实际不符合的契约。 */
@@ -169,7 +169,8 @@ void writeFixtureImage(
   rosbag2_cpp::Writer & writer, const std::string & topic, std::int64_t record_ns,
   const sensor_msgs::msg::Image & image, FixtureKind kind)
 {
-  bool compressed = kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed;
+  bool compressed = kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed ||
+    kind == FixtureKind::near_compressed;
   if (kind == FixtureKind::mixed_compressed && topic == "/depth") {compressed = true;}
   if (!compressed) {writeMessage(writer, topic, record_ns, image); return;}
   sensor_msgs::msg::CompressedImage message;
@@ -192,11 +193,15 @@ void createTopics(rosbag2_cpp::Writer & writer, FixtureKind kind)
 {
   std::string rgb_type = "sensor_msgs/msg/Image";
   if (kind == FixtureKind::wrong_type) {rgb_type = "std_msgs/msg/String";}
-  if (kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed) {
+  if (kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed ||
+    kind == FixtureKind::near_compressed)
+  {
     rgb_type = "sensor_msgs/msg/CompressedImage";
   }
   std::string depth_type = "sensor_msgs/msg/Image";
-  if (kind == FixtureKind::compressed || kind == FixtureKind::mixed_compressed || kind == FixtureKind::bad_compressed) {
+  if (kind == FixtureKind::compressed || kind == FixtureKind::mixed_compressed ||
+    kind == FixtureKind::bad_compressed || kind == FixtureKind::near_compressed)
+  {
     depth_type = "sensor_msgs/msg/CompressedImage";
   }
   writer.create_topic({"/rgb", rgb_type, "cdr", ""});
@@ -228,11 +233,21 @@ void createFixture(const fs::path & path, FixtureKind kind)
   if (kind == FixtureKind::invalid_depth) {first = 0;}
   std::uint32_t offset_ns = 0;
   if (kind == FixtureKind::offset_depth) {offset_ns = 1;}
-  writeFixtureImage(writer, "/depth", 1000000000LL, depth(10, offset_ns, first, 0), kind);
+  if (kind == FixtureKind::far_depth) {offset_ns = 3;}
+  auto first_depth = depth(10, offset_ns, first, 0);
+  // 负 1 ns 跨秒边界，确保实现没有用无符号相减或覆盖成 RGB 时间。
+  if (kind == FixtureKind::near_depth || kind == FixtureKind::near_compressed) {
+    first_depth.header.stamp.sec = 9;
+    first_depth.header.stamp.nanosec = 999999999;
+  }
+  writeFixtureImage(writer, "/depth", 1000000000LL, first_depth, kind);
   writeFixtureImage(writer, "/rgb", 2000000000LL, rgb(11), kind);
   if (kind == FixtureKind::invalid_depth) {
     writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 0, 0), kind);
-  } else {writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 2000, 3000), kind);}
+  } else {
+    if (kind == FixtureKind::near_depth || kind == FixtureKind::near_compressed) {offset_ns = 2;}
+    writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 2000, 3000), kind);
+  }
   writeFixtureImage(writer, "/rgb", 3000000000LL, rgb(12), kind);
   writeFixtureImage(writer, "/depth", 4000000000LL, depth(14, 0, 0, 0), kind);
   const std::array<std::uint8_t, 4> bad_cdr{0xff, 0xff, 0xff, 0xff};
@@ -327,7 +342,7 @@ void writeFixtureConfig(const fs::path & path, const BagBuildOptions & options)
   bag["segment_id"] = options.segment_id;
   bag["segment_basis"] = options.segment_basis;
   bag["body_frame"] = "base";
-  bag["sync_tolerance_ns"] = 0;
+  bag["sync_tolerance_ns"] = options.sync_tolerance_ns;
   bag["tf_max_gap_ns"] = 6000000000LL;
   for (const auto * name : {"rgb", "depth"}) {
     auto camera = bag[std::string(name) + "_camera"];
@@ -357,10 +372,16 @@ void configCases(const fs::path & root, const fs::path & config)
 {
   auto options = loadBagBuildOptions(config.string());
   expect(validateBagBuildOptions(options).empty(), "Fixture YAML not usable");
+  auto negative = options;
+  negative.sync_tolerance_ns = -1;
+  const auto refused = buildBag(negative);
+  expect(!refused.ok() && refused.code == "invalid_config", "Negative tolerance accepted through C++ API");
   auto nonzero = options;
   nonzero.sync_tolerance_ns = 1;
-  const auto refused = buildBag(nonzero);
-  expect(!refused.ok() && refused.code == "invalid_config", "Nonzero tolerance accepted through C++ API");
+  expect(validateBagBuildOptions(nonzero).empty(), "Explicit positive tolerance rejected");
+  writeFixtureConfig(root / "positive_sync.yaml", nonzero);
+  expect(loadBagBuildOptions((root / "positive_sync.yaml").string()).sync_tolerance_ns == 1,
+    "YAML did not preserve positive integer nanoseconds");
   auto conflicting = options;
   conflicting.depth.rgb_grid.frame_id = "different_optical_frame";
   expect(!validateBagBuildOptions(conflicting).empty(), "Conflicting registration configuration accepted");
@@ -369,13 +390,15 @@ void configCases(const fs::path & root, const fs::path & config)
   conflicting.depth.alignment = DepthAlignment::unknown;
   conflicting.depth.rgb_grid = {};
   expect(!validateBagBuildOptions(conflicting).empty(), "Unregistered depth silently shared RGB calibration");
-  for (const auto * variant : {"unknown", "negative", "negative_grid", "duplicate", "nonzero_sync"}) {
+  for (const auto * variant : {"unknown", "negative", "negative_grid", "duplicate", "negative_sync", "overflow_sync", "fractional_sync"}) {
     const auto path = root / (std::string(variant) + ".yaml");
     auto yaml = YAML::LoadFile(config.string());
     if (std::string(variant) == "unknown") {yaml["bag"]["typo"] = true;} else if (std::string(variant) == "negative") {
       yaml["bag"]["limits"]["max_frames"] = -1;
     } else if (std::string(variant) == "negative_grid") {yaml["bag"]["depth"]["rgb_width"] = -1;}
-    else if (std::string(variant) == "nonzero_sync") {yaml["bag"]["sync_tolerance_ns"] = 1;}
+    else if (std::string(variant) == "negative_sync") {yaml["bag"]["sync_tolerance_ns"] = -1;}
+    else if (std::string(variant) == "overflow_sync") {yaml["bag"]["sync_tolerance_ns"] = "9223372036854775808";}
+    else if (std::string(variant) == "fractional_sync") {yaml["bag"]["sync_tolerance_ns"] = 1.5;}
     std::ofstream output(path);
     if (std::string(variant) == "duplicate") {output << "bag:\n  input: a\n  input: b\n";} else {output << yaml;}
     output.close();
@@ -448,6 +471,89 @@ void strictCompressedCases(const fs::path & root)
   }
 }
 
+/** @brief 核查近似报告/来源/真实差值，不用准备质量计数替代时间匹配结果。 */
+void checkNearestOutput(const fs::path & output, std::int64_t tolerance_ns, std::size_t expected_pairs)
+{
+  const auto summary = readJson(output / "reports/summary.json");
+  const auto manifest = readJson(output / "bag_manifest.json");
+  const auto policy = "rgb_reference_monotonic_nearest_one_to_one_v1";
+  expect(summary.at("timestamp_match_policy") == policy, "Summary mislabeled nearest policy");
+  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 3,
+    "Manifest did not declare current behavior");
+  expect(summary.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing summary tolerance");
+  expect(manifest.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing manifest tolerance");
+  expect(summary.at("pairs") == expected_pairs && summary.at("approximate_pairs") == expected_pairs,
+    "Nearest pair counts incorrect");
+  const auto pairs = readLines(output / "rgbd_pairs.jsonl");
+  expect(pairs.size() == expected_pairs, "Pair export count differs");
+  std::size_t index = 0;
+  for (const auto & pair : pairs) {
+    expect(pair.at("policy") == policy && pair.at("exact") == false, "Approximate pair marked exact");
+    expect(pair.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Pair threshold differs");
+    expect(pair.at("capture_sync_status") == "unknown", "Exposure sync invented");
+    if (index == 0) {
+      expect(pair.at("delta_ns") == "-1" && pair.at("depth_stamp").at("sec") == 9 &&
+        pair.at("depth_stamp").at("nanosec") == 999999999, "Negative delta or original stamp changed");
+    } else {
+      expect(pair.at("delta_ns") == "2" && pair.at("depth_stamp").at("nanosec") == 2,
+        "Positive delta or original stamp changed");
+    }
+    ++index;
+  }
+}
+
+/** @brief 验证近似模式中的相等对、空结果与资源预算，不假定正门限一定有近似对。 */
+void nearestSpecialCases(const fs::path & root)
+{
+  // 正门限描述选择策略；如果真实 stamp 恰好相等，exact 仍必须为 true。
+  auto exact = fixtureOptions(root / "normal_bag", root / "nearest_exact_out");
+  exact.sync_tolerance_ns = 1;
+  expect(buildBag(exact).pairs == 2, "Exact stamps lost in nearest mode");
+  for (const auto & pair : readLines(root / "nearest_exact_out/rgbd_pairs.jsonl")) {
+    expect(pair.at("exact") == true && pair.at("delta_ns") == "0", "Exact pair forced approximate");
+  }
+  createFixture(root / "far_bag", FixtureKind::far_depth);
+  auto empty = fixtureOptions(root / "far_bag", root / "nearest_empty_out");
+  empty.sync_tolerance_ns = 2;
+  const auto none = buildBag(empty);
+  expect(none.ok() && none.pairs == 0 && none.timestamp_match_status == "no_pairs",
+    "Positive threshold with no pairs mislabeled exact");
+  bool no_pairs_issue = false;
+  for (const auto & issue : readLines(root / "nearest_empty_out/reports/issues.jsonl")) {
+    if (issue.at("code") == "no_rgbd_pairs") {no_pairs_issue = true;}
+    expect(issue.at("code") != "no_exact_rgbd_pairs", "Approximate mode emitted strict-only issue");
+  }
+  expect(no_pairs_issue, "No-pair aggregate issue missing");
+  auto budget = fixtureOptions(root / "far_bag", root / "nearest_budget_out");
+  budget.sync_tolerance_ns = 2;
+  budget.max_frames = 1;
+  expect(buildBag(budget).code == "limit_exceeded", "Nearest mode bypassed frame budget");
+}
+
+/** @brief 原始和压缩输入均验收零、边界及超差；输出保留给独立 CDR/JSON 回查。 */
+void nearestCases(const fs::path & root)
+{
+  for (const auto kind : {FixtureKind::near_depth, FixtureKind::near_compressed}) {
+    std::string prefix = "near_raw";
+    if (kind == FixtureKind::near_compressed) {prefix = "near_compressed";}
+    const auto input = root / (prefix + "_bag");
+    createFixture(input, kind);
+    for (const std::int64_t tolerance_ns : {0, 1, 2}) {
+      const auto output = root / (prefix + "_" + std::to_string(tolerance_ns) + "_out");
+      auto options = fixtureOptions(input, output);
+      options.sync_tolerance_ns = tolerance_ns;
+      const auto result = buildBag(options);
+      expect(result.ok() && result.decoded_frames == 6, "Nearest fixture failed or lost media");
+      if (tolerance_ns == 0) {
+        expect(result.pairs == 0 && result.timestamp_match_status == "no_exact_pairs", "Zero compatibility lost");
+      } else {
+        checkNearestOutput(output, tolerance_ns, static_cast<std::size_t>(tolerance_ns));
+      }
+    }
+  }
+  nearestSpecialCases(root);
+}
+
 /** @brief 不改动原 fixture，复制输入后改变文件，第二遍必须拒绝跨遍来源变化。 */
 void sourceChangeCase(const fs::path & root)
 {
@@ -505,6 +611,7 @@ void integrationCases(const fs::path & root)
   failureAndQualityCases(root);
   sourceChangeCase(root);
   strictCompressedCases(root);
+  nearestCases(root);
 }
 }
 

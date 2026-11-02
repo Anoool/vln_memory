@@ -12,6 +12,8 @@ options 显式 same_clock、clock_basis、非负 max_delta_ns，合计 max_frame
 
 每个 pair 拥有两侧引用，delta_ns=Depth-RGB；时间不被修改。RGB 顺序、一对一、Depth 单调、最近候选；等距选较早时间，同刻选较小 order。不是最大匹配数/最小总误差算法。unused Depth 不是坏帧。
 
+新增 const char * rgbdSyncPolicyName(std::int64_t max_delta_ns) noexcept，由本头/实现提供。0 返回 exact_header_one_to_one_v1，正值返回 rgb_reference_monotonic_nearest_one_to_one_v1，负值返回 unknown；返回静态字符串，无分配、无需释放。名称描述配置规则，不等于每对的 exact，更不能证明物理同步。builder/CLI 共用此入口。
+
 ## 所有权、复杂度与使用
 
 输入同步借用，内部只排序指针，输出独立持有字符串。排序 O(R log R + D log D)，每 RGB O(log D)，辅助空间 O(R+D)。按上下文构造两个索引，配置选项后调用；具体参考 [安装消费者](../../../test/install_consumer/rgbd_sync_consumer.cpp)。图像解码、标定、TF、文件保存由 builder 调用，不进入本核心。

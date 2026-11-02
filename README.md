@@ -39,7 +39,7 @@ ros2 run vln_memory bag_builder --config config/vln_memory.yaml \
   --bag /absolute/path/recording --output /absolute/path/new_dataset
 ```
 
-RGB-D 的 sync_tolerance_ns 必须为 0，非零配置直接拒绝。支持原 Image、JPEG RGB8/BGR8 和 16UC1 compressedDepth PNG，其他压缩编码明确报告未支持。输出必须是新目录。返回 completed_with_issues 表示数据集完整写出但有坏帧/未配对/缺几何依据，应检查 reports 和 prepared_pairs。完整文件树及包外调用见 [接口手册](docx/interfaces/bag_builder_api.md)，每个文件职责见 [BagBuilder](docx/modules/bag/bag_builder.md)。样例配置仅为格式示例，不能证明设备单位或硬件同步。timestamp_match_status=no_exact_pairs 时保留提取证据但没有严格 RGB-D；本轮实际结果见 [零容差验收](docx/reviews/rgbd_zero_tolerance_verification.md)。
+RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 基准单调一对一选择最近 Depth。示例显式 30000000（30 ms 试用值），API/省略默认仍为 0。保留原始 stamp 和 delta_ns，exact 按实际差值填写。支持原 Image、JPEG RGB8/BGR8 和 16UC1 compressedDepth PNG，其他压缩编码明确报告未支持。输出必须是新目录。返回 completed_with_issues 表示数据集完整写出但有坏帧/未配对/缺几何依据，应检查 reports 和 prepared_pairs。完整文件树及包外调用见 [接口手册](docx/interfaces/bag_builder_api.md)，每个文件职责见 [BagBuilder](docx/modules/bag/bag_builder.md)。样例配置仅为格式示例，不能证明设备单位或硬件同步。零门限无对为 no_exact_pairs，正门限无对为 no_pairs；当前全包时间戳与短片段验证见 [最近配对验收](docx/reviews/rgbd_nearest_pairing_verification.md)。
 
 ## 当前接口
 

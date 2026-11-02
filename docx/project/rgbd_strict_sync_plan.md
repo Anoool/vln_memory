@@ -1,5 +1,7 @@
 # 真实录制问题清单与 RGB–Depth 严格同步优先方案
 
+> 2026-11-02：用户已允许最近时间配对。本文保留零容差阶段的历史规则与验收；当前接口与结果见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)。0 配置仍可恢复严格模式。
+
 日期：2026-10-30。依据：用户要求优先解决严格同步、当前实际代码和 [camera_record 审计](../reviews/camera_record_extraction_audit.md)。本轮交付问题清单、同步定义、实施步骤与验收依据；尚未修改产品源码或相机配置。
 
 ## 1. 当前问题与对应解决方案

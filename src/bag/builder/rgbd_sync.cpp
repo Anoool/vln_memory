@@ -188,6 +188,14 @@ const char * rgbdSyncCodeName(RgbdSyncCode code) noexcept
   return "unknown";
 }
 
+/** @brief 返回与配置对应的算法名，借用静态字符串，无分配；无效负门限为 unknown。 */
+const char * rgbdSyncPolicyName(std::int64_t max_delta_ns) noexcept
+{
+  if (max_delta_ns < 0) {return "unknown";}
+  if (max_delta_ns == 0) {return "exact_header_one_to_one_v1";}
+  return "rgb_reference_monotonic_nearest_one_to_one_v1";
+}
+
 /** @brief 返回稳定未配对原因，不把未使用帧标成解码失败。 */
 const char * rgbdUnmatchedReasonName(RgbdUnmatchedReason reason) noexcept
 {

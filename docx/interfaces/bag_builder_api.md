@@ -1,6 +1,6 @@
-# BagBuilder 接口与文件契约（零容差版本）
+# BagBuilder 接口与文件契约（可配置最近配对版本）
 
-日期：2026-10-30。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
+更新：2026-11-02，builder_version=3。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
 
 ## 1. 从哪里调用
 
@@ -53,7 +53,7 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 | clock/segment | 单个明确同钟段和采集依据；不自动对齐时钟/跨 epoch 排序；允许重排量由 max_header_reorder_ns 声明 |
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
 | depth | DepthOptions：米/毫米、optical_z、范围、注册状态/依据及声明网格；不从编码或尺寸猜测 |
-| sync_tolerance_ns | 必须为 0；YAML 加载及 C++ API 均拒绝非零，只接受原始 header 完全相等，一对一使用 |
+| sync_tolerance_ns | 非负 int64 纳秒最大绝对时差（含边界）；0 严格，正值为 RGB 基准单调一对一最近候选。省略/API 默认 0，示例显式 30000000（30 ms 试用值） |
 | tf_max_gap_ns | 非负 int64 纳秒；0 只接受动态精确点；各图使用自身采样时刻 |
 | limits | 分别限制消息/图像/标定/TF 条目与样本、序列化单消息、像素/源图像字节、全部输出字节 |
 
@@ -100,18 +100,33 @@ prepared_for_geometry 要求两图解码、各自标定、各自 map 相机 TF �
 
 第一版实际测试/安装/内存检查边界及可查看样例见 [验收记录](../reviews/bag_builder_v1_verification.md)。
 
-## 8. 零容差版本新增/收紧的契约
+## 8. 时间配对版本与兼容
 
-manifest 的 builder_version=2；JSON schema 仍为 bag_preparation/1，本次为附加字段，历史第一版验收记录保持原义。BagBuilder 拒绝非零容差，独立通用 pairRgbDepth API 的参数保留兼容，生产 builder 固定调用 max_delta_ns=0 并校验 exact_count/max_abs_delta_ns 不变量。
+manifest builder_version=3；JSON schema 仍为 bag_preparation/1。v2 的零配置继续有效，BagBuildOptions 默认仍为 0。本次允许显式正容差，不能再假设全部 exact=true。没有修改现有结构布局或 pairRgbDepth 签名；下游应使用匹配的新版头和库。
 
-支持 Image 和声明过的 CompressedImage（JPEG RGB8/BGR8、16UC1 compressedDepth PNG）；输入白名单、预算、错误及拥有型结果详见 [image_decoder_ros](../modules/bag/image_decoder_ros.md)。压缩消息首遍不解压像素，第二遍仍逐帧处理。
+| 位置 | 字段格式 | 实际语义 |
+| --- | --- | --- |
+| pair | rgb_stamp/depth_stamp：{sec: int32, nanosec: uint32} | 两图原始采样时间；RGB 为索引参考 |
+| pair | delta_ns：十进制 int64 字符串 | Depth−RGB，可为负，绝对值不超过门限 |
+| pair | exact：bool | 仅 delta_ns==0 为 true |
+| pair | policy：string；sync_tolerance_ns：十进制字符串 | 实际规则和显式门限 |
+| CLI/manifest/summary | timestamp_match_policy；sync_tolerance_ns | 与 pair 同策略/门限；manifest 另保留 effective_options |
+| summary | exact_pairs/approximate_pairs、max_abs_delta_ns | 按实际差统计；空最大值 0 不表示测得同步 |
+| result/CLI/manifest/summary | timestamp_match_status：string | not_checked、empty_stream、no_exact_pairs（零模式无对）、no_pairs（正门限无对）、partial、all_paired |
+| pair/CLI/manifest/summary | capture_sync_status："unknown" | 当前没有设备曝光同步证明 |
 
-BagImageRecord 增加 message_type、compressed_format、payload_error_code/payload_error。frames.jsonl 增加 source_message_type、source_format；压缩消息的 source_step/source_is_bigendian 为 null，因为原消息没有这些字段。source_encoding 表示交给核心的中间 Image 编码，压缩源声明以 source_format 为准。坏压缩体保留 metadata_available=true 和真实 stamp；坏 CDR 才没有可用 header。
+0 策略为 exact_header_one_to_one_v1，正值为 rgb_reference_monotonic_nearest_one_to_one_v1。正容差下实际相等的一对仍 exact=true。算法为 RGB 顺序、Depth 单调、一对一贪心最近候选；等距取较早 Depth，同刻取较小来源顺序，不保证全局最多配对或最小总误差。
 
-BagBuildResult 增加 timestamp_match_status：not_checked（尚未配对）、empty_stream（有效 header 流为空）、no_exact_pairs、partial、all_paired。最后两项只针对有效时间索引，仍需检查坏帧/质量；不表示图像、几何或物理同步全部合格。
+新增 rgbd_sync.hpp/.cpp 公共函数：const char * rgbdSyncPolicyName(std::int64_t max_delta_ns) noexcept。输入是整数纳秒门限，返回上述静态字符串；负输入为 unknown，不分配内存、无需释放。正常调用前先校验配置，builder/CLI 共用该入口。
 
-CLI、manifest、summary 明确 timestamp_match_policy=exact_header_one_to_one_v1、timestamp_match_status 和 capture_sync_status=unknown。每条 pair 必须 delta_ns="0"、exact=true，两个原始 stamp 相等，捕获同步证据仍为 unknown。零配对时保留完整提取结果和未配对清单，整体可 completed_with_issues，附 no_exact_rgbd_pairs；消费者不能只用 result.ok() 判断有可用严格 RGB-D。
+两图标定与 TF 各用自身原时间，body 用 RGB 时间；不把 Depth 当作发生在 RGB 时刻。近似匹配没有运动补偿，prepared_for_geometry 仅通过已有准备检查，不是最终几何精度结论。
 
-真实重跑、旧结果清理和剩余问题见 [零容差验收](../reviews/rgbd_zero_tolerance_verification.md)。
+零配对保留提取证据：零模式问题 no_exact_rgbd_pairs，正模式 no_rgbd_pairs，空有效流为 empty_stream。result.ok() 只表示完整发布，必须另查对数/策略/差值/质量。sync_tolerance_violation/strict_sync_violation 是内部不变量错误，整次失败。
 
-本次公开结构 BagImageRecord/BagBuildResult 新增成员，C++ 下游必须重新编译，不能将旧二进制与新库混用；本轮独立安装前缀避免覆盖第一版。零配对时 max_abs_delta_ns="0" 是空统计默认值，必须结合 pairs 和 timestamp_match_status 判断，不能据此声称测得时差为零。
+## 9. 图像格式与来源
+
+支持 Image 和声明过的 CompressedImage（JPEG RGB8/BGR8、16UC1 compressedDepth PNG），格式/预算/错误见 [image_decoder_ros](../modules/bag/image_decoder_ros.md)。首遍不解压，第二遍逐帧解码。
+
+BagImageRecord 保留 message_type、compressed_format、payload_error_code/payload_error。frames 的 source_step/source_is_bigendian 在压缩源为 null；source_encoding 是中间 Image 编码，压缩源声明在 source_format。坏压缩体保留 header，坏 CDR 才无 metadata。
+
+实际测试、全包时间核查与短片段媒体验证见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)；[零容差验收](../reviews/rgbd_zero_tolerance_verification.md) 保留此前 v2 的历史结果。

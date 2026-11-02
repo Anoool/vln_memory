@@ -12,7 +12,11 @@ depth 明确 input_unit=meters/millimeters、convention=optical_z；alignment=un
 
 ## 独立阈值与上限
 
-sync_tolerance_ns 必须为 0，只接受两图原始 header 相等；YAML 加载与 C++ API 均拒绝非零。标定 max_delta_ns 是图像与标定差，tf_max_gap_ns 是 TF 相邻端点最大间隔，二者仍为独立非负整数纳秒阈值，不随 RGB-D 匹配率自动改变。
+sync_tolerance_ns 接受非负 int64 整数纳秒，表示允许的最大绝对时差（含边界）。0 仅接受原始 header 相等；正值按 RGB 基准、单调一对一最近候选选择，等距取较早 Depth，同刻取较小来源顺序。两路 stamp 不变，delta_ns=Depth−RGB。不是全局最多配对或最小总误差算法。
+
+BagBuildOptions 默认值和 YAML 省略值仍为 0。示例显式设置 sync_tolerance_ns: 30000000（30 ms）作为当前试用值，需按实际运动误差预算调整，程序不自动扩容。负数、小数或超出 int64 的数在加载时拒绝。
+
+标定 max_delta_ns 是图像与标定差，tf_max_gap_ns 是 TF 相邻端点最大间隔，二者独立。两图标定和 TF 各用本图原始时刻；没有运动补偿或设备时钟校正。
 
 min_valid_depth_ratio 在 [0,1]，全无效深度始终失败。limits 各项必须正数；max_tf_entries 限制原始 TF 条目（含重复），max_tf_samples 限制索引唯一样本，max_output_bytes 计原始 CDR、标准图像和文本总字节。
 

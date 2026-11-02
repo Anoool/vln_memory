@@ -1,5 +1,7 @@
 # RGB–Depth 零容差修复与真实 bag 重新提取验收
 
+> 2026-11-02：用户已允许最近时间配对。本文保留零容差阶段的历史规则与验收；当前接口与结果见 [最近配对验收](rgbd_nearest_pairing_verification.md)。0 配置仍可恢复严格模式。
+
 > 2026-10-31 清理更新：用户要求缩减 build 占用，本文所述完整提取 output 与 ZIP 的解压输入副本已删除；原始 camera_record.zip 保留。build 从约 18.04 GB 降到 165 MB，移除了约 17.88 GB。历史 manifest/summary/issues 已归档到 build/rgbd-strict-20261030/audit_records/ 的 last_* 文件，结合 verification.json 和运行日志供复查；该归档不是可直接消费的完整 preparation 数据集。重跑前需重新展开原 ZIP 或修改输入路径。最新 rgbd-strict-ros、rgbd-strict-install、rgbd-strict-consumer 仍保留，安装版 CLI 启动检查通过。以下各节保留 2026-10-30 实测历史。
 
 日期：2026-10-30。分支：codex/rgbd-zero-tolerance。用户要求实际修复、坚持零容差，并在重新读取前清理旧提取数据。本记录对应最终安装版本，不以旧诊断脚本代替正式 BagBuilder。

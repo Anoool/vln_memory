@@ -220,9 +220,6 @@ std::vector<std::string> validateBagBuildOptions(const BagBuildOptions & options
   {
     errors.push_back("Invalid frames or negative time thresholds");
   }
-  if (options.sync_tolerance_ns != 0) {
-    errors.push_back("BagBuilder requires sync_tolerance_ns=0 (exact original header timestamps)");
-  }
   checkCamera(options.rgb_camera, errors);
   checkCamera(options.depth_camera, errors);
   checkDepth(options.depth, errors);
@@ -287,8 +284,8 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
     readScalar(node, "map_frame", options.map_frame);
     readScalar(node, "body_frame", options.body_frame);
     readScalar(node, "sync_tolerance_ns", options.sync_tolerance_ns);
-    if (options.sync_tolerance_ns != 0) {
-      throw BagBuildError("invalid_config", "BagBuilder requires sync_tolerance_ns=0 (exact original header timestamps)");
+    if (options.sync_tolerance_ns < 0) {
+      throw BagBuildError("invalid_config", "sync_tolerance_ns must be nonnegative integer nanoseconds");
     }
     readScalar(node, "tf_max_gap_ns", options.tf_max_gap_ns);
     readScalar(node, "max_header_reorder_ns", options.max_header_reorder_ns);

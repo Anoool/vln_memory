@@ -48,6 +48,10 @@ RgbdSyncOptions options(std::int64_t tolerance_ns)
 /** @brief 验证边界、等距、重复时间、单调及贪心非全局最优语义。 */
 void knownAnswers()
 {
+  expect(std::string(rgbdSyncPolicyName(-1)) == "unknown", "Invalid policy tolerance accepted");
+  expect(std::string(rgbdSyncPolicyName(0)) == "exact_header_one_to_one_v1", "Exact policy mislabeled");
+  expect(std::string(rgbdSyncPolicyName(1)) == "rgb_reference_monotonic_nearest_one_to_one_v1",
+    "Nearest policy mislabeled");
   auto result = pairRgbDepth(stream("rgb", {4, 6}), stream("depth", {0, 5}), options(6));
   expect(result.ok() && result.report->pairs.size() == 1, "Greedy policy changed");
   expect(result.report->pairs[0].depth.stamp.nanosec == 5, "Nearest depth not selected");
