@@ -6,6 +6,7 @@
 | --- | --- |
 | 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
 | 零容差实际修复、旧数据清理与新版真实 bag 重跑 | [零容差验收](reviews/rgbd_zero_tolerance_verification.md) |
+| 时间戳尽可能接近：采集改善与可选离线配对的修复边界 | [时间戳对齐规划](project/rgbd_timestamp_alignment_plan.md) |
 | 当前问题清单与优先顺序；RGB–Depth 严格同步分步方案 | [严格同步方案](project/rgbd_strict_sync_plan.md) |
 | D435i 真实录制：全量提取、问题原因与分步修复方案 | [camera_record 审计](reviews/camera_record_extraction_audit.md) |
 | BagBuilder 第一版实际验收、样例及 Git 版本 | [验收记录](reviews/bag_builder_v1_verification.md) |
