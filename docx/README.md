@@ -1,5 +1,9 @@
 # vln_memory 文档导航
 
+更新：2026-11-02。S1 读取/严格或最近时间配对/preparation 导出已实现并有真实数据核查；S2 的有效模型、数值位姿、关键帧和正式 Observation 待实现，S3–S6 尚未实现。当前交付范围仍是原设计第 1、2 部分。
+
+最近待办及逐项交付见 [系统规划第 10 节](project/system_plan.md#10-当前最近行动)，实际验证边界见 [最近配对验收](reviews/rgbd_nearest_pairing_verification.md)。历史报告保留其当时的结论，不能用旧测试数量或旧缺口替代当前进度。
+
 ## 从哪里开始
 
 | 内容 | 入口 |
@@ -8,7 +12,7 @@
 | 零容差实际修复、旧数据清理与新版真实 bag 重跑 | [零容差验收](reviews/rgbd_zero_tolerance_verification.md) |
 | 最近时间配对：实际效果、原时间核查和剩余问题 | [最近配对验收](reviews/rgbd_nearest_pairing_verification.md) |
 | 时间戳尽可能接近：采集改善与可选离线配对的修复边界 | [时间戳对齐规划](project/rgbd_timestamp_alignment_plan.md) |
-| 当前问题清单与优先顺序；RGB–Depth 严格同步分步方案 | [严格同步方案](project/rgbd_strict_sync_plan.md) |
+| 历史零容差阶段的问题与方案；当前策略及优先顺序以上述最新入口为准 | [严格同步方案](project/rgbd_strict_sync_plan.md) |
 | D435i 真实录制：全量提取、问题原因与分步修复方案 | [camera_record 审计](reviews/camera_record_extraction_audit.md) |
 | BagBuilder 第一版实际验收、样例及 Git 版本 | [验收记录](reviews/bag_builder_v1_verification.md) |
 | BagBuilder 第一版实际接口、参数与文件格式 | [BagBuilder 接口](interfaces/bag_builder_api.md) |
@@ -20,9 +24,9 @@
 | RGB-D 自动时间配对的分步方案与实施依据 | [配对方案](project/rgbd_sync_plan.md) |
 | 当前问题修复、注释改进与验证 | [修复实施记录](project/sensor_validation_comments_plan.md) |
 | 统一的已解析话题名称规则 | [sensor_names](common/sensor_names.md) |
-| 当前真实能力、缺口与逐模块核查结果 | [源码核查报告](reviews/observation_preparation_audit.md) |
+| 传感器基础历史核查及后续修复；当前进度见系统规划 | [源码核查报告](reviews/observation_preparation_audit.md) |
 | 公开接口、提供文件、参数格式、返回值与作用 | [观测准备层接口手册](interfaces/observation_preparation_api.md) |
-| 原设计第 1、2 部分的收敛实施规划 | [系统整体规划](project/system_plan.md) |
+| 原设计第 1、2 部分的当前进度与下一轮任务/验收 | [系统整体规划](project/system_plan.md) |
 | 当前观测准备层、源码分类与开发/Git 约定 | [当前架构](project/architecture.md) |
 | 构建目标、安装与导出 | [CMakeLists 说明](project/CMakeLists.md) |
 | 公共头实际位置、include 搜索根及独立编译验证 | [头文件路径说明](project/header_include_paths.md) |
@@ -45,25 +49,17 @@
 ```text
 docx/
 ├── README.md
-├── interfaces/observation_preparation_api.md
-├── reviews/observation_preparation_audit.md
-├── project/{system_plan,architecture,CMakeLists}.md
-├── common/
-│   ├── sensor_names.md
-│   ├── sensor_types.md
-│   ├── sensor_time.md
-│   └── tests/{test_sensor_names,test_sensor_time}.md
+├── project/       # 系统规划、范围/进度、架构及分步实施计划
+├── interfaces/    # 已实现的传感器基础与 BagBuilder 接口
+├── reviews/       # 按日期/阶段保留的核查与验收证据
+├── config/        # 当前实际支持的配置
+├── common/        # 名称、时间、共享类型及对应测试说明
 └── modules/
-    ├── rgb/{rgb,rgb_ros}.md 与 tests/
-    ├── depth/{depth,depth_ros}.md 与 tests/
+    ├── rgb/
+    ├── depth/
     ├── camera_info/
-    │   ├── camera_info.md
-    │   ├── camera_info_ros.md
-    │   └── tests/{test_camera_info,test_camera_info_ros,camera_info_consumer}.md
-    └── tf/
-        ├── tf.md
-        ├── tf_ros.md
-        └── tests/{test_tf,test_tf_ros,tf_consumer,tf_ros_consumer}.md
+    ├── tf/
+    └── bag/       # builder、读取、配对、解码、标定索引和导出
 ```
 
 ## 测试说明
@@ -82,15 +78,15 @@ docx/
 | --- | --- | --- |
 | RGB | modules/rgb/ | 已实现 |
 | Depth | modules/depth/ | 已实现 |
-| CameraInfo | modules/camera_info/ | 已实现 |
+| CameraInfo | modules/camera_info/ | 校验/匹配已实现；真实 D8 兼容与有效模型待实现 |
 | TF | modules/tf/ | 链/覆盖已实现；位姿求解后续 |
-| bag | modules/bag/ | 第一版读取/转换/配对/准备导出已实现；完整 Observation 后续 |
+| bag | modules/bag/ | 读取/指定压缩图像解码/严格或最近配对/准备导出已实现；关键帧和正式 Observation 待实现 |
 
 源码说明保留源文件名，模块测试放各自 tests/。共享约定进入 common/，项目约定进入 project/；模块的详细验证记录随模块保存。
 
 ## 当前开发位置
 
-当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，现有同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf 及 common 分类，不为尚未实现的其他层建立空说明。
+当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补 S0 最小契约和 S2 几何/正式观测，不为尚未实现的其他层建立空说明。
 
 ## BagBuilder 文件导航
 

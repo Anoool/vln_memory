@@ -2,6 +2,8 @@
 
 日期：2026-10-29。审查对象为当前工作树，分支 codex/tf-module，包含此前已暂存的 TF 开发结果；不能只按 HEAD 判断。第 1–9 节保留首次核查记录（其中 F5 标记后续修复状态），当前修复结果见第 10 节。具体字段和参数见 [接口手册](../interfaces/observation_preparation_api.md)。
 
+> 当前进度入口（2026-11-02）：本文保留 2026-10-29 的核查及后续修复历史。Reader、配对、指定压缩图像解码、CDR/PNG/NPY 和 preparation JSONL 此后已实现；正式 Observation、数值位姿、有效模型与关键帧仍待实现。当前状态见 [系统规划](../project/system_plan.md) 和 [最近配对验收](rgbd_nearest_pairing_verification.md)，下文旧日期的“未实现”不得直接作为当前结论。
+
 ## 1. 结论与审查方法
 
 **当前完成的是四类传感器消息的处理基础及其元数据检查，尚未完成“从 rosbag 提取同步 RGB-D、标定、历史位姿和关键帧”的完整观测构建流程。**

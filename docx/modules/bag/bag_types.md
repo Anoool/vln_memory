@@ -21,4 +21,4 @@ string/vector 均拥有数据；SourceStamp 为整数原值。buildBag 返回结
 
 BagImageRecord 增加 message_type（默认 Image）、compressed_format、payload_error_code/payload_error。原 header 始终保留；压缩布局来自头部预检，没有原始 Image 的行宽/端序。负载错误与 deserialization_error 分开，使坏 JPEG/PNG 不抹掉可用时间。
 
-BagBuildResult 增加 timestamp_match_status，取值和消费规则见 [接口手册第 8 节](../../interfaces/bag_builder_api.md#8-零容差版本新增收紧的契约)。ok() 仍只表示完整发布，零对也可保留完整提取结果；应检查 pairs/prepared_pairs 和同步状态。
+BagBuildResult 增加 timestamp_match_status，取值和消费规则见 [接口手册第 8 节](../../interfaces/bag_builder_api.md#8-时间配对版本与兼容)。ok() 仍只表示完整发布，零对也可保留完整提取结果；应检查 pairs/prepared_pairs 和同步状态。

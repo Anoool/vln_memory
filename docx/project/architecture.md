@@ -1,6 +1,6 @@
 # 当前源码组织与观测准备层 bag
 
-当前最终交付范围是原设计第 1、2 部分，逐条进度见 [范围对照](sections_1_2_scope.md)，实施顺序见 [收敛后的系统规划](system_plan.md)。**当前只在开发观测准备层 bag，RGB、Depth、CameraInfo 已实现，第四个 TF 模块已实现链/覆盖索引。**
+当前最终交付范围是原设计第 1、2 部分，逐条进度见 [范围对照](sections_1_2_scope.md)，实施顺序见 [收敛后的系统规划](system_plan.md)。**截至 2026-11-02，当前实现仍集中于观测准备层 bag：传感器基础、TF 链/覆盖索引和 BagBuilder preparation 导出已实现；完整离线观测与后续记忆业务待实现。**
 
 ## 源码目录约定
 
@@ -26,7 +26,8 @@ src/bag/
     ├── {rgbd_sync,camera_info_index,image_decoder_ros}.cpp
     └── {media_writer,jsonl_writer}.cpp
 test/
-├── bag/common/test_sensor_time.cpp
+├── bag/builder/                 # 配对、标定索引、图像解码与磁盘输出回归
+├── bag/common/{test_sensor_names,test_sensor_time}.cpp
 ├── bag/rgb/{test_rgb,test_rgb_ros}.cpp
 ├── bag/depth/{test_depth,test_depth_ros}.cpp
 ├── bag/camera_info/{test_camera_info,test_camera_info_ros}.cpp
@@ -51,7 +52,7 @@ test/
 | TF | TFMessage、真实 topic、clock/segment 及查询时刻 | 坐标链、共同时间覆盖、带来源的历史样本选择 | 链/覆盖已实现；位姿求解后续 |
 | bag 读取与组装（builder） | bag 文件及提取配置 | 原始/标准媒体、配对、标定/TF/来源及 JSONL | 第一版已实现，正式 Observation 后续 |
 
-五模块属于同一个 vln_memory 包。bag 负责反序列化、跨消息同步、来源 ID、PNG/NPY 保存和 JSONL 组装，调用前四个数据处理模块；前四模块不反向依赖 bag，也不相互读取对方的内部状态。
+五模块属于同一个 vln_memory 包。builder 负责反序列化、RGB-D 时间配对、来源 ID、PNG/NPY 保存和 preparation JSONL 组装，调用前四个数据处理模块；前四模块不反向依赖 bag，也不相互读取对方的内部状态。
 
 跨模块时间与图像网格使用 [共享数据类型](../common/sensor_types.md)，保留原始整数采样时间；来源时钟、map 基准和观测组合由 bag 层负责。
 
@@ -151,3 +152,11 @@ CameraInfo 基线在原分支本地提交 d9b030b；TF 与配套修改位于 cod
 include/vln_memory/bag/builder 与 src/bag/builder 对应分类，含 bag_types、bag_config、bag_reader_ros、rgbd_sync、camera_info_index、media_writer、jsonl_writer、bag_builder；薄入口 src/apps/bag_builder_main.cpp，配置 config/vln_memory.yaml。逐文件职责及参数见 [实际接口](../interfaces/bag_builder_api.md)。
 
 TF 适配增加 entry_codes 供逐条导出；其余传感器处理接口不变。来源 CDR 第一遍保留，第二遍转换图像；prepare 产物明确没有数值位姿、有效模型和关键帧。后续 MemoryEngine 不能把它当正式 Observation 消费。
+
+## 2026-11-02 当前准备流程与后续接口
+
+BagBuilder 已在两遍读取中接入原 Image、JPEG RGB8/BGR8 和 16UC1 compressedDepth PNG；sync_tolerance_ns=0 为严格匹配，显式正值为 RGB 基准单调一对一最近候选。解码器位于 builder/image_decoder_ros，不把压缩编解码依赖加入无 ROS 传感器核心。两图原始时间保留，标定/TF 分别按本图时间检查。
+
+当前准备数据为 bag_preparation/1（builder_version=3），实际文件契约见 [BagBuilder 接口](../interfaces/bag_builder_api.md)。真实短片段已验证读取/解码/配对，但 plumb_bob/D8、动态 TF 精确时间和注册依据仍使配对进入 pending，详见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)。
+
+后续先补最小 Observation 契约、有效相机模型、TF 数值位姿及深度几何路径，再实现关键帧和正式 Observation 组装；接口边界和验收见 [系统规划第 10 节](system_plan.md#10-当前最近行动)。以上旧日期的目录/模块复核保留历史含义，不作为当前完整系统验收。
