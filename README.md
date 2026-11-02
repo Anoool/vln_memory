@@ -4,9 +4,9 @@ ROS 2 Humble / C++17 空间语义记忆功能包。**当前交付目标限定为
 
 逐条完成情况见 [原设计第 1、2 部分范围对照](docx/project/sections_1_2_scope.md)。当前两个原文部分均未完成。
 
-**当前已实现观测准备层的传感器基础、BagBuilder 读取/解码/配对及 preparation 导出；下一阶段为 S2 完整离线观测。数值位姿、有效相机模型、关键帧和正式 Observation 尚未实现。**
+**当前已实现观测准备层的读取/解码/配对、D8 受控兼容、raw/rectified 有效相机模型及 preparation 导出；下一步补 TF 数值位姿和深度几何。preparation 的读取/引用/筛选放到后续 API 输入组织时处理，不先新增最小 Observation。**
 
-传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。数值位姿、有效相机模型、关键帧和正式 Observation 仍待实现，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
+传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。数值位姿、关键帧和后续记忆业务仍待实现；有效相机模型已接入逐帧输出，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
 
 收敛后的目标、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
 
@@ -43,13 +43,15 @@ RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 
 
 ## 当前验证与下一步
 
-截至 2026-11-02，当前源码重新构建后 ROS CTest 15/15 通过；安装后 10 个消费者通过的记录见 [最近配对验收](docx/reviews/rgbd_nearest_pairing_verification.md)。构造回归与真实数据验证分别记录。
+截至 2026-11-03，ROS CTest 16/16、无 ROS 核心 9/9 通过。实际模型接口见 [CameraModel](docx/modules/camera_info/camera_model.md)，当前验证边界见 [相机模型验收](docx/reviews/camera_model_verification.md)；之前的 [最近配对验收](docx/reviews/rgbd_nearest_pairing_verification.md) 保留历史结果。
 
-真实 bag 的全部 6889 个图像 header 已核查：零容差 0 对，显式 30 ms 下 2671 对（RGB 匹配率 76.89%）。这是全包时间索引结果；本轮没有全量提取对应媒体。一秒真实图像片段 25 张全部解码、配出 7 对，但 prepared_pairs=0，原因包括 CameraInfo 的 plumb_bob/D8 不兼容、零插值间隔下缺少精确动态 TF、注册依据 unknown。物理同步、深度尺度、注册及几何精度仍待验收。
+完整真实 bag 已提取：21441 条消息，3474 RGB + 3415 Depth 全部解码并生成 6889 个相机模型；7268 条原始 D8 保留、显式兼容生成 D5。30 ms 下 2671 对全部具备两图模型，prepared_pairs=0 仍由动态 TF 精确时间/注册依据阻断。当前使用显式固定标定复用，索引复核全段一致；物理同步、尺度及注册精度仍待验收。
 
-当前产物为 bag_preparation/1，builder_version=3；prepared_for_geometry 也只表示已有准备检查通过，不能替代数值位姿或有效模型。临时 DB 和短片段媒体已清理，保留的小型审计快照不能直接作为完整数据集消费。
+当前产物为 bag_preparation/1，builder_version=4。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。没有数值 map 位姿或关键帧。完整媒体保留在忽略的 build/camera-model-20261103/full_output，不入 Git；旧轮临时媒体的清理记录仍只描述旧轮数据。
 
-下一步按 [系统规划第 10 节](docx/project/system_plan.md#10-当前最近行动) 先确定最小 Observation 契约，分步补齐 CameraInfo 兼容/有效模型、TF 数值位姿、深度几何使用路径，再实现关键帧与正式观测并做真实短 bag 验收。S3–S6 的工作库、工具/模型构建、纠错发布和 Viewer 尚未实现。
+本录包话题/frame/兼容策略见 [camera_record.yaml](config/camera_record.yaml)，修改路径后可用原 CLI 运行。完整验收及独立回查命令见上述报告。
+
+下一步按 [系统规划第 10 节](docx/project/system_plan.md#10-当前最近行动) 补 TF 数值位姿，再完善深度几何；preparation 输入筛选在调用 API 时实现。S3–S6 工作库、工具/模型构建、纠错发布和 Viewer 尚未实现。
 
 ## 当前接口
 
@@ -116,7 +118,7 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 
 ## Git 审阅
 
-本包是独立本地仓库。main 仍为 RGB 基线；BagBuilder 第一版保留 bag-builder-v1 标签。当前能力基线是 codex/rgbd-timestamp-alignment 的 24af181，包含此前传感器模块、BagBuilder、压缩图像、零容差和显式最近配对能力。本次进度文档更新位于其派生分支 codex/project-progress-20261102，尚未合并 main。模块完成后执行本地 git add，保留暂存差异供审阅，合并由用户确认后执行；实时分支与暂存状态以下列命令为准。
+本包是独立仓库，公开远程为 [Anoool/vln_memory](https://github.com/Anoool/vln_memory)。main 保留 RGB 基线；此前能力基线为 24af181，进度文档基线为 c1c7ab3。本轮计划、实现和验收位于 codex/camera-model-compatibility，分步提交并推送供审阅，不自动合并 main。实时分支与暂存状态以下列命令为准。
 
 ```bash
 git status --short --branch

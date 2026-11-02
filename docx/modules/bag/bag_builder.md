@@ -10,7 +10,7 @@
 
 配置检查 → 创建唯一工作目录 → 官方 reader 首遍索引/原始 CDR → rgbd_sync → CameraInfoIndex → 第二遍逐图 decodeRosRgb/decodeRosDepth、实际 RGB 网格核对、历史 TF 查询 → 媒体/JSONL → 引用/输入复核 → 完整 manifest/发布。
 
-采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用原匹配规则；数值位姿/有效模型/关键帧均标明未计算，不输出正式 observations.jsonl。
+采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用统一兼容/匹配规则并生成实际模型；数值位姿/关键帧仍未计算，不输出正式 observations.jsonl。
 
 ## 失败和产物
 

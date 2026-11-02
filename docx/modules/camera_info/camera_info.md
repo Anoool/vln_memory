@@ -172,3 +172,11 @@ SensorStamp、原始 CameraRoi 和 optional 结果保留，分别表达采样时
 人工审阅 camera_info.cpp 时，先看 validateCameraInfo 的来源/数值检查，再看 validateDistortion、validateMatrices 和 validateImageGrid；最后看 checkCameraInfoImage 的配置→图像→绑定→网格→时间。每个阶段保留原来的首个错误顺序，失败仍携带已经计算出的尺寸、calibration_code 和 timing；固定标定仍不伪造时差。
 
 复杂度和本次验证记录见 [重构计划与复核](../../project/camera_info_readability_plan.md)。
+
+## 2026-11-03 显式 D8 兼容
+
+decodeCameraInfo 保留严格规则。新增 normalizeCameraInfo(data, compatibility)，返回同一 CameraInfoResult 并附 normalization_applied；strict 默认，plumb_bob_zero_tail_d8_v1 仅在 D8 有限且尾三项严格为零时派生 D5。失败无 info，原输入按值复制/移动，不被覆盖；非法策略返回 invalid_options。cameraInfoCompatibilityName 返回静态策略名。
+
+CameraInfoMatchOptions 增加 compatibility；checkCameraInfoImage 经同一规范化入口解释候选，再检查实际图像。ROS 适配也接受同一可选策略，省略仍严格。标定候选检索已在 [CameraInfoIndex](../bag/camera_info_index.md) 实现。
+
+有效模型和像素射线属于 [camera_model](camera_model.md)，不与原始参数混淆。原始 K/D/R/P、时间和 frame 持续保留。

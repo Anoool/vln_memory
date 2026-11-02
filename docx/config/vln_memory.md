@@ -23,3 +23,11 @@ min_valid_depth_ratio 在 [0,1]，全无效深度始终失败。limits 各项必
 ## 格式与使用
 
 目前仅未压缩 SQLite ROS 2 bag；支持原 Image 及白名单压缩图像，详见 [压缩适配](../modules/bag/image_decoder_ros.md)。MCAP、ROS 1 和自动跨段处理不支持。示例单位/时钟声明不是设备事实，使用前按真实录制配置填写；输出预算包含标准 float32 NPY，实际大小可能显著超过压缩 bag。
+
+## 2026-11-03 相机兼容
+
+rgb_camera/depth_camera 新增 compatibility：省略/API 默认 strict；显式 plumb_bob_zero_tail_d8_v1 用于当前真实 bag 的有限零尾 D8。未知值拒绝；共享 CameraInfo 话题不能配置不同兼容策略。
+
+image_domain 必须根据实际生产链声明 raw/rectified；JPEG/PNG 是编码，alignment 是跨流注册，两者都不能决定图像域。静态标定复用仍须显式声明并由索引核查全段一致；不会为修复一张缺同刻 CameraInfo 的图像自动扩大时间门限。
+
+实际真实运行配置和结果见 [相机模型验收](../reviews/camera_model_verification.md)。

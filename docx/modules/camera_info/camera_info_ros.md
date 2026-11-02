@@ -41,3 +41,9 @@ find_package(vln_memory CONFIG REQUIRED)，链接 vln_memory::vln_memory_camera_
 ## 2026-10-29 修复与注释复核
 
 说明完整矩阵/畸变字段映射和核心校验，不在适配层补默认标定或修改原始几何。 话题格式统一最长 247 字节。具体修复与验证记录见 [本次实施记录](../../project/sensor_validation_comments_plan.md)。
+
+## 2026-11-03 统一兼容入口
+
+copyRosCameraInfo(message, topic) 独立复制未经校验的全部 ROS 字段；供 reader 保存原始证据，返回值不能未经校验用于几何。decodeRosCameraInfo(message, topic, compatibility=strict) 复用该映射后调用 normalizeCameraInfo，结果与无 ROS 核心一致。旧两参数源码调用仍为严格模式；签名扩展须重新编译下游。
+
+Reader 与 ROS API 共用这一映射，不再维护两份字段复制代码；末三项非零/非有限不会被截断。测试增加直接 ROS D8 兼容及默认严格检查。

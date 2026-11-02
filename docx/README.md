@@ -1,8 +1,8 @@
 # vln_memory 文档导航
 
-更新：2026-11-02。S1 读取/严格或最近时间配对/preparation 导出已实现并有真实数据核查；S2 的有效模型、数值位姿、关键帧和正式 Observation 待实现，S3–S6 尚未实现。当前交付范围仍是原设计第 1、2 部分。
+更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。下一步为 TF 数值位姿和深度几何；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
 
-最近待办及逐项交付见 [系统规划第 10 节](project/system_plan.md#10-当前最近行动)，实际验证边界见 [最近配对验收](reviews/rgbd_nearest_pairing_verification.md)。历史报告保留其当时的结论，不能用旧测试数量或旧缺口替代当前进度。
+最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。
 
 ## 从哪里开始
 
@@ -78,7 +78,7 @@ docx/
 | --- | --- | --- |
 | RGB | modules/rgb/ | 已实现 |
 | Depth | modules/depth/ | 已实现 |
-| CameraInfo | modules/camera_info/ | 校验/匹配已实现；真实 D8 兼容与有效模型待实现 |
+| CameraInfo | modules/camera_info/ | 校验/匹配、D8 兼容、实际模型及单点射线已实现 |
 | TF | modules/tf/ | 链/覆盖已实现；位姿求解后续 |
 | bag | modules/bag/ | 读取/指定压缩图像解码/严格或最近配对/准备导出已实现；关键帧和正式 Observation 待实现 |
 
@@ -86,7 +86,7 @@ docx/
 
 ## 当前开发位置
 
-当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补 S0 最小契约和 S2 几何/正式观测，不为尚未实现的其他层建立空说明。
+当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补 TF 数值位姿与深度几何，API 输入组织时复用 preparation，不为尚未实现的其他层建立空说明。
 
 ## BagBuilder 文件导航
 
@@ -104,3 +104,14 @@ docx/
 | 独立 NumPy/JSON/摘要验证 | [test_bag_output](modules/bag/tests/test_bag_output.md) |
 | 标定索引核心测试 | [test_camera_info_index](modules/bag/tests/test_camera_info_index.md) |
 | 安装后接口调用 | [bag_builder_consumer](modules/bag/tests/bag_builder_consumer.md) |
+
+## 当前相机模型导航
+
+| 内容 | 入口 |
+| --- | --- |
+| 真实 bag 支持范围、模型契约与分步实现 | [实施说明](project/camera_model_implementation.md) |
+| raw/rectified 有效模型、ROI/binning、像素射线 | [camera_model](modules/camera_info/camera_model.md) |
+| 独立已知答案和安装模型消费者 | [test_camera_model](modules/camera_info/tests/test_camera_model.md) |
+| 完整 DB/CDR/原始与派生标定/所有媒体像素审计 | [audit_camera_dataset](modules/bag/tests/audit_camera_dataset.md) |
+| 本轮完整真实 bag、最终安装版本复验和剩余问题 | [验收](reviews/camera_model_verification.md) |
+| 当前实际录包的显式配置，路径需替换 | [camera_record.yaml](../config/camera_record.yaml) |

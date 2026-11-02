@@ -97,3 +97,7 @@ endforeach()
 PUBLIC 同时供本库编译和下游使用；target_link_libraries 继续保留真实实现依赖。没有把头复制到 src，也没有将引用改成 include/vln_memory 或跨目录 ../。
 
 详细路径对应、人工编译和验证见 [头文件搜索说明](header_include_paths.md)。导出的函数、库目标、安装结构和零容差行为不变。
+
+## 2026-11-03 CameraModel
+
+新增独立导出目标 vln_memory::vln_memory_camera_model，PUBLIC 依赖 CameraInfo，PRIVATE 使用 OpenCV core/calib3d。普通 C++ 公开头无 ROS/OpenCV 类型；无 ROS 构建也需 OpenCV 开发库。模型核心测试 camera_model_core 和安装消费者 camera_model_consumer 验证数值与依赖，现有核心库职责不变。

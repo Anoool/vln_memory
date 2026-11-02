@@ -29,3 +29,7 @@ verifyBagSources(options, scan) → void：复核 SHA-256、字节数、metadata
 首遍完整反序列化原消息，但只从压缩头读取布局，不分配解压像素；第二遍使用 [image_decoder_ros](image_decoder_ros.md) 解码后回调 Image。来源/CDR/原 header/format 保留，不以解码后的字节数覆盖原负载大小。未知格式和坏负载按帧 pending，不改配；已读取的 CDR 若第二遍不可读，仍按 source_changed 失败。
 
 readBagImages 回调中 record.message_type 和 compressed_format 表示来源；encoding 表示交给核心的 Image 编码。像素和临时 record 引用都只在回调期间有效。真实版本验收见 [重跑记录](../../reviews/rgbd_zero_tolerance_verification.md)。
+
+## 2026-11-03 CameraInfo 统一路径
+
+reader 用 copyRosCameraInfo 保留原始参数，再用 normalizeCameraInfo 按来源相机的显式 compatibility 生成派生参数。严格原始检查与派生可用性分别导出；仅派生失败写不可用标定 issue。共享标定话题在配置阶段要求两路兼容策略一致。全部来源、原始 header 和 CDR 保持不变。

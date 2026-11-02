@@ -23,3 +23,7 @@ tfTimeJson 的 covered 仅说明原始端点可用，明确 pose_computed=false�
 ## 严格时间与压缩来源
 
 当前 BagBuilder 写出的 pair 只含原始同刻两图，delta_ns 为字符串 "0"；summary/manifest 的同步状态与提取状态分开。frames 增加源消息类型/format，压缩源没有 source_step/source_is_bigendian，写 null；坏负载仍可 metadata_available=true。底层 stamp/整数序号序列化规则不变。
+
+## 2026-11-03 标定派生字段
+
+cameraInfoJson 保留原始 d/k/r/p 与 validation_code/message；新增 compatibility、normalization_applied、normalized_code 和 effective_d（无可用派生标定时 null）。原始 CDR 是完整证据，JSON 的原始字段不被兼容过程覆盖。实际图像的有效网格矩阵另存 frames.camera_model。

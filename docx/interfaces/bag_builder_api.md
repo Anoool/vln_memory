@@ -1,6 +1,6 @@
 # BagBuilder 接口与文件契约（可配置最近配对版本）
 
-更新：2026-11-02，builder_version=3。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
+更新：2026-11-03，builder_version=4。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
 
 ## 1. 从哪里调用
 
@@ -88,9 +88,9 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 
 ## 6. 准备状态与几何边界
 
-prepared_for_geometry 要求两图解码、各自标定、各自 map 相机 TF 及 RGB 时刻 body TF、注册声明核对和深度质量通过；它仍没有求解实际位姿/有效内参。pending 的 reasons 列出失败项，不自动改配。
+prepared_for_geometry 要求两图解码、各自标定/有效模型、各自 map 相机 TF 及 RGB 时刻 body TF、注册声明核对和深度质量通过；它仍没有求解实际位姿。pending 的 reasons 列出失败项，不自动改配。
 
-所有产物明确 pose_computed=false/effective_model_computed=false；没有 keyframes，也没有正式 observations.jsonl。原始数值 TF/相机参数可供下一阶段求解，但下游不能把 covered 或相同 frame 当作已完成的 map 位姿。
+pose_computed 仍为 false；effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功；manifest/summary 的对应布尔值表示至少一帧成功，完整数量看 camera_models。没有 keyframes 或正式 observations.jsonl；covered 不能当作已完成的 map 位姿。
 
 ## 7. 检查方法
 
@@ -130,3 +130,17 @@ manifest builder_version=3；JSON schema 仍为 bag_preparation/1。v2 的零配
 BagImageRecord 保留 message_type、compressed_format、payload_error_code/payload_error。frames 的 source_step/source_is_bigendian 在压缩源为 null；source_encoding 是中间 Image 编码，压缩源声明在 source_format。坏压缩体保留 header，坏 CDR 才无 metadata。
 
 实际测试、全包时间核查与短片段媒体验证见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)；[零容差验收](../reviews/rgbd_zero_tolerance_verification.md) 保留此前 v2 的历史结果。
+
+## 10. 相机兼容与有效模型（builder_version=4）
+
+JSON schema 继续 bag_preparation/1，新增字段保留旧原始值；C++ 结构/ROS 适配签名已扩展，下游须用配套头/库重新编译。v3 时间配对行为不变。
+
+每路相机新增 compatibility：strict（省略/API 默认）或 plumb_bob_zero_tail_d8_v1。后者仅接受有限且末三项严格为零的 plumb_bob D8，在副本中派生 D5 并严格校验。共享 CameraInfo 话题要求两路使用相同策略。
+
+camera_info.jsonl 的 d/k/r/p 和 validation_code/validation_message 仍描述原始参数；新增 compatibility、normalization_applied、normalized_code、effective_d（失败 null）。规范化成功不再作为不可用标定问题重复写 issues。
+
+frames.jsonl 新增 camera_model：code/message，成功时包含实际 width/height/frame_id、image_domain、distortion_model、D/K/R/P、normalization_applied、ray_convention=original_optical_frame_z_one。原始 calibration_id 继续关联 camera_info.jsonl，图像时间不变。失败明确 effective_model_computed=false，不输出零模型。
+
+camera_models 是成功生成模型的帧数，CLI/result/summary/manifest 一致。配对失败原因新增 rgb_camera_model_unavailable / depth_camera_model_unavailable；TF/注册缺失时可以已有有效模型而 pair 仍 pending。
+
+接口与坐标约定见 [CameraModel](../modules/camera_info/camera_model.md)，实现与真实验证见 [实施说明](../project/camera_model_implementation.md) 和 [验收](../reviews/camera_model_verification.md)。

@@ -1,6 +1,6 @@
 # 当前源码组织与观测准备层 bag
 
-当前最终交付范围是原设计第 1、2 部分，逐条进度见 [范围对照](sections_1_2_scope.md)，实施顺序见 [收敛后的系统规划](system_plan.md)。**截至 2026-11-02，当前实现仍集中于观测准备层 bag：传感器基础、TF 链/覆盖索引和 BagBuilder preparation 导出已实现；完整离线观测与后续记忆业务待实现。**
+当前最终交付范围是原设计第 1、2 部分，逐条进度见 [范围对照](sections_1_2_scope.md)，实施顺序见 [收敛后的系统规划](system_plan.md)。**截至 2026-11-03，当前实现仍集中于观测准备层 bag：传感器基础、TF 链/覆盖索引、D8 兼容/有效模型和 BagBuilder preparation 导出已实现；完整离线观测与后续记忆业务待实现。**
 
 ## 源码目录约定
 
@@ -160,3 +160,9 @@ BagBuilder 已在两遍读取中接入原 Image、JPEG RGB8/BGR8 和 16UC1 compr
 当前准备数据为 bag_preparation/1（builder_version=3），实际文件契约见 [BagBuilder 接口](../interfaces/bag_builder_api.md)。真实短片段已验证读取/解码/配对，但 plumb_bob/D8、动态 TF 精确时间和注册依据仍使配对进入 pending，详见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)。
 
 后续先补最小 Observation 契约、有效相机模型、TF 数值位姿及深度几何路径，再实现关键帧和正式 Observation 组装；接口边界和验收见 [系统规划第 10 节](system_plan.md#10-当前最近行动)。以上旧日期的目录/模块复核保留历史含义，不作为当前完整系统验收。
+
+## 2026-11-03 CameraModel 与统一兼容
+
+camera_info 模块新增 camera_model.hpp/.cpp，对实际图像生成 raw/rectified 模型和原光学 frame 射线；规范化规则集中在 camera_info，ROS 与 reader 共用字段映射。索引选来源与版本，builder 组装并导出模型，时间/配对/TF 继续各司其职。实现见 [CameraModel](../modules/camera_info/camera_model.md)。
+
+最小 Observation 不再作为当前前置；API 输入组织时读取/引用/筛选既有 preparation。下一步是 TF 数值求解和深度几何，具体见 [当前规划](system_plan.md#10-当前最近行动)。

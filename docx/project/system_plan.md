@@ -1,8 +1,8 @@
 # VLN 空间语义记忆规划：当前只交付原设计第 1、2 部分
 
-更新：2026-11-02。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
+更新：2026-11-03。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
 
-**当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前已实现观测准备层基础与 BagBuilder preparation 导出，完整 Observation 及后续记忆业务尚未实现，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
+**当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前已实现观测准备层基础与 BagBuilder preparation 导出，有效模型已接入 preparation，数值位姿及后续记忆业务尚未实现，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
 
 ## 1. 本轮范围与完成定义
 
@@ -11,7 +11,7 @@
 ```text
 ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
   -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析、关键帧
-  -> observations.jsonl + evidence/ + pending/质量报告
+  -> preparation JSONL + evidence/ + pending/质量报告
   -> MemoryEngine：几何、实体/关系、构建读取与修改工具、模型批次/恢复
   -> 原文 1.6 规定的完整版本、索引与原子发布 manifest
   -> MemoryViewer：map 实体/关系、图像/选区/轨迹/位姿联动及命名标注
@@ -29,11 +29,11 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | --- | --- | --- |
 | RGB | rgb8/bgr8/mono8 到紧密 rgb8，输入检查与独立输出；builder 已接入原 Image/JPEG 并保存 PNG | 单帧模块不承担物理同步或相机几何 |
 | Depth | 16UC1/32FC1、明确米/毫米、米制 optical-z、质量统计 | 物理配准、径向深度换算、可直接用于投影的几何链 |
-| CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查；builder 已实现标定候选索引/选择 | 真实 plumb_bob/D8 的受控兼容、有效内参、去畸变/重投影 |
+| CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查；builder 已实现标定候选索引/选择 | 物理标定精度和跨流重投影；D8 兼容、有效模型及单点射线已实现 |
 | TF | 静/动态原始消息、child/时间索引、链/区间交集与样本端点 | 插值/求逆/组合后的 map 相机/底盘位姿及跳变门控 |
 | common | SensorStamp/ImageGeometry、候选时差与统一名称检查；builder 已保留消息来源和显式 clock/segment | 正式 Observation 的统一 map/版本契约 |
-| BagBuilder | SQLite bag 两遍读取、Image/指定压缩图像解码、严格/最近配对、标定候选与 TF 历史检查、CDR/PNG/NPY/JSONL 及 pending 导出 | 数值位姿、有效模型、关键帧、正式 Observation |
-| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标；当前 ROS CTest 15/15 通过 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
+| BagBuilder | SQLite bag 两遍读取、Image/指定压缩图像解码、严格/最近配对、标定候选与 TF 历史检查、CDR/PNG/NPY/JSONL 及 pending 导出 | 数值位姿、关键帧和后续记忆业务 |
+| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标；当前 ROS CTest 16/16 通过 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
 
 当前 vln_memory 中没有 Entity/Relation/Observation 正式业务类型和持久化，没有原文八个构建工具。vln_agent 的 SessionManager/ToolManager 是可复用基础；EnvironmentMemory 是逐观测历史，不计作永久空间记忆。详见 [范围对照第 6 节](sections_1_2_scope.md)。
 
@@ -43,13 +43,13 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | --- | --- | --- | --- | --- |
 | S0 数据契约/配置 | 1.1–1.6、2.10 | map/clock/来源/版本、Observation 与实体/关系字段规则，配置 schema/加载与校验 | 单位、引用、缺项、版本语义明确；配置不静默猜数据含义 | 部分完成：传感器/准备数据契约及 bag 配置已落地；正式业务类型、map/版本和其他配置待补 |
 | S1 自动配对与读取 | 2.1、2.10 | 先实现无 ROS rgbd_sync，再 reader、话题类型/编码与时间索引 | 确定配对、平局/一对一、时钟段边界、来源可回查 | 主要能力已实现；全包时间索引与真实短片段提取已验证，物理同步/尺度/注册仍待验收 |
-| S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 已具备传感器基础、标定候选/TF 端点及 preparation；有效模型、数值位姿、关键帧和正式 Observation 待实现 |
+| S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 已有标定兼容、有效模型和 preparation；数值位姿、深度几何与后续观测组织待完善 |
 | S3 几何与工作库 | 1.2/1.4/1.6、2.3–2.7 | 点/区域到 map、对象/空间、关系、事务存储、基本索引与版本 | 已知几何答案、永久 ID、代表点、inside/region_id、revision | 待实现 |
 | S4 工具与模型构建 | 1.5、2.1/2.2/2.4/2.6 | 八工具、上下文/图像、批次循环、进度/幂等恢复 | 真实模型服务、多视图 ID 复用、轮数上限/失败不误报完成、重复 call_id 不重复写 | 待实现 |
 | S5 纠错/标注与发布 | 2.7–2.10 | 四纠错、关系刷新、注释历史、完整记忆产物和原子 manifest | 整体提交/引用修复、人工信息保留、几何缓存失效、半成品不发布 | 待实现 |
 | S6 Viewer 与闭环验收 | 2.1/2.9/2.10 | 地图/关系/图像/轨迹联动、按实体/关系/时间定位观测、人工命名与回读 | 同一发布版本可检查，标注走共用写入路径，重开后结果一致 | 待实现 |
 
-S0 已部分落地，先补齐 S2 所需的最小 Observation、map/版本字段契约，再逐个实现真实模块；Entity/Relation 随 S3 落地，不为所有阶段生成空类。RGB-D 自动配对与第一版 reader/准备导出已实现，实际接口见 [BagBuilder](../interfaces/bag_builder_api.md)；该方案现在明确归属于 S1，不再把它当整个第 1、2 部分的交付范围。
+S0 已部分落地。按用户最新要求，当前不先实现最小 Observation；既有 preparation 的读取/引用/筛选在后续 API 输入组织时处理。map/版本与 Entity/Relation 随实际业务落地，不为所有阶段生成空类。RGB-D 自动配对与第一版 reader/准备导出已实现，实际接口见 [BagBuilder](../interfaces/bag_builder_api.md)；该方案现在明确归属于 S1，不再把它当整个第 1、2 部分的交付范围。
 
 ## 4. S0–S2：观测准备层如何收口
 
@@ -72,9 +72,11 @@ reader 负责 bag 存储/类型/反序列化、来源与稳定顺序，当前纯
 
 TF 模块在既有链/样本选择之上补数值插值、逆变换与组合，得到 map<-body、body<-camera_optical、map<-camera_optical；返回查询时刻与所用原始依据，缺失/超界/跳变明确处理，不用 latest 补历史。
 
-CameraInfo 模块补实际图像模型：raw 使用 K/D，rectified 使用 P，并处理 ROI/binning/裁剪缩放。非 optical-z 值在模型明确后换算；未注册深度先按标定/外参重投影。支持范围按真实输入验证，未支持的组合进入明确错误/pending，不能默认生成单位模型。
+CameraModel 已实现实际网格 K/D/P、ROI/binning 和单点射线：raw 去畸变，rectified 经 P 内参与 R 逆旋转。非 optical-z 值在模型明确后换算；未注册深度先按标定/外参重投影。支持范围按真实输入验证，未支持的组合进入明确错误/pending，不能默认生成单位模型。
 
 ### 4.4 Observation、关键帧和证据
+
+以下保留后续记忆业务的观测要求；当前不新增独立最小 Observation 层，先复用 preparation，读取映射和筛选在 API 输入组织时处理。
 
 一条 Observation 引用一对明确配对的图像，保留原文字段并使时间语义无歧义：camera_pose_map 对应 RGB 参考时刻，Depth 保留自己时刻的相机位姿（可增加 depth_camera_pose_map），body_pose_map 对应 RGB 索引时刻。schema 阶段确定具体字段，不用一个未注明时间的位姿替代两者。
 
@@ -155,38 +157,25 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 - Viewer 按实体/关系/时间联动检查和标注回读；
 - 三个入口使用实际 config/vln_memory.yaml，支持字段和错误有验证。
 
-当前代码已重新构建，ROS CTest 15/15 通过；10 个安装消费者通过见最近配对验收记录。构造回归支持已实现接口可调用，真实时间索引/短片段核查支持读取、解码和配对；均不能代替正式几何和完整系统验收。原文第 1、2 部分完成前，README 和进度报告不得写成完整离线记忆系统已经交付。
+当前代码已重新构建，ROS CTest 16/16、无 ROS 9/9 通过；模型接口及安装/真实数据验收见 [相机模型验收](../reviews/camera_model_verification.md)。构造回归支持已实现接口可调用，真实时间索引/短片段核查支持读取、解码和配对；均不能代替正式几何和完整系统验收。原文第 1、2 部分完成前，README 和进度报告不得写成完整离线记忆系统已经交付。
 
 ## 10. 当前最近行动
 
-### 10.1 已完成的核查与当前阻塞（2026-11-02）
+### 10.1 2026-11-03 相机模型进展
 
-当前能力基线为 24af181（codex/rgbd-timestamp-alignment），实际接口见 [BagBuilder](../interfaces/bag_builder_api.md)，真实输入结果见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)。
+D8 兼容、原始/派生标定、reader/索引/直接 ROS 匹配贯通，raw/rectified 有效模型和像素射线已实现，见 [实施](camera_model_implementation.md) 与 [验收](../reviews/camera_model_verification.md)。
 
-- S1 已具备单个明确时钟段的未压缩 SQLite bag 两遍读取、指定 Image/CompressedImage 解码、标定候选选择、TF 端点检查及 preparation 导出。
-- sync_tolerance_ns=0 严格；显式正值为 RGB 基准单调一对一最近候选。原始时间和真实 delta_ns 保留，各图标定/TF 使用自己的采样时刻；30 ms 是试用值，capture_sync_status 仍为 unknown。
-- 全包 3474 RGB + 3415 Depth 的 header 已核查：0 ms 为 0 对，30 ms 为 2671 对。此为时间索引结果，不表示本轮已生成全包媒体或完整观测。
-- 一秒真实图像片段 25 张全部解码、配出 7 对，但 prepared_pairs=0。26 条 CameraInfo 的 plumb_bob/D8 被严格校验拒绝；tf_max_gap_ns=0 下缺少精确动态 TF；注册依据 unknown。
-- 当前 builder_version=3、schema=bag_preparation/1，pose_computed/effective_model_computed/keyframes_selected 均为 false。即使 prepared_for_geometry 通过，也不等于正式 Observation。
-- 临时输入 DB、短片段媒体已清理，只保留小型审计记录；下一次真实数据验证需重新准备输入。深度物理尺度、时钟/曝光同步、空间注册和运动误差仍需独立依据。
+完整真实 bag：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整输出及本轮复验数据位于忽略的 build/camera-model-20261103，旧轮清理说明不代表本轮数据已删除。
 
-### 10.2 下一轮实施顺序与交付
+### 10.2 后续任务与依赖
 
-以下均为待办，不是已实现接口。先完成 S2 的最小闭环，再进入 S3–S6。
+| 顺序 | 工作 | 交付/验收 |
+| --- | --- | --- |
+| 1 | TF 数值位姿 | 在现有历史索引上插值、求逆、链组合；各图使用自己的时间，body 使用 RGB 时间；已知答案、超间隔/跳变和真实短 bag 验证 |
+| 2 | 深度几何 | 核实单位、原始 optical-z 坐标和注册依据，接入相机射线与 TF；需要的重投影/运动处理有明确模型，缺项继续 pending |
+| 后续 API 输入组织时 | preparation 读取、引用和筛选 | 复用现有 frames/pairs/calibration/model/evidence，不先新增最小 Observation 类型或独立数据集 |
+| 随离线构建推进 | 关键帧/批次输入选择 | 依据有效位姿和明确采样规则选择需要的观测，保留稳定来源和像素坐标；与 API 输入组织协同落地 |
 
-| 顺序 | 工作 | 输入与依赖 | 交付和验收 |
-| --- | --- | --- | --- |
-| 1 | 最小 Observation 数据契约（补 S0） | 现有 frames/pairs、来源和 clock/segment；原文 1.3 | 明确 map_id/几何版本、RGB/Depth 各自时间/标定/位姿、RGB 时刻 body 位姿、媒体引用、质量和 pending；先文档约定，再随模块实现校验/序列化 |
-| 2 | CameraInfo 兼容与有效模型 | 原始 K/D/R/P、domain、ROI/binning、实际图像网格 | 先核查真实 plumb_bob/D8；仅在多余项为零且语义明确时设计受控兼容，保留原始值与转换依据；落实 raw/rectified 的有效模型与明确不支持错误 |
-| 3 | TF 数值位姿 | TfIndex 选出的精确/静态样本或插值端点 | 平移/旋转插值、求逆、链组合，输出各图时刻的 map 相机位姿及 RGB 时刻 body 位姿；以已知答案和独立对照核验方向/单位/时间，超间隔或跳变拒绝 |
-| 4 | 深度几何使用路径 | 有效相机模型、各图位姿、设备单位/注册依据 | 核对尺度、坐标系及注册声明；未注册深度按明确内外参重投影，近似配对按各图时刻处理；无依据继续 pending，不自动认定运动补偿或几何精度通过 |
-| 5 | 关键帧与正式 Observation | 前述模型/位姿/几何检查、位移/转角/采样策略 | 实现首帧、静止、缺位姿、跳变处理；输出稳定 observation_id、关键帧引用、observations.jsonl、evidence 与 pending/质量报告，并检查引用完整性 |
-| 6 | S2 真实短 bag 验收 | 重新准备输入、显式配置及采集依据 | 独立回查 CDR/header/图像/标定/位姿/文件引用；至少形成可用正式观测，同时验证缺项如实进入 pending；若输入依据不足，记录阻塞，不误报 S2 完成 |
+### 10.3 后续业务
 
-每步先确定扁平输入/输出、所有权、错误和依赖，再按模块实现、补分类文档、做针对性验证并保留独立 codex 分支供审阅。TF 与相机模型可分别验证，正式 Observation 组装依赖两者就绪。
-
-### 10.3 S2 之后
-
-按阶段表继续：S3 几何投影/实体关系/SQLite 工作库与索引 → S4 八工具/真实模型批次及幂等恢复 → S5 纠错/人工标注/关系刷新/完整版本原子发布 → S6 Viewer 联动与端到端验收。暂不扩展完整在线查询与导航。
-
-原文第 1、2 部分仍未完成；各阶段须按实际产物和验收证据更新状态。
+继续 S3 几何投影/实体关系/SQLite 工作库与索引 → S4 八工具/真实模型批次及幂等恢复 → S5 纠错/人工标注/关系刷新/完整版本原子发布 → S6 Viewer 联动与端到端验收。当前仍不展开完整在线查询与导航。原文第 1、2 部分的完整验收目标保留；已有 preparation 可作为后续观测组织的输入。
