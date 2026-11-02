@@ -105,6 +105,8 @@ docx/
 | 标定索引核心测试 | [test_camera_info_index](modules/bag/tests/test_camera_info_index.md) |
 | 安装后接口调用 | [bag_builder_consumer](modules/bag/tests/bag_builder_consumer.md) |
 
+本轮验收后的媒体/临时输入及旧构建清理见 [2026-11-03 清理记录](reviews/build_cleanup_20261103.md)，完整数据集需要从原始 ZIP 重建。
+
 ## 当前相机模型导航
 
 | 内容 | 入口 |

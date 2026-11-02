@@ -165,7 +165,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 D8 兼容、原始/派生标定、reader/索引/直接 ROS 匹配贯通，raw/rectified 有效模型和像素射线已实现，见 [实施](camera_model_implementation.md) 与 [验收](../reviews/camera_model_verification.md)。
 
-完整真实 bag：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整输出及本轮复验数据位于忽略的 build/camera-model-20261103，旧轮清理说明不代表本轮数据已删除。
+完整真实 bag：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整媒体和临时输入已于 2026-11-03 按用户要求清理；build/camera-model-20261103 仅保留小型摘要、日志、配置和审计快照，当前构建/安装保留。完整数据集需从原始 ZIP 重建，见 [清理记录](../reviews/build_cleanup_20261103.md)。
 
 ### 10.2 后续任务与依赖
 

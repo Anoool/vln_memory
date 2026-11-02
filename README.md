@@ -47,7 +47,7 @@ RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 
 
 完整真实 bag 已提取：21441 条消息，3474 RGB + 3415 Depth 全部解码并生成 6889 个相机模型；7268 条原始 D8 保留、显式兼容生成 D5。30 ms 下 2671 对全部具备两图模型，prepared_pairs=0 仍由动态 TF 精确时间/注册依据阻断。当前使用显式固定标定复用，索引复核全段一致；物理同步、尺度及注册精度仍待验收。
 
-当前产物为 bag_preparation/1，builder_version=4。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。没有数值 map 位姿或关键帧。完整媒体保留在忽略的 build/camera-model-20261103/full_output，不入 Git；旧轮临时媒体的清理记录仍只描述旧轮数据。
+当前产物为 bag_preparation/1，builder_version=4。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。没有数值 map 位姿或关键帧。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
 
 本录包话题/frame/兼容策略见 [camera_record.yaml](config/camera_record.yaml)，修改路径后可用原 CLI 运行。完整验收及独立回查命令见上述报告。
 

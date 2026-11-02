@@ -35,7 +35,7 @@ builder_version=4，JSON 仍为 bag_preparation/1。每帧和每对的有效模�
 | 耗时 / 最大 RSS | 14:53.99 / 117712 KiB，约 115 MiB |
 | 数据集文件总字节 | 16404527947 |
 
-完整产物保留在 build/camera-model-20261103/full_output，未清理，约 16 GB。该目录、输入副本和生成日志均被 Git 忽略，不上传 GitHub。
+验收时完整产物为 build/camera-model-20261103/full_output，约 16 GB。随后按用户要求于 2026-11-03 清理完整媒体和输入副本，保留小型摘要/日志/元数据快照，详见 [清理记录](build_cleanup_20261103.md)。这些生成数据不上传 GitHub，原始 ZIP 保留。
 
 全部 2671 对已具有两图有效模型，但仍 pending。原因计数：
 
@@ -62,7 +62,7 @@ tf_max_gap_ns=0 仅接受精确动态样本；本轮不把放宽参数当作已�
 
 完整提取后，收口直接调用的转换标志和共用 ROS 字段映射，并用最终安装版 CLI 再跑同源一秒子集。子集保留原始 SQLite ID、record time/CDR，图像/CameraInfo 为一秒窗口，全部 TF 保留；不是新的独立完整录制。
 
-7335 消息、26 条原始/派生标定、25 张图像及 25 个模型、7 对，completed_with_issues，退出 0；同一独立审计检查全部子集 CDR、header、模型、媒体和配对差异为 0。剩余问题仍为 7 条 pair_pending、6 条 outside_tolerance。产物 final_short_output 保留。
+7335 消息、26 条原始/派生标定、25 张图像及 25 个模型、7 对，completed_with_issues，退出 0；同一独立审计检查全部子集 CDR、header、模型、媒体和配对差异为 0。剩余问题仍为 7 条 pair_pending、6 条 outside_tolerance。产物 final_short_output 随后按用户要求清理，保留小型审计快照。
 
 ## 6. 构造回归与安装接口
 
