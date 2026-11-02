@@ -66,3 +66,18 @@
 - [RealSense frame_callback 实现](https://github.com/realsenseai/realsense-ros/blob/ros2-master/realsense2_camera/src/base_realsense_node.cpp)：frameset 使用共同发布时刻；应另外保留各流原始设备时间证据。
 
 当前状态：完成代码/环境核查与实施前规划；尚未改变严格配对规则，尚未进行新的真实 bag 或设备验收。
+
+## 5. 用户选择后的实施拆分（2026-11-02）
+
+用户已明确允许按最近时间配对，并保留原始时间戳和差值。采用路线 B。
+
+1. 同步核心只新增 rgbdSyncPolicyName(max_delta_ns) 静态策略名接口，集中服务 builder/CLI；不改变 pairRgbDepth 的算法、输入结构与所有权。
+2. BagBuildOptions 的默认容差及 YAML 省略值仍为 0；配置允许非负 int64。仓库示例显式填写 30000000 ns（30 ms）作为本次试用值，需按实际运动误差预算调整，程序不自动扩容。
+3. synchronize 传递配置，验证报告的最大绝对时差未超门限；零模式保留严格不变量。pair 的 exact 按实际 delta 计算，policy 和 sync_tolerance_ns 在 pair/summary/manifest/CLI 中一致。
+4. 正容差无配对返回 no_pairs/问题 no_rgbd_pairs；零模式保留 no_exact_pairs/no_exact_rgbd_pairs，空流仍为 empty_stream。manifest builder_version 升为 3，JSON schema 仍为 bag_preparation/1，消费者必须检查实际策略。
+5. RGB stamp 是配对参考时刻；不新增可覆盖源时间的 aligned_stamp。标定和 TF 仍各用本图时间。近似配对允许进入传感器准备流程，但不证明数值几何、运动补偿或曝光同步。
+6. 集成回归使用负 1 ns/正 2 ns 的原始和压缩图像，验证零门限、边界、超差、正负号、原时间/TF 查询、状态及序列化。独立 Python 按原始 CDR 再核算。
+7. 真实输入先恢复约 990 MB 的源 DB，仅做全部时间戳审计；复用正式核心比较 0/5/10/20/30/40/50 ms。再抽取短片段运行正式 BagBuilder 验证媒体/JSONL，避免全量生成约 16 GB。临时源和短片段媒体验证后清理，保留小型审计记录。
+8. 修改后运行当前 ROS 全套 CTest、安装下游验证、文档链接/差异检查。源码同名模块说明、接口/配置、历史零容差验收入口与导航同步更新。
+
+自审：沿用已有核心/依赖/平局与一对一规则；没有时钟改写、全局最优或物理同步承诺。新策略名函数只返回静态字符串，不分配；实际图像仍逐帧解码。以上为编码前确定的接口和验证范围。
