@@ -1,0 +1,60 @@
+# Supplied recording profile: explicit diagnostic clock/domain/registration declarations remain in force.
+bag:
+  input: /absolute/path/to/camera_record
+  output: /absolute/path/to/new_camera_preparation
+  storage_id: sqlite3
+  clock_id: recorded_ros_header_epoch_hypothesis
+  clock_relation: same_clock
+  clock_basis: Diagnostic same-clock hypothesis for supplied capture; original headers
+    preserved; physical synchronization not verified
+  segment_id: camera_record_single_recording
+  segment_basis: 'Supplied capture: prior full scan found no backwards image/CameraInfo
+    headers; no automatic cross-reset pairing'
+  sync_tolerance_ns: 30000000
+  tf_max_gap_ns: 0
+  max_header_reorder_ns: 0
+  map_frame: map
+  body_frame: base_link
+  tf_topic: /tf
+  tf_static_topic: /tf_static
+  min_valid_depth_ratio: 0.0
+  rgb_camera:
+    image_topic: /camera/color/image_raw/compressed
+    camera_info_topic: /camera/color/camera_info
+    optical_frame: camera_color_optical_frame
+    binding_basis: 'Observed actual topic and header frame; geometry still requires
+      audit; explicit fixed-model reuse: prior full-bag audit found one model per
+      stream; current index rechecks entire segment consistency'
+    image_domain: raw
+    time_policy: static_calibration
+    max_delta_ns: 0
+    compatibility: plumb_bob_zero_tail_d8_v1
+  depth_camera:
+    image_topic: /camera/depth/image_raw/compressedDepth
+    camera_info_topic: /camera/depth/camera_info
+    optical_frame: camera_color_optical_frame
+    binding_basis: 'Observed actual topic and header frame; registration/unit not
+      yet confirmed; explicit fixed-model reuse: prior full-bag audit found one model
+      per stream; current index rechecks entire segment consistency'
+    image_domain: raw
+    time_policy: static_calibration
+    max_delta_ns: 0
+    compatibility: plumb_bob_zero_tail_d8_v1
+  depth:
+    input_unit: millimeters
+    convention: optical_z
+    alignment: unknown
+    alignment_basis: Not accepted as registered solely from equal dimensions/frame
+      IDs
+    min_depth_m: 0.0
+  limits:
+    max_messages: 1000000
+    max_frames: 200000
+    max_calibrations: 100000
+    max_tf_entries: 1000000
+    max_serialized_bytes: 134217728
+    max_output_bytes: 34359738368
+    max_pixels: 16777216
+    max_input_bytes: 134217728
+    max_tf_edges: 4096
+    max_tf_samples: 1000000

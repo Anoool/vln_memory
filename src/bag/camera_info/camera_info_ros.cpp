@@ -10,8 +10,8 @@
 namespace vln_memory
 {
 
-/** @brief 复制消息和来源 topic 后交给核心校验；返回值不借用输入，失败保留核心错误。 */
-CameraInfoResult decodeRosCameraInfo(
+/** @brief 只复制原始字段，不做隐式修复；返回值独立持有，坏标定也可保存为证据。 */
+CameraInfoData copyRosCameraInfo(
   const sensor_msgs::msg::CameraInfo & message, std::string_view topic)
 {
   CameraInfoData input;
@@ -35,7 +35,15 @@ CameraInfoResult decodeRosCameraInfo(
   input.roi.width = message.roi.width;
   input.roi.height = message.roi.height;
   input.roi.do_rectify = message.roi.do_rectify;
-  return decodeCameraInfo(std::move(input));
+  return input;
+}
+
+/** @brief 复制后调用统一兼容入口；默认严格，显式零尾 D8 的结果与核心一致。 */
+CameraInfoResult decodeRosCameraInfo(
+  const sensor_msgs::msg::CameraInfo & message, std::string_view topic,
+  CameraInfoCompatibility compatibility)
+{
+  return normalizeCameraInfo(copyRosCameraInfo(message, topic), compatibility);
 }
 
 }  // namespace vln_memory

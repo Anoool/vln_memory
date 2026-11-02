@@ -54,6 +54,10 @@ nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record)
         {"height", roi.height}, {"do_rectify", roi.do_rectify}}},
     {"validation_code", cameraInfoErrorCodeName(record.validation_code)},
     {"validation_message", record.validation_message},
+    {"compatibility", cameraInfoCompatibilityName(record.compatibility)},
+    {"normalization_applied", record.normalization_applied},
+    {"normalized_code", cameraInfoErrorCodeName(record.normalized_code)},
+    {"effective_d", record.normalized ? nlohmann::json(record.normalized->d) : nlohmann::json(nullptr)},
     {"source_nonfinite", nonfinite(data.d) || nonfinite(data.k) || nonfinite(data.r) || nonfinite(data.p)}};
 }
 

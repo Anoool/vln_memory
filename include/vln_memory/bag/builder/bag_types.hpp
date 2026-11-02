@@ -104,6 +104,7 @@ struct BagBuildResult
   std::size_t rgb_frames{0};
   std::size_t depth_frames{0};
   std::size_t decoded_frames{0};
+  std::size_t camera_models{0};
   std::size_t pairs{0};
   std::size_t prepared_pairs{0};
   std::size_t issue_count{0};

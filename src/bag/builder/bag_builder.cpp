@@ -18,6 +18,7 @@
 #include <vln_memory/bag/builder/jsonl_writer.hpp>
 #include <vln_memory/bag/builder/rgbd_sync.hpp>
 #include <vln_memory/bag/depth/depth_ros.hpp>
+#include <vln_memory/bag/camera_info/camera_model.hpp>
 #include <vln_memory/bag/rgb/rgb_ros.hpp>
 
 namespace vln_memory
@@ -36,6 +37,7 @@ struct PreparedFrame
   std::string calibration_id;
   std::string calibration_code;
   bool camera_matched{false};
+  bool model_ready{false};
   bool tf_covered{false};
   bool body_tf_covered{false};
   bool alignment_checked{false};
@@ -206,7 +208,28 @@ ConvertedFrame convertDepth(
   return result;
 }
 
-/** @brief 选择标定、查询原始时刻 TF 并写入元数据；不计算/伪造位姿。 */
+/** @brief 导出实际模型及其明确坐标约定；失败仅写状态，不输出零内参。 */
+Json cameraModelJson(const CameraModelResult & result)
+{
+  Json record{{"code", cameraGeometryCodeName(result.code)}, {"message", result.message}};
+  if (!result.ok()) {return record;}
+  const auto & model = *result.model;
+  record["width"] = model.width;
+  record["height"] = model.height;
+  record["frame_id"] = model.frame_id;
+  record["image_domain"] = "raw";
+  if (model.image_domain == CameraImageDomain::rectified) {record["image_domain"] = "rectified";}
+  record["distortion_model"] = model.distortion_model;
+  record["d"] = model.d;
+  record["k"] = model.k;
+  record["r"] = model.r;
+  record["p"] = model.p;
+  record["normalization_applied"] = model.normalization_applied;
+  record["ray_convention"] = "original_optical_frame_z_one";
+  return record;
+}
+
+/** @brief 选择派生标定并生成图像模型，TF 仍按原始采样时刻检查，不伪造位姿。 */
 void attachGeometryChecks(
   const BagImageRecord & image, bool is_rgb, const BagBuildOptions & options,
   const BagScan & scan, const CameraInfoIndex & calibrations, PreparedFrame & prepared, Json & record)
@@ -225,6 +248,13 @@ void attachGeometryChecks(
     auto & timing = record["calibration"]["timing"];
     timing = {{"code", sensorTimeCodeName(selected.match.timing->code)}, {"delta_ns", nullptr}};
     if (selected.match.timing->delta_ns) {timing["delta_ns"] = std::to_string(*selected.match.timing->delta_ns);}
+  }
+  if (selected.info != nullptr) {
+    auto model = buildCameraModel(*selected.info, reference, *binding);
+    if (model.model) {model.model->normalization_applied = selected.normalization_applied;}
+    prepared.model_ready = model.ok();
+    record["camera_model"] = cameraModelJson(model);
+    record["effective_model_computed"] = prepared.model_ready;
   }
   TfTimeOptions time;
   time.clock_id = options.clock_id;
@@ -249,7 +279,8 @@ Json frameRecord(const BagImageRecord & image, bool is_rgb, bool metadata_availa
     {"source_data_bytes", image.data_bytes}, {"source_message_type", image.message_type},
     {"source_format", nullptr},
     {"decode_code", converted.code}, {"decode_message", converted.message}, {"media_path", nullptr},
-    {"details", converted.details}, {"pose_computed", false}, {"effective_model_computed", false}};
+    {"details", converted.details}, {"pose_computed", false}, {"effective_model_computed", false},
+    {"camera_model", {{"code", "not_computed"}, {"message", "No usable calibration/image"}}}};
   if (image.message_type == "sensor_msgs/msg/CompressedImage") {
     record["source_format"] = image.compressed_format;
     record["source_step"] = nullptr;
@@ -328,6 +359,8 @@ std::vector<std::string> pairReasons(const PreparedFrame & rgb, const PreparedFr
   if (depth.media_path.empty()) {reasons.push_back("depth_decode_failed");}
   if (!rgb.camera_matched) {reasons.push_back("rgb_calibration_unavailable");}
   if (!depth.camera_matched) {reasons.push_back("depth_calibration_unavailable");}
+  if (!rgb.model_ready) {reasons.push_back("rgb_camera_model_unavailable");}
+  if (!depth.model_ready) {reasons.push_back("depth_camera_model_unavailable");}
   if (!rgb.tf_covered) {reasons.push_back("rgb_tf_unavailable");}
   if (!depth.tf_covered) {reasons.push_back("depth_tf_unavailable");}
   if (!rgb.body_tf_covered) {reasons.push_back("body_tf_unavailable");}
@@ -353,7 +386,8 @@ void writePairs(
       {"exact", pair.delta_ns == 0}, {"policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"capture_sync_status", "unknown"},
       {"rgb_calibration_id", rgb.calibration_id}, {"depth_calibration_id", depth.calibration_id},
-      {"status", "pending"}, {"reasons", reasons}, {"pose_computed", false}, {"effective_model_computed", false}};
+      {"status", "pending"}, {"reasons", reasons}, {"pose_computed", false},
+      {"effective_model_computed", rgb.model_ready && depth.model_ready}};
     if (reasons.empty()) {record["status"] = "prepared_for_geometry"; ++result.prepared_pairs;} else {
       writeJsonLine(output, "reports/pending.jsonl", record);
       issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, pair_id});
@@ -402,6 +436,7 @@ Json effectiveOptions(const BagBuildOptions & options)
   const auto camera = [](const CameraInfoMatchOptions & value) {
       Json result{{"image_topic", value.image_topic}, {"camera_info_topic", value.camera_info_topic},
         {"optical_frame", value.optical_frame}, {"binding_basis", value.binding_basis},
+        {"compatibility", cameraInfoCompatibilityName(value.compatibility)},
         {"max_delta_ns", std::to_string(value.max_delta_ns)}, {"image_domain", "raw"}, {"time_policy", "synchronized"}};
       if (value.image_domain == CameraImageDomain::rectified) {result["image_domain"] = "rectified";}
       if (value.time_policy == CameraInfoTimePolicy::static_calibration) {result["time_policy"] = "static_calibration";}
@@ -463,7 +498,8 @@ Json summaryRecord(
     {"pending_pairs", result.pairs - result.prepared_pairs}, {"issue_count", result.issue_count},
     {"tf_raw_entries", scan.tf_entries}, {"tf_inserted", scan.tf_inserted}, {"tf_duplicates", scan.tf_duplicates},
     {"tf_unique_samples", scan.tf_index.sampleCount()}, {"numeric_poses_computed", false},
-    {"effective_models_computed", false}, {"keyframes_selected", false}};
+    {"effective_models_computed", result.camera_models > 0}, {"camera_models", result.camera_models},
+    {"keyframes_selected", false}};
 }
 
 /** @brief 写完整数据集说明及来源，字段/版本明确区分 preparation 和正式 memory。 */
@@ -483,7 +519,7 @@ void writeManifest(
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
   writeJsonFile(
-    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 3},
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 4},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
       {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
@@ -492,7 +528,8 @@ void writeManifest(
       {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
       {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
           "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"}},
-      {"pose_computed", false}, {"effective_model_computed", false}, {"keyframes_selected", false}});
+      {"pose_computed", false}, {"effective_model_computed", result.camera_models > 0},
+      {"camera_models", result.camera_models}, {"keyframes_selected", false}});
 }
 
 /** @brief 校验实际保存的原始/标准文件引用，避免在引用断裂时发布。 */
@@ -547,6 +584,7 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
       auto prepared = processImage(image, message, options, scan, calibrations, rgb_grids, output, issues);
       if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;} else {++result.depth_frames;}
       if (!prepared.media_path.empty()) {++result.decoded_frames;}
+      if (prepared.model_ready) {++result.camera_models;}
       frames.emplace(image.source.message_id, std::move(prepared));
     });
   if (result.rgb_frames == 0 || result.depth_frames == 0) {

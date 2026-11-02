@@ -18,6 +18,11 @@ namespace vln_memory
  * @note 所有输出独立拥有数据，不依赖源消息/topic 生命周期；复用核心的全部校验。
  */
 CameraInfoResult decodeRosCameraInfo(
+  const sensor_msgs::msg::CameraInfo & message, std::string_view topic,
+  CameraInfoCompatibility compatibility = CameraInfoCompatibility::strict);
+
+/** @brief 无校验地复制原始 ROS 字段以保存证据；调用方须在计算前显式校验/规范化。 */
+CameraInfoData copyRosCameraInfo(
   const sensor_msgs::msg::CameraInfo & message, std::string_view topic);
 
 }  // namespace vln_memory

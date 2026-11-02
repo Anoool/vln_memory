@@ -45,6 +45,16 @@ int main()
     std::cerr << "ROS CameraInfo retained borrowed data\n";
     return 1;
   }
+  message.d.resize(8, 0);
+  const auto compatible = vln_memory::decodeRosCameraInfo(
+    message, topic, vln_memory::CameraInfoCompatibility::plumb_bob_zero_tail_d8);
+  if (!compatible.ok() || !compatible.normalization_applied ||
+    compatible.info->d.size() != 5 || message.d.size() != 8 ||
+    vln_memory::decodeRosCameraInfo(message, topic).ok())
+  {
+    std::cerr << "ROS bounded compatibility differs from core\n";
+    return 1;
+  }
   message.k[0] = 0;
   const auto invalid = vln_memory::decodeRosCameraInfo(message, topic);
   if (invalid.ok() || invalid.code != vln_memory::CameraInfoErrorCode::uncalibrated) {return 1;}

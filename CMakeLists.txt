@@ -46,7 +46,16 @@ target_link_libraries(vln_memory_camera_info_index PUBLIC vln_memory_camera_info
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_info_index PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-set(memory_export_targets vln_memory_rgb vln_memory_depth
+# 模型库独立于 ROS，内部复用已安装的 OpenCV 几何运算。
+find_package(OpenCV REQUIRED COMPONENTS core calib3d)
+add_library(vln_memory_camera_model SHARED src/bag/camera_info/camera_model.cpp)
+add_library(vln_memory::vln_memory_camera_model ALIAS vln_memory_camera_model)
+target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE ${OpenCV_LIBS})
+target_include_directories(vln_memory_camera_model SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_camera_model PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+set(memory_export_targets vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
@@ -109,7 +118,7 @@ if(VLN_MEMORY_ENABLE_ROS)
   add_library(vln_memory::vln_memory_bag_builder ALIAS vln_memory_bag_builder)
   target_link_libraries(vln_memory_bag_builder PUBLIC
     vln_memory_rgb_ros vln_memory_depth_ros vln_memory_camera_info_ros vln_memory_tf_ros
-    vln_memory_rgbd_sync vln_memory_camera_info_index nlohmann_json::nlohmann_json
+    vln_memory_rgbd_sync vln_memory_camera_info_index vln_memory_camera_model nlohmann_json::nlohmann_json
     PRIVATE yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
   target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
   ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp rcutils cv_bridge)
@@ -139,6 +148,9 @@ endforeach()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_camera_model test/bag/camera_info/test_camera_model.cpp)
+  target_link_libraries(test_camera_model PRIVATE vln_memory_camera_model)
+  add_test(NAME camera_model_core COMMAND test_camera_model)
   add_executable(test_camera_info_index test/bag/builder/test_camera_info_index.cpp)
   target_link_libraries(test_camera_info_index PRIVATE vln_memory_camera_info_index)
   add_test(NAME camera_info_index_core COMMAND test_camera_info_index)
@@ -221,6 +233,7 @@ install(FILES include/vln_memory/bag/rgb/rgb.hpp
 install(FILES include/vln_memory/bag/depth/depth.hpp
   DESTINATION include/vln_memory/bag/depth)
 install(FILES include/vln_memory/bag/camera_info/camera_info.hpp
+  include/vln_memory/bag/camera_info/camera_model.hpp
   DESTINATION include/vln_memory/bag/camera_info)
 install(FILES include/vln_memory/bag/tf/tf.hpp
   DESTINATION include/vln_memory/bag/tf)

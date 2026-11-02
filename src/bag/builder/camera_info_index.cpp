@@ -109,9 +109,17 @@ CameraInfoSelection CameraInfoIndex::select(
     result.message = "Conflicting models share the selected timestamp";
     return result;
   }
-  result.match = checkCameraInfoImage(record.data, image, options);
+  const CameraInfoData * data = &record.data;
+  const bool use_normalized = record.normalized && record.compatibility == options.compatibility;
+  if (use_normalized) {data = &*record.normalized;}
+  result.match = checkCameraInfoImage(*data, image, options);
   result.code = cameraInfoMatchCodeName(result.match.code);
   result.message = result.match.message;
+  if (result.matched()) {
+    result.info = data;
+    result.normalization_applied = result.match.normalization_applied ||
+      (use_normalized && record.normalization_applied);
+  }
   return result;
 }
 

@@ -426,27 +426,6 @@ void indexImage(
   scan.images.push_back(std::move(record));
 }
 
-/** @brief 失败时也需保留完整原始参数供候选选择，核心校验仍只调用现有适配器。 */
-CameraInfoData rawCameraInfo(const sensor_msgs::msg::CameraInfo & message, const std::string & topic)
-{
-  CameraInfoData data;
-  data.topic = topic;
-  data.stamp = {message.header.stamp.sec, message.header.stamp.nanosec};
-  data.frame_id = message.header.frame_id;
-  data.width = message.width;
-  data.height = message.height;
-  data.distortion_model = message.distortion_model;
-  data.d = message.d;
-  data.k = message.k;
-  data.r = message.r;
-  data.p = message.p;
-  data.binning_x = message.binning_x;
-  data.binning_y = message.binning_y;
-  data.roi = {message.roi.x_offset, message.roi.y_offset, message.roi.width,
-    message.roi.height, message.roi.do_rectify};
-  return data;
-}
-
 /** @brief 保存所有标定（包含坏候选）及来源，原始 CDR 已由扫描主循环保存。 */
 void indexCameraInfo(
   const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
@@ -465,12 +444,19 @@ void indexCameraInfo(
   }
   BagCameraInfoRecord record;
   record.source = source;
-  auto decoded = decodeRosCameraInfo(*message, source.topic);
-  record.validation_code = decoded.code;
-  record.validation_message = decoded.message;
-  if (decoded.ok()) {record.data = std::move(*decoded.info);} else {
-    record.data = rawCameraInfo(*message, source.topic);
-    addIssue(scan, source, "camera_info", cameraInfoErrorCodeName(decoded.code), decoded.message);
+  record.data = copyRosCameraInfo(*message, source.topic);
+  const auto original = decodeCameraInfo(record.data);
+  record.validation_code = original.code;
+  record.validation_message = original.message;
+  const auto * binding = &options.depth_camera;
+  if (source.topic == options.rgb_camera.camera_info_topic) {binding = &options.rgb_camera;}
+  record.compatibility = binding->compatibility;
+  auto normalized = normalizeCameraInfo(record.data, record.compatibility);
+  record.normalized_code = normalized.code;
+  record.normalization_applied = normalized.normalization_applied;
+  record.normalized = std::move(normalized.info);
+  if (!record.normalized) {
+    addIssue(scan, source, "camera_info", cameraInfoErrorCodeName(normalized.code), normalized.message);
   }
   writeJsonLine(output, "camera_info.jsonl", cameraInfoJson(record));
   scan.calibrations.push_back(std::move(record));

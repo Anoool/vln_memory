@@ -88,12 +88,20 @@ void readCamera(const YAML::Node & node, CameraInfoMatchOptions & camera)
 {
   checkKeys(
     node, {"image_topic", "camera_info_topic", "optical_frame", "binding_basis",
-      "image_domain", "time_policy", "max_delta_ns"});
+      "image_domain", "time_policy", "max_delta_ns", "compatibility"});
   readScalar(node, "image_topic", camera.image_topic);
   readScalar(node, "camera_info_topic", camera.camera_info_topic);
   readScalar(node, "optical_frame", camera.optical_frame);
   readScalar(node, "binding_basis", camera.binding_basis);
   readScalar(node, "max_delta_ns", camera.max_delta_ns);
+  if (node["compatibility"]) {
+    const auto value = node["compatibility"].as<std::string>();
+    if (value == "strict") {camera.compatibility = CameraInfoCompatibility::strict;} else if (
+      value == "plumb_bob_zero_tail_d8_v1")
+    {
+      camera.compatibility = CameraInfoCompatibility::plumb_bob_zero_tail_d8;
+    } else {throw BagBuildError("invalid_config", "Unknown CameraInfo compatibility");}
+  }
   const auto domain = node["image_domain"].as<std::string>();
   if (domain == "raw") {camera.image_domain = CameraImageDomain::raw;} else if (domain == "rectified") {
     camera.image_domain = CameraImageDomain::rectified;
@@ -170,6 +178,11 @@ void checkCamera(const CameraInfoMatchOptions & camera, std::vector<std::string>
   {
     errors.push_back("Invalid CameraInfo time_policy");
   }
+  if (camera.compatibility != CameraInfoCompatibility::strict &&
+    camera.compatibility != CameraInfoCompatibility::plumb_bob_zero_tail_d8)
+  {
+    errors.push_back("Invalid CameraInfo compatibility");
+  }
   if (camera.max_delta_ns < 0 || camera.clock_relation != SensorClockRelation::same_clock) {
     errors.push_back("Camera matching requires same_clock and nonnegative max_delta_ns");
   }
@@ -207,6 +220,11 @@ void checkDepth(const DepthOptions & depth, std::vector<std::string> & errors)
 std::vector<std::string> validateBagBuildOptions(const BagBuildOptions & options)
 {
   std::vector<std::string> errors;
+  if (options.rgb_camera.camera_info_topic == options.depth_camera.camera_info_topic &&
+    options.rgb_camera.compatibility != options.depth_camera.compatibility)
+  {
+    errors.push_back("Shared CameraInfo requires the same compatibility policy");
+  }
   if (options.bag_uri.empty() || options.output_directory.empty() || options.storage_id != "sqlite3") {
     errors.push_back("Input/output paths and sqlite3 storage_id are required");
   }

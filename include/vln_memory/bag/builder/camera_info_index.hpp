@@ -18,6 +18,10 @@ struct BagCameraInfoRecord
   CameraInfoData data;
   CameraInfoErrorCode validation_code{CameraInfoErrorCode::none};
   std::string validation_message;
+  std::optional<CameraInfoData> normalized;  // 独立拥有派生参数；原 data 永远是原值。
+  CameraInfoErrorCode normalized_code{CameraInfoErrorCode::none};
+  bool normalization_applied{false};
+  CameraInfoCompatibility compatibility{CameraInfoCompatibility::strict};
 };
 
 /** @brief 候选选择与最终匹配分别报告；失败仍保留已选来源便于审阅。 */
@@ -27,6 +31,9 @@ struct CameraInfoSelection
   std::string message;
   std::string calibration_id;
   CameraInfoMatchResult match;
+  // 仅 matched 时借用已选标定；records 在整个使用期必须不可变且存活。
+  const CameraInfoData * info{nullptr};
+  bool normalization_applied{false};
   /** @brief 只表示选择及既有匹配检查通过，不包含有效内参求解。 */
   bool matched() const noexcept {return code == "matched" && match.matched();}
 };

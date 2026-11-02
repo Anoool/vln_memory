@@ -78,6 +78,28 @@ void selectionCases()
   expect(
     CameraInfoIndex(single_bad).select(image, fixed).code == "invalid_camera_info",
     "One invalid model must not be reported as a model change");
+  auto raw_d8 = calibration(1, 0);
+  raw_d8.data.d.resize(8, 0);
+  const auto policy = CameraInfoCompatibility::plumb_bob_zero_tail_d8;
+  const auto normalized = normalizeCameraInfo(raw_d8.data, policy);
+  raw_d8.normalized = normalized.info;
+  raw_d8.normalization_applied = normalized.normalization_applied;
+  raw_d8.compatibility = policy;
+  const std::vector<BagCameraInfoRecord> compatible_records{raw_d8};
+  expect(!CameraInfoIndex(compatible_records).select(image, config).matched(),
+    "Stored derived model bypassed strict caller policy");
+  auto compatible_options = config;
+  compatible_options.compatibility = policy;
+  const auto accepted = CameraInfoIndex(compatible_records).select(image, compatible_options);
+  expect(accepted.matched() && accepted.info != nullptr && accepted.info->d.size() == 5 &&
+    compatible_records[0].data.d.size() == 8 && accepted.normalization_applied,
+    "Index lost raw/derived contract or explicit compatibility");
+  auto bare_d8 = calibration(1, 0);
+  bare_d8.data.d.resize(8, 0);
+  const std::vector<BagCameraInfoRecord> bare_records{bare_d8};
+  const auto direct = CameraInfoIndex(bare_records).select(image, compatible_options);
+  expect(direct.matched() && direct.normalization_applied,
+    "Direct D8 index call lost normalization provenance");
   records[1].data.stamp.nanosec = 1000000000U;
   expect(
     CameraInfoIndex(records).select(

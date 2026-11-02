@@ -23,6 +23,7 @@ bag:
     camera_info_topic: /camera/color/camera_info
     optical_frame: camera_color_optical_frame
     binding_basis: "请填写 RGB 流与该标定/光学 frame 的设备依据"
+    compatibility: plumb_bob_zero_tail_d8_v1  # 本录包的有限零尾 D8；省略/API 默认 strict。
     image_domain: raw
     time_policy: synchronized
     max_delta_ns: 0
@@ -31,6 +32,7 @@ bag:
     camera_info_topic: /camera/depth/camera_info
     optical_frame: camera_depth_optical_frame
     binding_basis: "请填写 Depth 流与该标定/光学 frame 的设备依据"
+    compatibility: plumb_bob_zero_tail_d8_v1  # 本录包的有限零尾 D8；省略/API 默认 strict。
     image_domain: raw
     time_policy: synchronized
     max_delta_ns: 0

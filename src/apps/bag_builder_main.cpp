@@ -39,7 +39,7 @@ int main(int argc, char ** argv)
       {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
       {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},
       {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
-      {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
+      {"camera_models", result.camera_models}, {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
       {"timestamp_match_policy", vln_memory::rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
       {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"}};

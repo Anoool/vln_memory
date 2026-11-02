@@ -27,7 +27,7 @@ namespace fs = std::filesystem;
 using namespace vln_memory;
 using Json = nlohmann::json;
 enum class FixtureKind {
-  normal, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
+  normal, d8, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
   compressed, mixed_compressed, bad_compressed, offset_depth, near_depth, near_compressed, far_depth
 };
 
@@ -227,8 +227,10 @@ void createFixture(const fs::path & path, FixtureKind kind)
   auto noise = rgb(10);
   noise.data.resize(1000000, 0);
   writeMessage(writer, "/not_selected", -999999999LL, noise);
-  writeMessage(writer, "/rgb_info", 0, calibration());
-  writeMessage(writer, "/depth_info", 0, calibration());
+  auto camera_info = calibration();
+  if (kind == FixtureKind::d8) {camera_info.d.resize(8, 0);}
+  writeMessage(writer, "/rgb_info", 0, camera_info);
+  writeMessage(writer, "/depth_info", 0, camera_info);
   std::uint16_t first = 1000;
   if (kind == FixtureKind::invalid_depth) {first = 0;}
   std::uint32_t offset_ns = 0;
@@ -478,7 +480,7 @@ void checkNearestOutput(const fs::path & output, std::int64_t tolerance_ns, std:
   const auto manifest = readJson(output / "bag_manifest.json");
   const auto policy = "rgb_reference_monotonic_nearest_one_to_one_v1";
   expect(summary.at("timestamp_match_policy") == policy, "Summary mislabeled nearest policy");
-  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 3,
+  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 4,
     "Manifest did not declare current behavior");
   expect(summary.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing summary tolerance");
   expect(manifest.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing manifest tolerance");
@@ -579,6 +581,48 @@ void sourceChangeCase(const fs::path & root)
   expect(rejected, "Changed source accepted by second pass");
 }
 
+/** @brief 真实序列化 D8 贯穿 reader/索引/匹配/模型/JSON，严格模式仍明确拒绝。 */
+void cameraCompatibilityCases(const fs::path & root)
+{
+  const auto input = root / "d8_bag";
+  createFixture(input, FixtureKind::d8);
+  auto options = fixtureOptions(input, root / "d8_strict_out");
+  const auto strict = buildBag(options);
+  expect(strict.ok() && strict.camera_models == 0, "Strict D8 bypassed");
+  options.output_directory = (root / "d8_compatible_out").string();
+  options.rgb_camera.compatibility = CameraInfoCompatibility::plumb_bob_zero_tail_d8;
+  options.depth_camera.compatibility = options.rgb_camera.compatibility;
+  const auto compatible = buildBag(options);
+  expect(compatible.ok() && compatible.camera_models == 6 && compatible.prepared_pairs == 2,
+    "D8 did not reach prepared pairs");
+  for (const auto & info : readLines(root / "d8_compatible_out/camera_info.jsonl")) {
+    expect(info.at("d").size() == 8 && info.at("effective_d").size() == 5 &&
+      info.at("normalization_applied") == true && info.at("validation_code") == "invalid_distortion" &&
+      info.at("normalized_code") == "none", "Raw/derived calibration or statuses lost");
+  }
+  for (const auto & frame : readLines(root / "d8_compatible_out/frames.jsonl")) {
+    if (frame.at("media_path").is_null()) {continue;}
+    expect(frame.at("effective_model_computed") == true &&
+      frame.at("camera_model").at("image_domain") == "raw" &&
+      frame.at("camera_model").at("normalization_applied") == true,
+      "Frame lost model or normalization provenance");
+  }
+  for (const auto & issue : readLines(root / "d8_compatible_out/reports/issues.jsonl")) {
+    expect(issue.at("code") != "invalid_distortion", "Recovered calibration reported as unusable");
+  }
+  auto yaml = YAML::LoadFile((root / "demo_config.yaml").string());
+  yaml["bag"]["rgb_camera"]["compatibility"] = "plumb_bob_zero_tail_d8_v1";
+  const auto config = root / "compatible_config.yaml";
+  {std::ofstream output(config); output << yaml;}
+  expect(loadBagBuildOptions(config.string()).rgb_camera.compatibility ==
+    CameraInfoCompatibility::plumb_bob_zero_tail_d8, "YAML compatibility lost");
+  yaml["bag"]["rgb_camera"]["compatibility"] = "guess";
+  {std::ofstream output(config); output << yaml;}
+  bool rejected = false;
+  try {loadBagBuildOptions(config.string());} catch (const BagBuildError &) {rejected = true;}
+  expect(rejected, "Unknown YAML compatibility accepted");
+}
+
 /** @brief 同输入重复构建、覆盖/预算失败、单文件范围和所有特殊路径回归。 */
 void integrationCases(const fs::path & root)
 {
@@ -612,6 +656,7 @@ void integrationCases(const fs::path & root)
   sourceChangeCase(root);
   strictCompressedCases(root);
   nearestCases(root);
+  cameraCompatibilityCases(root);
 }
 }
 

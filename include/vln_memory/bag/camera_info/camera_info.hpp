@@ -49,11 +49,13 @@ struct CameraInfoData
   CameraRoi roi;
 };
 
+enum class CameraInfoCompatibility {strict, plumb_bob_zero_tail_d8};
+
 enum class CameraInfoErrorCode
 {
   none, invalid_topic, invalid_frame, invalid_stamp, invalid_dimensions, uncalibrated,
   nonfinite_parameters, unsupported_distortion_model, invalid_distortion,
-  invalid_intrinsics, invalid_rectification, invalid_projection, invalid_roi, unsupported_binning
+  invalid_intrinsics, invalid_rectification, invalid_projection, invalid_roi, unsupported_binning, invalid_options
 };
 
 /** @brief 只返回完整可用的标定；失败不返回半成功数据，原始消息由上层保留为证据。 */
@@ -62,6 +64,7 @@ struct CameraInfoResult
   CameraInfoErrorCode code{CameraInfoErrorCode::none};
   std::string message;
   std::optional<CameraInfoData> info;
+  bool normalization_applied{false};  // 原始数据由调用方保存；这里只标记派生 D5。
   /** @brief 仅完整校验通过且存在拥有型标定时返回 true，不代表物理精度已验证。 */
   bool ok() const noexcept
   {
@@ -101,6 +104,7 @@ struct CameraInfoMatchOptions
   SensorClockRelation clock_relation{SensorClockRelation::unknown};
   // 非负整数纳秒，0 表示严格相等；固定标定策略不检查采样时差。
   std::int64_t max_delta_ns{0};
+  CameraInfoCompatibility compatibility{CameraInfoCompatibility::strict};
 };
 
 enum class CameraInfoMatchCode
@@ -120,6 +124,7 @@ struct CameraInfoMatchResult
   // 固定标定策略不比较采样时差，timing 为空；这不表示两条消息时间相同。
   std::optional<SensorTimeCheck> timing;
   bool used_static_calibration{false};
+  bool normalization_applied{false};
   /** @brief 只确认指定候选的关联条件通过，不代表已生成有效内参或完成深度注册。 */
   bool matched() const noexcept
   {
@@ -138,6 +143,13 @@ const char * cameraInfoMatchCodeName(CameraInfoMatchCode code) noexcept;
  *       校验数值/结构一致性，不证明物理精度；系统分配异常通过 C++ 异常上报。
  */
 CameraInfoResult decodeCameraInfo(CameraInfoData input);
+
+/** @brief 按显式策略派生后严格校验；仅零尾 D8 可转 D5，原输入不被改写。 */
+CameraInfoResult normalizeCameraInfo(
+  CameraInfoData input, CameraInfoCompatibility compatibility = CameraInfoCompatibility::strict);
+
+/** @brief 返回静态策略名，未知枚举返回 unknown，无需释放。 */
+const char * cameraInfoCompatibilityName(CameraInfoCompatibility compatibility) noexcept;
 
 /**
  * @brief 核对标定与指定图像的话题、光学 frame、ROI/binning 后尺寸和时间策略。

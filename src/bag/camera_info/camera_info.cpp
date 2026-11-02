@@ -219,6 +219,7 @@ const char * cameraInfoErrorCodeName(CameraInfoErrorCode code) noexcept
     case CameraInfoErrorCode::invalid_projection: return "invalid_projection";
     case CameraInfoErrorCode::invalid_roi: return "invalid_roi";
     case CameraInfoErrorCode::unsupported_binning: return "unsupported_binning";
+    case CameraInfoErrorCode::invalid_options: return "invalid_options";
   }
   return "unknown";
 }
@@ -250,9 +251,40 @@ CameraInfoResult decodeCameraInfo(CameraInfoData input)
   return {CameraInfoErrorCode::none, "", std::move(input)};
 }
 
+/** @brief 返回静态兼容策略名，无分配；不把非法枚举当作严格模式。 */
+const char * cameraInfoCompatibilityName(CameraInfoCompatibility compatibility) noexcept
+{
+  switch (compatibility) {
+    case CameraInfoCompatibility::strict: return "strict";
+    case CameraInfoCompatibility::plumb_bob_zero_tail_d8: return "plumb_bob_zero_tail_d8_v1";
+  }
+  return "unknown";
+}
+
+/** @brief 在拥有型副本上解释有限零尾 D8，然后复用严格校验；失败无派生数据。 */
+CameraInfoResult normalizeCameraInfo(CameraInfoData input, CameraInfoCompatibility compatibility)
+{
+  if (compatibility != CameraInfoCompatibility::strict &&
+    compatibility != CameraInfoCompatibility::plumb_bob_zero_tail_d8)
+  {
+    return {CameraInfoErrorCode::invalid_options, "Unknown CameraInfo compatibility policy", std::nullopt};
+  }
+  bool applied = false;
+  if (compatibility == CameraInfoCompatibility::plumb_bob_zero_tail_d8 &&
+    input.distortion_model == "plumb_bob" && input.d.size() == 8 && hasFiniteValues(input.d) &&
+    input.d[5] == 0.0 && input.d[6] == 0.0 && input.d[7] == 0.0)
+  {
+    input.d.resize(5);
+    applied = true;
+  }
+  auto result = decodeCameraInfo(std::move(input));
+  result.normalization_applied = applied;
+  return result;
+}
+
 /** @brief 按标定、配置、图像、绑定、网格、时间的顺序检查，返回首个错误及已有诊断。 */
 CameraInfoMatchResult checkCameraInfoImage(
-  const CameraInfoData & info, const CameraImageReference & image,
+  const CameraInfoData & input, const CameraImageReference & image,
   const CameraInfoMatchOptions & options)
 {
   using Code = CameraInfoMatchCode;
@@ -264,11 +296,14 @@ CameraInfoMatchResult checkCameraInfoImage(
       return result;
     };
   // 公开结构可被调用者修改，所以不能仅凭“曾经 decode 成功”跳过当前数据检查。
-  const auto validation = validateCameraInfo(info);
-  if (validation.code != CameraInfoErrorCode::none) {
-    result.calibration_code = validation.code;
-    return fail(Code::invalid_camera_info, validation.message);
+  const auto normalized = normalizeCameraInfo(input, options.compatibility);
+  if (!normalized.ok()) {
+    result.calibration_code = normalized.code;
+    return fail(Code::invalid_camera_info, normalized.message.c_str());
   }
+  result.normalization_applied = normalized.normalization_applied;
+  const auto & info = *normalized.info;
+  const auto validation = validateImageGrid(info);
   result.expected_width = validation.expected_width;
   result.expected_height = validation.expected_height;
   if (!hasValidMatchOptions(options)) {

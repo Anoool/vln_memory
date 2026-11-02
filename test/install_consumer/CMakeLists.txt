@@ -44,3 +44,7 @@ endif()
 # 复用行为测试源，但只通过安装导出目标解析公开头和依赖。
 add_executable(camera_info_index_consumer ../bag/builder/test_camera_info_index.cpp)
 target_link_libraries(camera_info_index_consumer PRIVATE vln_memory::vln_memory_camera_info_index)
+
+# 下游只链接已安装模型库，验证普通 C++ API 和 OpenCV 私有依赖可解析。
+add_executable(camera_model_consumer ../bag/camera_info/test_camera_model.cpp)
+target_link_libraries(camera_model_consumer PRIVATE vln_memory::vln_memory_camera_model)
