@@ -166,6 +166,35 @@ const char * tfCoverageStatusName(TfCoverageStatus status) noexcept;
 /** @brief 返回时刻检查状态的稳定静态名称；未知枚举返回 unknown，无需释放。 */
 const char * tfTimeCodeName(TfTimeCode code) noexcept;
 
+enum class TfPoseCode {ready, time_unavailable, invalid_limits, jump_too_large, numerical_failure};
+
+/** @brief 只限制动态插值端点之间的变化，省略表示该项不设上限。 */
+struct TfJumpLimits
+{
+  std::optional<double> translation_m;
+  std::optional<double> rotation_rad;
+};
+
+/** @brief T_target_source 的数值，平移为米，旋转为单位四元数 xyzw。 */
+struct TfPose
+{
+  std::array<double, 3> translation_m{};
+  std::array<double, 4> rotation_xyzw{0, 0, 0, 1};
+};
+
+struct TfPoseResult
+{
+  TfPoseCode code{TfPoseCode::time_unavailable};
+  TfTimeCheck time;
+  std::optional<TfPose> pose;
+  std::string failed_frame;  // 数值求解失败时的原始边 child。
+  /** @brief 仅当整条链求解成功才返回 true。 */
+  bool ok() const noexcept {return pose.has_value();}
+};
+
+/** @brief 返回静态状态名称，无需释放。 */
+const char * tfPoseCodeName(TfPoseCode code) noexcept;
+
 namespace detail
 {
 
@@ -212,6 +241,18 @@ public:
   TfTimeCheck checkTime(
     const std::string & target, const std::string & source, const SensorStamp & stamp,
     const TfTimeOptions & options) const;
+
+  /** @brief 复用 checkTime 的拥有型证据，返回 source 到 target 的完整数值变换。 */
+  TfPoseResult lookupPose(
+    const std::string & target, const std::string & source, const SensorStamp & stamp,
+    const TfTimeOptions & options, const TfJumpLimits & jump_limits = {}) const;
+
+  /**
+   * @brief 对请求链中的动态边取两倍下中位间隔，返回各边估计的最大值。
+   * @note 每边至少需三个样本。无足够样本返回 0；只在读完当前数据段后调用一次。
+   */
+  std::int64_t inferInterpolationGapNs(
+    const std::string & target, const std::vector<std::string> & sources) const;
 
 private:
   /** @brief 只检查拓扑并生成 source->target 路径，不计算覆盖或几何。 */

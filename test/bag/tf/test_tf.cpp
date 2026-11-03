@@ -1,6 +1,7 @@
 #include <vln_memory/bag/tf/tf.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -312,6 +313,55 @@ void testQueryValidationOrder()
     "Coverage inspection must preserve chain-first validation");
 }
 
+/** 使用可手算的旋转和平移核对父坐标系结果、反向链及门限。 */
+void testNumericPose()
+{
+  TfIndex index(scope);
+  auto before = sample("map", "base", {0, 0});
+  auto after = sample("map", "base", {0, 50});
+  before.rotation_xyzw = {0, 0, std::sin(0.125 * std::acos(-1.0)), std::cos(0.125 * std::acos(-1.0))};
+  after.rotation_xyzw = {0, 0, -before.rotation_xyzw[3], -before.rotation_xyzw[2]};
+  after.translation_m = {2, 0, 0};
+  after.source_message_id = "later";
+  add(index, before);
+  add(index, after);
+  after.stamp.nanosec = 100;
+  add(index, after);
+  after.stamp.nanosec = 300;
+  add(index, after);
+  auto fixed = sample("base", "camera", {}, TfKind::static_transform);
+  fixed.translation_m = {1, 0, 0};
+  add(index, fixed);
+  expect(index.inferInterpolationGapNs("map", {"camera", "base"}) == 100,
+    "Automatic gap ignored cadence or followed the outlier");
+  expect(index.inferInterpolationGapNs("map", {"missing"}) == 0, "Unknown chain inferred a gap");
+  const auto result = index.lookupPose("map", "camera", {0, 25}, timeOptions(100));
+  expect(result.ok(), "Forward pose unavailable");
+  const auto & t = result.pose->translation_m;
+  const auto & q = result.pose->rotation_xyzw;
+  expect(std::abs(t[0] - 1) < 1e-12 && std::abs(t[1] - 1) < 1e-12 &&
+    std::abs(t[2]) < 1e-12 && std::abs(q[2] - std::sqrt(0.5)) < 1e-12,
+    "Incorrect parent-space composition or quaternion interpolation");
+  expect(result.time.edges[1].after->source_message_id == "later" &&
+    result.time.edges[1].after->rotation_xyzw[3] < 0, "Raw evidence was rewritten");
+  const auto reverse = index.lookupPose("camera", "map", {0, 25}, timeOptions(100));
+  expect(reverse.ok() && std::abs(reverse.pose->translation_m[0] + 1) < 1e-12 &&
+    std::abs(reverse.pose->translation_m[1] - 1) < 1e-12, "Reverse pose is not the inverse");
+  const auto exact = index.lookupPose("map", "base", {}, timeOptions(0));
+  expect(exact.ok() && exact.pose->translation_m[0] == 0.0, "Exact zero must use original sample");
+  const auto identity = index.lookupPose("base", "base", {}, timeOptions(0));
+  expect(identity.ok() && identity.pose->rotation_xyzw[3] == 1.0, "Known identity unavailable");
+  const auto jump = index.lookupPose("map", "camera", {0, 25}, timeOptions(100), {1.0, {}});
+  expect(!jump.ok() && jump.code == TfPoseCode::jump_too_large && jump.failed_frame == "base",
+    "Translation jump was interpolated");
+  const auto turn = index.lookupPose("map", "camera", {0, 25}, timeOptions(100), {{}, 0.5});
+  expect(!turn.ok() && turn.code == TfPoseCode::jump_too_large, "Rotation jump was interpolated");
+  const auto gap = index.lookupPose("map", "camera", {0, 150}, timeOptions(100));
+  expect(!gap.ok() && gap.time.code == TfTimeCode::gap_too_large, "Long gap produced a pose");
+  const auto outside = index.lookupPose("map", "camera", {0, 301}, timeOptions(100));
+  expect(!outside.ok() && outside.time.code == TfTimeCode::outside_range, "Pose extrapolated");
+}
+
 /** 以固定种子生成动态历史，对照独立逐时刻 oracle，不放宽任何覆盖预期。 */
 void testGeneratedIntervals()
 {
@@ -350,6 +400,7 @@ int main()
     testInvalidDataAndTimeExtremes();
     testQueryValidationOrder();
     testGeneratedIntervals();
+    testNumericPose();
     std::cout << "TF topology, coverage, source selection and 200 generated interval cases: passed\n";
     return 0;
   } catch (const std::exception & e) {

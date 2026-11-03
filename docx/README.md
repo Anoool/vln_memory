@@ -40,6 +40,7 @@
 | ROS CameraInfo 怎样接入 | [CameraInfo ROS 适配](modules/camera_info/camera_info_ros.md) |
 | TF 可读性重构、扁平字段与验证 | [实施记录](project/tf_readability_plan.md) |
 | TF 坐标链、静态/动态覆盖与历史样本 | [TF 核心](modules/tf/tf.md) |
+| TF 历史样本到父/目标坐标系数值变换 | [TF 数值位姿](modules/tf/tf_pose.md) |
 | /tf、/tf_static 与逐条来源报告 | [TF ROS 适配](modules/tf/tf_ros.md) |
 | 各模块时间、TF/入库/在线控制使用哪个时刻 | [sensor_time](common/sensor_time.md) |
 | 构建和运行命令 | [项目 README](../README.md) |

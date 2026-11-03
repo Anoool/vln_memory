@@ -458,6 +458,37 @@ TfChainReport TfIndex::inspectChain(
   return report;
 }
 
+/** 扫描所需链的唯一样本间隔，避免其他 TF 分支和少量长缺口左右典型周期。 */
+std::int64_t TfIndex::inferInterpolationGapNs(
+  const std::string & target, const std::vector<std::string> & sources) const
+{
+  std::set<std::string> children;
+  for (const auto & source : sources) {
+    const auto chain = findChain(target, source);
+    if (!chain.chainExists()) {continue;}
+    for (const auto & edge : chain.edges) {
+      if (edge.kind == TfKind::dynamic) {children.insert(edge.child_frame);}
+    }
+  }
+  std::int64_t max_gap_ns = 0;
+  for (const auto & child : children) {
+    const auto & samples = edges_.at(child).samples;
+    if (samples.size() < 3) {continue;}
+    std::vector<std::int64_t> gaps_ns;
+    gaps_ns.reserve(samples.size() - 1);
+    auto previous = samples.begin();
+    for (auto next = std::next(previous); next != samples.end(); ++next) {
+      gaps_ns.push_back(next->first - previous->first);
+      previous = next;
+    }
+    const auto median = gaps_ns.begin() + static_cast<std::ptrdiff_t>((gaps_ns.size() - 1) / 2);
+    std::nth_element(gaps_ns.begin(), median, gaps_ns.end());
+    // 完整 int32 秒范围内的纳秒差乘二仍在 int64 范围内。
+    max_gap_ns = std::max(max_gap_ns, *median * 2);
+  }
+  return max_gap_ns;
+}
+
 /** 校验时刻/上下文后按路径选择端点；失败清空部分链，成功仍不包含求解后的位姿。 */
 TfTimeCheck TfIndex::checkTime(
   const std::string & target, const std::string & source, const SensorStamp & stamp,

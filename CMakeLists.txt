@@ -27,7 +27,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_info PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 # TF 索引只使用公共数据类型，保持无 ROS、无几何求解依赖。
-add_library(vln_memory_tf SHARED src/bag/tf/tf.cpp)
+add_library(vln_memory_tf SHARED src/bag/tf/tf.cpp src/bag/tf/tf_pose.cpp)
 add_library(vln_memory::vln_memory_tf ALIAS vln_memory_tf)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_tf PRIVATE -Wall -Wextra -Wpedantic)
