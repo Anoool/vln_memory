@@ -182,6 +182,13 @@ struct TfPose
   std::array<double, 4> rotation_xyzw{0, 0, 0, 1};
 };
 
+/**
+ * @brief 用 T_target_source 变换一个米制点，输出独立持有的目标帧坐标。
+ * @return 非单位四元数、非有限输入或输出返回空值。
+ */
+std::optional<std::array<double, 3>> transformTfPoint(
+  const TfPose & pose, const std::array<double, 3> & point_source_m) noexcept;
+
 struct TfPoseResult
 {
   TfPoseCode code{TfPoseCode::time_unavailable};

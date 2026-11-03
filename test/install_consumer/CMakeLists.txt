@@ -48,3 +48,6 @@ target_link_libraries(camera_info_index_consumer PRIVATE vln_memory::vln_memory_
 # 下游只链接已安装模型库，验证普通 C++ API 和 OpenCV 私有依赖可解析。
 add_executable(camera_model_consumer ../bag/camera_info/test_camera_model.cpp)
 target_link_libraries(camera_model_consumer PRIVATE vln_memory::vln_memory_camera_model)
+
+add_executable(depth_projection_consumer ../bag/depth/test_depth_projection.cpp)
+target_link_libraries(depth_projection_consumer PRIVATE vln_memory::vln_memory_depth_projection)

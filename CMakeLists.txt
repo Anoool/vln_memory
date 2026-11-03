@@ -55,7 +55,14 @@ target_include_directories(vln_memory_camera_model SYSTEM PRIVATE ${OpenCV_INCLU
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_model PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-set(memory_export_targets vln_memory_camera_model vln_memory_rgb vln_memory_depth
+add_library(vln_memory_depth_projection SHARED src/bag/depth/depth_projection.cpp)
+add_library(vln_memory::vln_memory_depth_projection ALIAS vln_memory_depth_projection)
+target_link_libraries(vln_memory_depth_projection PUBLIC
+  vln_memory_depth vln_memory_camera_model vln_memory_tf)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_depth_projection PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+set(memory_export_targets vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
@@ -148,6 +155,9 @@ endforeach()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_depth_projection test/bag/depth/test_depth_projection.cpp)
+  target_link_libraries(test_depth_projection PRIVATE vln_memory_depth_projection)
+  add_test(NAME depth_projection_core COMMAND test_depth_projection)
   add_executable(test_camera_model test/bag/camera_info/test_camera_model.cpp)
   target_link_libraries(test_camera_model PRIVATE vln_memory_camera_model)
   add_test(NAME camera_model_core COMMAND test_camera_model)
@@ -231,6 +241,7 @@ install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)
 install(FILES include/vln_memory/bag/depth/depth.hpp
+  include/vln_memory/bag/depth/depth_projection.hpp
   DESTINATION include/vln_memory/bag/depth)
 install(FILES include/vln_memory/bag/camera_info/camera_info.hpp
   include/vln_memory/bag/camera_info/camera_model.hpp

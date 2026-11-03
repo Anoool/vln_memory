@@ -1,6 +1,6 @@
 # vln_memory 文档导航
 
-更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。TF 数值位姿已接入，下一步为深度几何；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
+更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。TF 数值位姿与单深度像素到 map 投影已实现，下一步核实深度几何依据并接跨流重投影；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
 
 最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。
 
@@ -17,6 +17,7 @@
 | BagBuilder 第一版实际验收、样例及 Git 版本 | [验收记录](reviews/bag_builder_v1_verification.md) |
 | BagBuilder 第一版实际接口、参数与文件格式 | [BagBuilder 接口](interfaces/bag_builder_api.md) |
 | BagBuilder 第一版实施与验证记录 | [实施记录](project/bag_builder_v1_implementation.md) |
+| 单深度像素到 map 的公开接口 | [depth_projection](modules/depth/depth_projection.md) |
 | CLI 入口与运行 | [bag_builder_main](modules/bag/bag_builder_main.md) |
 | 实际 YAML 配置/单位/独立时间阈值 | [vln_memory](config/vln_memory.md) |
 | RGB-D 时间配对核心与真实接口 | [rgbd_sync](modules/bag/rgbd_sync.md) |
