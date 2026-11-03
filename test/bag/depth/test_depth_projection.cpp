@@ -22,6 +22,95 @@ void expectFailure(
   expect(!result.ok() && !result.point_map_m && result.code == code, message);
 }
 
+/** @brief 检查跨流基线、同名帧跨时刻运动和目标侧失败原因。 */
+void reprojectionCases(DepthFrame depth, const CameraModel & depth_model)
+{
+  using Code = DepthToRgbCode;
+  depth.depth_m[5] = 2.0F;
+  TfIndex index({"clock", "segment"});
+  TfTransform camera;
+  camera.parent_frame = "map";
+  camera.child_frame = depth.frame_id;
+  camera.stamp = depth.stamp;
+  camera.source_topic = "/tf";
+  camera.source_message_id = "test:tf:depth";
+  expect(index.insert(camera).accepted(), "Failed to insert original Depth pose");
+
+  camera.stamp = {7, 124};
+  camera.translation_m[0] = 0.1;
+  camera.source_message_id = "test:tf:moving";
+  expect(index.insert(camera).accepted(), "Failed to insert later camera pose");
+  camera.child_frame = "rgb_optical";
+  camera.stamp = depth.stamp;
+  camera.source_message_id = "test:tf:rgb";
+  expect(index.insert(camera).accepted(), "Failed to insert RGB baseline pose");
+
+  const TfTimeOptions options{"clock", "segment", 0};
+  const auto depth_pose = index.lookupPose("map", depth.frame_id, depth.stamp, options);
+  const CameraImageReference same{"/rgb", 4, 3, depth.frame_id, depth.stamp};
+  const auto identity = projectDepthPixelToRgb(
+    depth, depth_model, depth_pose, same, depth_model, depth_pose, "map", 3, 2);
+  expect(identity.ok() && std::abs((*identity.pixel_rgb)[0] - 3.0) < 1e-9 &&
+    std::abs((*identity.pixel_rgb)[1] - 2.0) < 1e-9, "Off-axis identity projection differs");
+
+  auto rgb_model = depth_model;
+  rgb_model.frame_id = "rgb_optical";
+  rgb_model.width = 640;
+  rgb_model.height = 480;
+  rgb_model.k = {500, 0, 320, 0, 500, 240, 0, 0, 1};
+  rgb_model.p = {500, 0, 320, 0, 0, 500, 240, 0, 0, 0, 1, 0};
+  CameraImageReference rgb{"/rgb", 640, 480, rgb_model.frame_id, depth.stamp};
+  const auto rgb_pose = index.lookupPose("map", rgb.frame_id, rgb.stamp, options);
+  const auto baseline = projectDepthPixelToRgb(
+    depth, depth_model, depth_pose, rgb, rgb_model, rgb_pose, "map", 1, 1);
+  expect(baseline.ok() && std::abs((*baseline.pixel_rgb)[0] - 295.0) < 1e-9 &&
+    std::abs((*baseline.pixel_rgb)[1] - 240.0) < 1e-9, "Expected 25 px leftward shift");
+
+  rgb.stamp = {7, 124};
+  rgb.frame_id = depth.frame_id;
+  rgb_model.frame_id = rgb.frame_id;
+  const auto later_pose = index.lookupPose("map", rgb.frame_id, rgb.stamp, options);
+  /** @brief 复用当前两帧配置，只变更测试传入的 RGB 位姿。 */
+  const auto project = [&](const TfPoseResult & target_pose) {
+    return projectDepthPixelToRgb(
+      depth, depth_model, depth_pose, rgb, rgb_model, target_pose, "map", 1, 1);
+  };
+  const auto moved = project(later_pose);
+  expect(moved.ok() && std::abs((*moved.pixel_rgb)[0] - 295.0) < 1e-9,
+    "Same-name RGB frame should use its own pose time");
+  const auto wrong_time = project(depth_pose);
+  expect(wrong_time.code == Code::rgb_pose_mismatch && !wrong_time.pixel_rgb,
+    "Reprojection accepted the Depth timestamp for RGB");
+  const auto missing_pose = project({});
+  expect(missing_pose.code == Code::rgb_pose_unavailable && !missing_pose.pixel_rgb,
+    "Reprojection accepted a missing RGB pose");
+
+  auto different_pose = later_pose;
+  different_pose.pose->rotation_xyzw = {0, 0, std::sqrt(0.5), std::sqrt(0.5)};
+  const auto rotated = project(different_pose);
+  expect(rotated.ok() && std::abs((*rotated.pixel_rgb)[0] - 320.0) < 1e-9 &&
+    std::abs((*rotated.pixel_rgb)[1] - 265.0) < 1e-9,
+    "RGB inverse rotation or translation order is incorrect");
+
+  different_pose = later_pose;
+  different_pose.pose->translation_m[2] = 3.0;
+  const auto behind = project(different_pose);
+  expect(behind.code == Code::rgb_projection_failed && !behind.pixel_rgb &&
+    behind.camera_code == CameraGeometryCode::point_behind_camera,
+    "Point behind RGB camera was accepted");
+  different_pose = later_pose;
+  different_pose.pose->translation_m[0] = 2.0;
+  const auto outside = project(different_pose);
+  expect(outside.code == Code::rgb_projection_failed && !outside.pixel_rgb &&
+    outside.camera_code == CameraGeometryCode::invalid_pixel,
+    "RGB out-of-bounds projection was accepted");
+  depth.depth_m[5] = 0.0F;
+  const auto invalid_depth = project(later_pose);
+  expect(invalid_depth.code == Code::depth_projection_failed && !invalid_depth.pixel_rgb &&
+    invalid_depth.depth_code == DepthProjectionCode::invalid_depth,
+    "Reprojection lost Depth-side failure reason");
+}
+
 /** @brief 离轴像素经光轴深度、非零旋转和位移投影，回归错误时刻与坏输入。 */
 void projectionCases()
 {
@@ -110,6 +199,7 @@ void projectionCases()
   bad_pose.pose->rotation_xyzw = {0, 0, 0, 0};
   expectFailure(projectDepthPixelToMap(depth, camera, bad_pose, "map", 3, 2),
     Code::numerical_failure, "Invalid rotation accepted");
+  reprojectionCases(depth, camera);
 }
 
 }  // namespace
@@ -123,6 +213,6 @@ int main()
     std::cerr << error.what() << '\n';
     return 1;
   }
-  std::cout << "Depth pixel to map: (9, 22, 32) m and invalid inputs passed\n";
+  std::cout << "Depth pixel to map and Depth-to-RGB reprojection passed\n";
   return 0;
 }

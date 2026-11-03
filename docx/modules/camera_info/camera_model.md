@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | buildCameraModel | CameraInfoData、实际 CameraImageReference、CameraInfoMatchOptions | CameraModelResult：code/message/可选 model；先匹配，再按统一策略规范化并调整实际网格 |
 | pixelToCameraRay | CameraModel、原图实际网格浮点 u/v | CameraRayResult：code/message/可选三元素方向 |
+| cameraPointToPixel | CameraModel、原始光学帧中的米制三维点 | CameraPixelResult：code/可选浮点列行。raw 应用有效 K/D，rectified 先应用 R 再用有效 P。 |
 | cameraGeometryCodeName | CameraGeometryCode | 静态字符串，无需释放 |
 
 模型拥有 width/height/frame_id、image_domain、distortion_model、D/K/R/P、normalization_applied。K/P 已应用 ROI 和 binning，不能再次缩放。原始模型及来源由 camera_info.jsonl 和每帧 calibration_id 保存，模型不借用像素或原消息。
@@ -29,3 +30,5 @@ ready、camera_mismatch、unsupported_projection、invalid_model、invalid_pixel
 bad_alloc 和 OpenCV 内存分配失败继续抛出，不伪装成输入问题。其他 OpenCV 数值异常转换为 numerical_failure。每次模型调整 O(1)，单点求解有固定迭代上限和固定额外空间；当前不建立全图射线缓存。
 
 有效模型不等于深度注册、物理标定精度、设备曝光同步或 map 位姿；这些状态由各自阶段负责。测试和独立安装入口见 [test_camera_model](tests/test_camera_model.md)。
+
+正投影要求原光学 z 为正。rectified 还要求校正后的 z 为正。非正深度返回 point_behind_camera，超出实际网格返回 invalid_pixel。输出像素保留浮点精度。

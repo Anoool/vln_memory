@@ -23,7 +23,8 @@ struct CameraModel
 };
 enum class CameraGeometryCode
 {
-  ready, camera_mismatch, unsupported_projection, invalid_model, invalid_pixel, numerical_failure
+  ready, camera_mismatch, unsupported_projection, invalid_model, invalid_pixel, numerical_failure,
+  point_behind_camera
 };
 struct CameraModelResult
 {
@@ -50,4 +51,15 @@ CameraModelResult buildCameraModel(
   const CameraInfoMatchOptions & options);
 /** @brief 实际像素转原光学 frame 的 z=1 射线；raw 去畸变，rectified 逆转 R。 */
 CameraRayResult pixelToCameraRay(const CameraModel & model, double u, double v);
+struct CameraPixelResult
+{
+  CameraGeometryCode code{CameraGeometryCode::invalid_model};
+  std::optional<std::array<double, 2>> pixel_uv;
+  /** @brief 成功时拥有实际网格内的浮点像素坐标。 */
+  bool ok() const noexcept {return code == CameraGeometryCode::ready && pixel_uv.has_value();}
+};
+
+/** @brief 将原始光学帧中的米制点正投影到实际图像网格，失败时像素为空。 */
+CameraPixelResult cameraPointToPixel(
+  const CameraModel & model, const std::array<double, 3> & point_camera_m);
 }  // namespace vln_memory

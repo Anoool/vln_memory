@@ -103,6 +103,40 @@ void modelCases()
   info = calibration(); info.roi.do_rectify = true;
   expect(!buildCameraModel(info, image(), config).ok(), "Uncomputed rectified ROI accepted");
 }
+/** @brief 用独立解析答案检查 raw 畸变和 rectified 正旋转的投影方向。 */
+void forwardProjectionCases()
+{
+  auto info = calibration();
+  auto config = options();
+  info.d[0] = 0.1;
+  auto built = buildCameraModel(info, image(), config);
+  expect(built.ok(), "Fixture raw model failed");
+  const auto raw = cameraPointToPixel(*built.model, {0.4, 0.2, 2.0});
+  expect(raw.ok(), "Raw projection failed");
+  // x=0.2, y=0.1, 1+k1*(x*x+y*y)=1.005。
+  near((*raw.pixel_uv)[0], 420.5);
+  near((*raw.pixel_uv)[1], 291.255);
+
+  config.image_domain = CameraImageDomain::rectified;
+  const double cosine = 1.0 / std::sqrt(1.04);
+  const double sine = 0.2 * cosine;
+  info.r = {cosine, 0, sine, 0, 1, 0, -sine, 0, cosine};
+  built = buildCameraModel(info, image(), config);
+  expect(built.ok(), "Fixture rectified model failed");
+  const auto rectified = cameraPointToPixel(*built.model, {0, 0, 2});
+  expect(rectified.ok(), "Rectified projection failed");
+  near((*rectified.pixel_uv)[0], 380.0);
+  near((*rectified.pixel_uv)[1], 230.0);
+  expect(cameraPointToPixel(*built.model, {10, 0, 1}).code ==
+    CameraGeometryCode::point_behind_camera, "Nonpositive rectified z accepted");
+  expect(cameraPointToPixel(*built.model, {0, 0, 0}).code ==
+    CameraGeometryCode::point_behind_camera, "Point at camera center accepted");
+  auto unsupported = *built.model;
+  unsupported.p[3] = -40;
+  expect(cameraPointToPixel(unsupported, {0, 0, 2}).code ==
+    CameraGeometryCode::unsupported_projection, "Stereo offset silently ignored");
+}
+
 /** @brief 三种畸变用独立正向公式生成像素，验证逆解而不是只测试零畸变。 */
 void distortionCases()
 {
@@ -130,7 +164,7 @@ void distortionCases()
 int main()
 {
   try {
-    compatibilityCases(); modelCases(); distortionCases();
+    compatibilityCases(); modelCases(); distortionCases(); forwardProjectionCases();
     std::cout << "Camera models, raw/rectified rays and bounded D8 passed\n";
     return 0;
   } catch (const std::exception & error) {std::cerr << error.what() << '\n'; return 1;}

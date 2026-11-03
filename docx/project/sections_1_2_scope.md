@@ -111,4 +111,4 @@ BagBuilder 第一版已经通过实际序列化 SQLite 构造磁盘回归，包�
 
 ### 2026-11-03 TF 数值位姿更新
 
-BagBuilder v5 复用历史端点求数值位姿并写入 preparation。省略 TF 门限时按本段动态样本间隔估计，显式设置优先。构造样本验证结果见 [TF 数值位姿](../modules/tf/tf_pose.md)。单个深度像素的 [map 投影](../modules/depth/depth_projection.md) 已实现。跨流重投影、真实深度几何验收与后续记忆业务仍待完成。
+BagBuilder v5 复用历史端点求数值位姿并写入 preparation。省略 TF 门限时按本段动态样本间隔估计，显式设置优先。构造样本验证结果见 [TF 数值位姿](../modules/tf/tf_pose.md)。单个深度像素的 [map 投影](../modules/depth/depth_projection.md) 已实现。单点 Depth→RGB 候选像素投影也已实现。真实深度几何验收与后续记忆业务仍待完成。

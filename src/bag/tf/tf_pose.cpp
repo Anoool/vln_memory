@@ -144,23 +144,47 @@ bool finitePose(const TfPose & pose)
     std::all_of(pose.rotation_xyzw.begin(), pose.rotation_xyzw.end(), finite);
 }
 
+/** @brief 校验公开点变换使用的位姿，保持正逆变换的输入约束一致。 */
+bool validRigidPose(const TfPose & pose)
+{
+  if (!finitePose(pose)) {return false;}
+  const auto & q = pose.rotation_xyzw;
+  const double length = std::hypot(std::hypot(q[0], q[1]), std::hypot(q[2], q[3]));
+  return std::abs(length - 1.0) <= 1e-9;
+}
+
 }  // namespace
 
 /** @brief 复用位姿组合的旋转运算，校验公开输入与变换后的数值。 */
 std::optional<std::array<double, 3>> transformTfPoint(
   const TfPose & pose, const std::array<double, 3> & point_source_m) noexcept
 {
-  if (!finitePose(pose)) {return std::nullopt;}
-  const auto & q = pose.rotation_xyzw;
-  const double length = std::hypot(std::hypot(q[0], q[1]), std::hypot(q[2], q[3]));
-  if (std::abs(length - 1.0) > 1e-9) {return std::nullopt;}
+  if (!validRigidPose(pose)) {return std::nullopt;}
 
-  auto point_target_m = rotate(q, point_source_m);
+  auto point_target_m = rotate(pose.rotation_xyzw, point_source_m);
   for (std::size_t axis = 0; axis < point_target_m.size(); ++axis) {
     point_target_m[axis] += pose.translation_m[axis];
     if (!std::isfinite(point_target_m[axis])) {return std::nullopt;}
   }
   return point_target_m;
+}
+
+/** @brief 先扣除目标帧平移，再施加逆旋转，返回独立拥有的源帧坐标。 */
+std::optional<std::array<double, 3>> inverseTransformTfPoint(
+  const TfPose & pose, const std::array<double, 3> & point_target_m) noexcept
+{
+  if (!validRigidPose(pose)) {return std::nullopt;}
+  auto offset_m = point_target_m;
+  for (std::size_t axis = 0; axis < offset_m.size(); ++axis) {
+    offset_m[axis] -= pose.translation_m[axis];
+  }
+  const auto point_source_m = rotate(conjugate(pose.rotation_xyzw), offset_m);
+  if (!std::all_of(point_source_m.begin(), point_source_m.end(),
+      [](double value) {return std::isfinite(value);}))
+  {
+    return std::nullopt;
+  }
+  return point_source_m;
 }
 
 /** @brief 按 checkTime 的 source 到 target 顺序组合，结果独立拥有证据和数值。 */

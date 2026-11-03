@@ -1,4 +1,5 @@
 #include <vln_memory/bag/camera_info/camera_model.hpp>
+#include <algorithm>
 #include <cmath>
 #include <utility>
 #include <opencv2/calib3d.hpp>
@@ -52,6 +53,25 @@ void adjustGrid(CameraModel & model, const CameraInfoData & info)
     model.p[4 + column] /= by;
   }
 }
+/** @brief 将 z=1 的归一化射线按 raw 模型正投影，输出有限的浮点像素。 */
+std::optional<cv::Point2d> projectRawRay(const CameraModel & model, const cv::Point2d & ray)
+{
+  if (!std::isfinite(ray.x) || !std::isfinite(ray.y)) {return std::nullopt;}
+  const cv::Matx33d k(model.k.data());
+  const cv::Mat d(model.d, true);
+  std::vector<cv::Point2d> projected;
+  if (model.distortion_model == "equidistant") {
+    cv::fisheye::distortPoints(std::vector<cv::Point2d>{ray}, projected, k, d);
+  } else {
+    const std::vector<cv::Point3d> points{{ray.x, ray.y, 1.0}};
+    cv::projectPoints(points, cv::Vec3d::all(0), cv::Vec3d::all(0), k, d, projected);
+  }
+  if (projected.size() != 1 || !std::isfinite(projected[0].x) || !std::isfinite(projected[0].y)) {
+    return std::nullopt;
+  }
+  return projected[0];
+}
+
 /** @brief 用 OpenCV 逆畸变，并正向回投影核验残差；失败不返回近似假射线。 */
 std::optional<cv::Point2d> undistortPixel(const CameraModel & model, double u, double v)
 {
@@ -68,16 +88,8 @@ std::optional<cv::Point2d> undistortPixel(const CameraModel & model, double u, d
   if (output.size() != 1 || !std::isfinite(output[0].x) || !std::isfinite(output[0].y)) {
     return std::nullopt;
   }
-  std::vector<cv::Point2d> projected;
-  if (model.distortion_model == "equidistant") {
-    cv::fisheye::distortPoints(output, projected, k, d);
-  } else {
-    const std::vector<cv::Point3d> points{{output[0].x, output[0].y, 1.0}};
-    cv::projectPoints(points, cv::Vec3d::all(0), cv::Vec3d::all(0), k, d, projected);
-  }
-  if (projected.size() != 1 || !std::isfinite(projected[0].x) || !std::isfinite(projected[0].y) ||
-    std::hypot(projected[0].x - u, projected[0].y - v) > 1e-4)
-  {
+  const auto projected = projectRawRay(model, output[0]);
+  if (!projected || std::hypot(projected->x - u, projected->y - v) > 1e-4) {
     return std::nullopt;
   }
   return output[0];
@@ -112,6 +124,7 @@ const char * cameraGeometryCodeName(CameraGeometryCode code) noexcept
     case CameraGeometryCode::invalid_model: return "invalid_model";
     case CameraGeometryCode::invalid_pixel: return "invalid_pixel";
     case CameraGeometryCode::numerical_failure: return "numerical_failure";
+    case CameraGeometryCode::point_behind_camera: return "point_behind_camera";
   }
   return "unknown";
 }
@@ -180,5 +193,48 @@ CameraRayResult pixelToCameraRay(const CameraModel & model, double u, double v)
     return {CameraGeometryCode::numerical_failure, "No verified forward-facing ray", std::nullopt};
   }
   return {CameraGeometryCode::ready, "", ray};
+}
+
+/** @brief 应用实际 raw 或 rectified 模型并检查相机前方和图像边界。 */
+CameraPixelResult cameraPointToPixel(
+  const CameraModel & model, const std::array<double, 3> & point_camera_m)
+{
+  using Code = CameraGeometryCode;
+  if (!validModel(model)) {return {Code::invalid_model, std::nullopt};}
+  if (!supportedProjection(model)) {return {Code::unsupported_projection, std::nullopt};}
+  if (!std::all_of(point_camera_m.begin(), point_camera_m.end(),
+      [](double value) {return std::isfinite(value);}))
+  {
+    return {Code::numerical_failure, std::nullopt};
+  }
+  if (point_camera_m[2] <= 0.0) {return {Code::point_behind_camera, std::nullopt};}
+
+  cv::Point2d pixel;
+  if (model.image_domain == CameraImageDomain::raw) {
+    const double z_m = point_camera_m[2];
+    try {
+      const auto projected = projectRawRay(
+        model, {point_camera_m[0] / z_m, point_camera_m[1] / z_m});
+      if (!projected) {return {Code::numerical_failure, std::nullopt};}
+      pixel = *projected;
+    } catch (const cv::Exception & error) {
+      if (error.code == cv::Error::StsNoMem) {throw;}
+      return {Code::numerical_failure, std::nullopt};
+    }
+  } else {
+    const cv::Matx33d r(model.r.data());
+    const cv::Vec3d rectified = r * cv::Vec3d(point_camera_m.data());
+    if (!std::isfinite(rectified[2])) {return {Code::numerical_failure, std::nullopt};}
+    if (rectified[2] <= 0.0) {return {Code::point_behind_camera, std::nullopt};}
+    pixel.x = model.p[0] * (rectified[0] / rectified[2]) + model.p[2];
+    pixel.y = model.p[5] * (rectified[1] / rectified[2]) + model.p[6];
+  }
+  if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y)) {
+    return {Code::numerical_failure, std::nullopt};
+  }
+  if (pixel.x < 0.0 || pixel.y < 0.0 || pixel.x >= model.width || pixel.y >= model.height) {
+    return {Code::invalid_pixel, std::nullopt};
+  }
+  return {Code::ready, std::array<double, 2>{pixel.x, pixel.y}};
 }
 }  // namespace vln_memory

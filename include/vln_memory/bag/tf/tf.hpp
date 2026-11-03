@@ -189,6 +189,10 @@ struct TfPose
 std::optional<std::array<double, 3>> transformTfPoint(
   const TfPose & pose, const std::array<double, 3> & point_source_m) noexcept;
 
+/** @brief 将目标帧中的米制点逆变换到源帧，数值无效时返回空值。 */
+std::optional<std::array<double, 3>> inverseTransformTfPoint(
+  const TfPose & pose, const std::array<double, 3> & point_target_m) noexcept;
+
 struct TfPoseResult
 {
   TfPoseCode code{TfPoseCode::time_unavailable};

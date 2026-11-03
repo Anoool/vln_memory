@@ -18,13 +18,21 @@ bool validDepthFrame(const DepthFrame & depth)
     depth.depth_m.size() % depth.width == 0;
 }
 
-/** @brief 核对位姿的源帧、目标帧和原始查询时刻，不用近似时间代替。 */
-bool matchesDepthPose(
-  const DepthFrame & depth, const TfTimeCheck & time, std::string_view map_frame)
+/** @brief 判断位姿查询和求解是否均成功，且包含可用位姿。 */
+bool availablePose(const TfPoseResult & pose)
 {
-  return !map_frame.empty() && !time.frames.empty() &&
-    time.frames.front() == depth.frame_id && time.frames.back() == map_frame &&
-    time.stamp.sec == depth.stamp.sec && time.stamp.nanosec == depth.stamp.nanosec;
+  return pose.code == TfPoseCode::ready && pose.ok() && pose.time.covered();
+}
+
+/** @brief 核对位姿的源帧、目标帧和原始查询时刻。 */
+bool matchesImagePose(
+  std::string_view frame, const SensorStamp & stamp, const TfTimeCheck & time,
+  std::string_view map_frame)
+{
+  return !frame.empty() && !map_frame.empty() && !time.frames.empty() &&
+    stamp.nanosec < 1000000000U && time.frames.front() == frame &&
+    time.frames.back() == map_frame && time.stamp.sec == stamp.sec &&
+    time.stamp.nanosec == stamp.nanosec;
 }
 
 }  // namespace
@@ -50,10 +58,10 @@ DepthProjectionResult projectDepthPixelToMap(
   {
     return {Code::model_mismatch, std::nullopt};
   }
-  if (camera_pose.code != TfPoseCode::ready || !camera_pose.ok() || !camera_pose.time.covered()) {
+  if (!availablePose(camera_pose)) {
     return {Code::pose_unavailable, std::nullopt};
   }
-  if (!matchesDepthPose(depth, camera_pose.time, map_frame)) {
+  if (!matchesImagePose(depth.frame_id, depth.stamp, camera_pose.time, map_frame)) {
     return {Code::pose_mismatch, std::nullopt};
   }
 
@@ -64,6 +72,32 @@ DepthProjectionResult projectDepthPixelToMap(
   const auto point_map_m = transformTfPoint(*camera_pose.pose, point_camera_m);
   if (!point_map_m) {return {Code::numerical_failure, std::nullopt};}
   return {Code::ready, point_map_m};
+}
+
+/** @brief 将深度地图点转入 RGB 光学帧并返回目标图上的候选像素。 */
+DepthToRgbResult projectDepthPixelToRgb(
+  const DepthFrame & depth, const CameraModel & depth_model, const TfPoseResult & depth_pose,
+  const CameraImageReference & rgb, const CameraModel & rgb_model, const TfPoseResult & rgb_pose,
+  std::string_view map_frame, std::int64_t u, std::int64_t v)
+{
+  using Code = DepthToRgbCode;
+  const auto point_map = projectDepthPixelToMap(depth, depth_model, depth_pose, map_frame, u, v);
+  if (!point_map.ok()) {return {Code::depth_projection_failed, std::nullopt, point_map.code};}
+  if (rgb.width == 0 || rgb.height == 0 || rgb.frame_id.empty() ||
+    rgb_model.frame_id != rgb.frame_id || rgb_model.width != rgb.width || rgb_model.height != rgb.height)
+  {
+    return {Code::rgb_model_mismatch, std::nullopt};
+  }
+  if (!availablePose(rgb_pose)) {return {Code::rgb_pose_unavailable, std::nullopt};}
+  if (!matchesImagePose(rgb.frame_id, rgb.stamp, rgb_pose.time, map_frame)) {
+    return {Code::rgb_pose_mismatch, std::nullopt};
+  }
+
+  const auto point_rgb_m = inverseTransformTfPoint(*rgb_pose.pose, *point_map.point_map_m);
+  if (!point_rgb_m) {return {Code::numerical_failure, std::nullopt};}
+  const auto pixel = cameraPointToPixel(rgb_model, *point_rgb_m);
+  if (!pixel.ok()) {return {Code::rgb_projection_failed, std::nullopt, std::nullopt, pixel.code};}
+  return {Code::ready, pixel.pixel_uv};
 }
 
 }  // namespace vln_memory
