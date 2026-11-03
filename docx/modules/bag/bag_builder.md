@@ -10,7 +10,7 @@
 
 配置检查 → 创建唯一工作目录 → 官方 reader 首遍索引/原始 CDR → rgbd_sync → CameraInfoIndex → 第二遍逐图 decodeRosRgb/decodeRosDepth、实际 RGB 网格核对、历史 TF 查询 → 媒体/JSONL → 引用/输入复核 → 完整 manifest/发布。
 
-采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用统一兼容/匹配规则并生成实际模型；数值位姿/关键帧仍未计算，不输出正式 observations.jsonl。
+采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用统一兼容/匹配规则并生成实际模型；现有 TF 索引提供数值 map 位姿和样本引用，关键帧及正式 observations.jsonl 待实现。
 
 ## 失败和产物
 
@@ -28,6 +28,6 @@ synchronize 将 sync_tolerance_ns 传入已有 pairRgbDepth，检查最大绝对
 
 0 策略为 exact_header_one_to_one_v1，正门限为 rgb_reference_monotonic_nearest_one_to_one_v1；后者不保证全局最优，实际相等的一对仍 exact=true。summary/manifest/CLI 共用策略名接口，JSON schema 仍为 bag_preparation/1。
 
-empty_stream/partial/all_paired 仅说明有效时间索引覆盖；无对时零模式为 no_exact_pairs/问题 no_exact_rgbd_pairs，正门限为 no_pairs/问题 no_rgbd_pairs。capture_sync_status 保持 unknown。prepared_for_geometry 仍未计算数值位姿或运动补偿，也不证明曝光同步。
+empty_stream/partial/all_paired 仅说明有效时间索引覆盖；无对时零模式为 no_exact_pairs/问题 no_exact_rgbd_pairs，正门限为 no_pairs/问题 no_rgbd_pairs。capture_sync_status 保持 unknown。prepared_for_geometry 要求数值位姿及既有模型、注册声明和深度质量检查通过。运动补偿与曝光同步属于后续独立验证。
 
 两种图像均逐帧转换，坏帧不改配，未配对媒体仍保存。当前与历史结果见 [最近配对](../../reviews/rgbd_nearest_pairing_verification.md)、[历史零容差](../../reviews/rgbd_zero_tolerance_verification.md)。

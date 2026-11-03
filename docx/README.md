@@ -1,6 +1,6 @@
 # vln_memory 文档导航
 
-更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。下一步为 TF 数值位姿和深度几何；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
+更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。TF 数值位姿已接入，下一步为深度几何；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
 
 最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。
 
@@ -87,7 +87,7 @@ docx/
 
 ## 当前开发位置
 
-当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补 TF 数值位姿与深度几何，API 输入组织时复用 preparation，不为尚未实现的其他层建立空说明。
+当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补深度几何，API 输入组织时复用 preparation，不为尚未实现的其他层建立空说明。
 
 ## BagBuilder 文件导航
 

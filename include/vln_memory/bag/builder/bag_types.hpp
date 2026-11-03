@@ -107,6 +107,8 @@ struct BagBuildResult
   std::size_t camera_models{0};
   std::size_t pairs{0};
   std::size_t prepared_pairs{0};
+  std::size_t posed_frames{0};
+  std::size_t posed_pairs{0};
   std::size_t issue_count{0};
   /** @brief 完整发布（可带问题）返回 true，不表示所有帧或几何均可用。 */
   bool ok() const noexcept {return status != BagBuildStatus::failed;}

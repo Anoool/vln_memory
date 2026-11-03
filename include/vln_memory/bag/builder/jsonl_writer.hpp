@@ -17,6 +17,8 @@ nlohmann::json sourceJson(const BagMessageRef & source);
 nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record);
 /** @brief 显式序列化 TF 查询端点来源，无求解位姿字段。 */
 nlohmann::json tfTimeJson(const TfTimeCheck & check);
+/** @brief 在端点诊断上附加求解状态和可选位姿。 */
+nlohmann::json tfPoseJson(const TfPoseResult & result);
 /** @brief 稳定问题字段，可供下游按 stage/code 处理。 */
 nlohmann::json issueJson(const BagIssue & issue);
 /** @brief dump 后一次追加有效 JSON 行；无效 UTF-8 等序列化异常终止发布。 */

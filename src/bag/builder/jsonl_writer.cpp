@@ -61,7 +61,7 @@ nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record)
     {"source_nonfinite", nonfinite(data.d) || nonfinite(data.k) || nonfinite(data.r) || nonfinite(data.p)}};
 }
 
-/** @brief 记录 covered 和端点列表，几何插值/组合尚未执行。 */
+/** @brief 输出时间覆盖和原始端点引用。 */
 nlohmann::json tfTimeJson(const TfTimeCheck & check)
 {
   nlohmann::json edges = nlohmann::json::array();
@@ -74,6 +74,22 @@ nlohmann::json tfTimeJson(const TfTimeCheck & check)
   return {{"code", tfTimeCodeName(check.code)}, {"stamp", stampJson(check.stamp)},
     {"chain_code", tfChainCodeName(check.chain_code)}, {"failed_frame", check.failed_frame},
     {"message", check.message}, {"frames", check.frames}, {"edges", edges}, {"pose_computed", false}};
+}
+
+/** @brief 复用时间诊断并输出独立的数值状态和可选位姿。 */
+nlohmann::json tfPoseJson(const TfPoseResult & result)
+{
+  auto record = tfTimeJson(result.time);
+  record["pose_code"] = tfPoseCodeName(result.code);
+  record["pose_failed_frame"] = result.failed_frame;
+  record["pose"] = nullptr;
+  const auto & frames = result.time.frames;
+  if (result.pose && !frames.empty()) {
+    record["pose_computed"] = true;
+    record["pose"] = {{"target_frame", frames.back()}, {"source_frame", frames.front()},
+      {"translation_m", result.pose->translation_m}, {"rotation_xyzw", result.pose->rotation_xyzw}};
+  }
+  return record;
 }
 
 /** @brief 稳定字段映射，不要求调用方解析自由文本。 */

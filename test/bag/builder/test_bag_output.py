@@ -42,7 +42,7 @@ def check_dataset(root):
     depth_arrays = []
     for frame in frames:
         assert frame["source"]["message_id"] in message_ids
-        assert not frame["pose_computed"]
+        assert frame["pose_computed"] == (frame["media_path"] is not None)
         if not frame["metadata_available"]:
             assert frame["stamp"] is None
             assert frame["decode_code"] == "deserialize_failed"
@@ -85,7 +85,7 @@ def check_dataset(root):
     for relative in manifest["files"]:
         assert (root / relative).is_file()
     assert manifest["artifact_kind"] == "bag_preparation"
-    assert not manifest["pose_computed"]
+    assert manifest["pose_computed"]
     assert manifest["effective_options"]["sync_tolerance_ns"] == "0"
     summary = read_json(root / "reports/summary.json")
     assert summary["exact_pairs"] == summary["pairs"]

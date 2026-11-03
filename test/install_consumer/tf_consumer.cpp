@@ -27,6 +27,7 @@ int main()
   moving.stamp = {10, 0};
   if (!index.insert(moving).accepted()) {return 1;}
   moving.stamp = {10, 20000000};
+  moving.translation_m[0] = 4.0;
   moving.source_message_id = "bag:dynamic:1";
   if (!index.insert(moving).accepted()) {return 1;}
 
@@ -44,6 +45,13 @@ int main()
   const auto rgb_tf = index.checkTime("map", rgb.frame_id, rgb.stamp, query);
   const auto depth_tf = index.checkTime("map", depth.frame_id, depth.stamp, query);
   if (!rgb_tf.covered() || !depth_tf.covered() || rgb_tf.edges[1].after || !depth_tf.edges[1].after) {
+    return 1;
+  }
+  const auto rgb_pose = index.lookupPose("map", rgb.frame_id, rgb.stamp, query);
+  const auto depth_pose = index.lookupPose("map", depth.frame_id, depth.stamp, query);
+  if (!rgb_pose.ok() || !depth_pose.ok() ||
+    rgb_pose.pose->translation_m[0] != 0.0 || depth_pose.pose->translation_m[0] != 1.0)
+  {
     return 1;
   }
   const auto report = index.inspectChain("map", depth.frame_id, TfCoverageOptions{query.max_interpolation_gap_ns});

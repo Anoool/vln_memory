@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | 1.1 坐标、单位与信息保留 | 基础部分 | 米制 optical-z、SensorStamp、CameraInfo 原值、TF 父子链/样本来源；原始 CDR 和标准媒体已落盘 | 统一 map_id/geometry_revision/单位契约，真正 map 相机/底盘位姿、像素到 map 与空间关系依据 |
 | 1.2 Entity（含 1.2.1 空间） | 未实现 | 无 Entity/Region 模型或存储 | 永久 ID、物品/空间统一实体、已观测代表点、可选边界/朝向、证据/revision、未定位 pending |
-| 1.3 Observation | 基础部分 | 已导出 RGB/Depth 媒体；frames/pairs 保存尺寸、原始时间、媒体路径、标定候选及 TF 端点/来源 | 正式 Observation 结构/校验/序列化、两个图像各自数值位姿、有效相机模型、关键帧及正式引用校验 |
+| 1.3 Observation | 基础部分 | 已导出 RGB/Depth 媒体；frames/pairs 保存尺寸、原始时间、媒体路径、标定候选及 TF 端点/来源 | 正式 Observation 结构/校验/序列化、关键帧及正式引用校验。数值位姿与有效模型已在准备数据中实现 |
 | 1.4 SemanticRelation | 未实现 | 无语义关系业务 | near/on/hanging_on/inside、门的多端点 connects_regions、证据/状态、去重、inside 与 region_id 同步 |
 | 1.5 版本、证据与工具规范 | 未实现（有外部通用基础） | vln_agent 有会话与通用 function_call 外壳；vln_memory 没有业务工具 | 工具注册/分发、版本上下文、状态/证据校验、构建轮次与持久执行记录 |
 | 1.6 文件组织与索引 | 基础部分 | 已导出 preparation manifest/来源/图像/标定/TF/配对/报告；不是完整 memory 版本 | manifest、entities/observations/relations/annotations JSONL、evidence/reports/indexes、ID/名称/空间/关系索引 |
@@ -89,7 +89,7 @@ Entity、SemanticRelation、Observation、索引和版本虽然在原文第 1 �
 8. Viewer 满足原文 2.10 的地图/关系/图像/轨迹联动及实体/关系/时间定位，并通过共用 memory_annotate 写入名称/别名/备注，重开后能回读。
 9. config/vln_memory.yaml 的每个已支持字段在三个程序入口生效；不把原文示例的 30ms/0.001/0.8m/25deg 等数值当通用正确默认值。
 
-以上全部通过才标记第 1、2 部分完成。RGB-D 自动配对与 preparation 导出已实现；相机兼容/有效模型已实现；最近待办为 TF 数值位姿与深度几何，preparation 的读取/引用/筛选在后续 API 输入组织时处理，具体交付与验收见 [整体规划第 10 节](system_plan.md#10-当前最近行动)。
+以上全部通过才标记第 1、2 部分完成。RGB-D 自动配对与 preparation 导出已实现；相机兼容/有效模型已实现；TF 数值位姿已实现，最近待办为深度几何，preparation 的读取/引用/筛选在后续 API 输入组织时处理，具体交付与验收见 [整体规划第 10 节](system_plan.md#10-当前最近行动)。
 
 ## 2026-10-30 实施更新
 
@@ -108,3 +108,7 @@ BagBuilder 第一版已经通过实际序列化 SQLite 构造磁盘回归，包�
 原始 D8 与 CDR 保留，统一显式兼容贯通 reader/索引/匹配/模型/输出；有效相机模型及单点射线已实现。完整真实 bag 为 21441 消息、7268 标定、6889 解码图像/模型、2671 对。TF 数值位姿、物理注册、记忆工作库/工具/Viewer 仍未实现或验收，完整原文两部分仍未完成。
 
 按用户最新要求，不把最小 Observation 作为当前前置任务。既有 preparation 的读取、引用和筛选放在后续 API 输入组织时处理；后续业务仍须保留原设计要求的观测证据、时间、几何和引用完整性。以上旧日期的更新保留历史含义。详见 [当前系统规划](system_plan.md#10-当前最近行动)。
+
+### 2026-11-03 TF 数值位姿更新
+
+BagBuilder v5 复用历史端点求数值位姿并写入 preparation。省略 TF 门限时按本段动态样本间隔估计，显式设置优先。构造样本验证结果见 [TF 数值位姿](../modules/tf/tf_pose.md)。深度几何与后续记忆业务仍待实现。

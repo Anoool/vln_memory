@@ -307,7 +307,7 @@ void checkNormal(const fs::path & output, const BagBuildResult & result)
   expect(result.pairs == 2 && result.prepared_pairs == 2, "Valid sensor preparation pairs missing");
   const auto manifest = readJson(output / "bag_manifest.json");
   expect(manifest.at("source_files").size() >= 2, "Split fixture did not create multiple files");
-  expect(!manifest.at("pose_computed").get<bool>(), "Uncomputed pose was claimed");
+  expect(manifest.at("pose_computed") == true && result.posed_pairs == 2, "Numeric poses not exported");
   bool negative_record = false;
   for (const auto & message : readLines(output / "messages.jsonl")) {
     if (message.at("bag_record_time_ns") == "-1000000000") {negative_record = true;}
@@ -480,7 +480,7 @@ void checkNearestOutput(const fs::path & output, std::int64_t tolerance_ns, std:
   const auto manifest = readJson(output / "bag_manifest.json");
   const auto policy = "rgb_reference_monotonic_nearest_one_to_one_v1";
   expect(summary.at("timestamp_match_policy") == policy, "Summary mislabeled nearest policy");
-  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 4,
+  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 5,
     "Manifest did not declare current behavior");
   expect(summary.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing summary tolerance");
   expect(manifest.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing manifest tolerance");

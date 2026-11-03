@@ -16,7 +16,9 @@ sync_tolerance_ns 接受非负 int64 整数纳秒，表示允许的最大绝对�
 
 BagBuildOptions 默认值和 YAML 省略值仍为 0。示例显式设置 sync_tolerance_ns: 30000000（30 ms）作为当前试用值，需按实际运动误差预算调整，程序不自动扩容。负数、小数或超出 int64 的数在加载时拒绝。
 
-标定 max_delta_ns 是图像与标定差，tf_max_gap_ns 是 TF 相邻端点最大间隔，二者独立。两图标定和 TF 各用本图原始时刻；没有运动补偿或设备时钟校正。
+标定 max_delta_ns 是图像与标定差。tf_max_gap_ns 控制 TF 相邻端点最大间隔，省略时在首遍扫描后按 map 到相机和底盘所需链的动态样本估计。每条样本数至少为 3 的动态边取相邻间隔下中位数的两倍，再取最大值。没有可用估计时使用 0。显式非负纳秒值优先，0 只接受精确动态样本。manifest 记录实际门限与 tf_gap_policy。该门限反映采样周期，多速率链共享门限。
+
+可选 tf_max_translation_step_m 和 tf_max_rotation_step_rad 分别限制插值端点之间的平移量和最短旋转角，值须有限且大于零。两图标定和 TF 各用本图原始时刻；没有运动补偿或设备时钟校正。
 
 min_valid_depth_ratio 在 [0,1]，全无效深度始终失败。limits 各项必须正数；max_tf_entries 限制原始 TF 条目（含重复），max_tf_samples 限制索引唯一样本，max_output_bytes 计原始 CDR、标准图像和文本总字节。
 

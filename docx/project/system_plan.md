@@ -2,7 +2,7 @@
 
 更新：2026-11-03。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
 
-**当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前已实现观测准备层基础与 BagBuilder preparation 导出，有效模型已接入 preparation，数值位姿及后续记忆业务尚未实现，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
+**当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前已实现观测准备层基础与 BagBuilder preparation 导出，有效模型与数值位姿已接入 preparation，后续记忆业务尚未实现，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
 
 ## 1. 本轮范围与完成定义
 
@@ -30,9 +30,9 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | RGB | rgb8/bgr8/mono8 到紧密 rgb8，输入检查与独立输出；builder 已接入原 Image/JPEG 并保存 PNG | 单帧模块不承担物理同步或相机几何 |
 | Depth | 16UC1/32FC1、明确米/毫米、米制 optical-z、质量统计 | 物理配准、径向深度换算、可直接用于投影的几何链 |
 | CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查；builder 已实现标定候选索引/选择 | 物理标定精度和跨流重投影；D8 兼容、有效模型及单点射线已实现 |
-| TF | 静/动态原始消息、child/时间索引、链/区间交集与样本端点 | 插值/求逆/组合后的 map 相机/底盘位姿及跳变门控 |
+| TF | 静/动态原始消息、child/时间索引、链/区间交集、端点、插值/求逆/组合及 map 相机和底盘位姿 | 整段轨迹跳变与物理定位精度验收 |
 | common | SensorStamp/ImageGeometry、候选时差与统一名称检查；builder 已保留消息来源和显式 clock/segment | 正式 Observation 的统一 map/版本契约 |
-| BagBuilder | SQLite bag 两遍读取、Image/指定压缩图像解码、严格/最近配对、标定候选与 TF 历史检查、CDR/PNG/NPY/JSONL 及 pending 导出 | 数值位姿、关键帧和后续记忆业务 |
+| BagBuilder | SQLite bag 两遍读取、Image/指定压缩图像解码、严格/最近配对、标定候选与 TF 历史检查、CDR/PNG/NPY/JSONL 及 pending 导出 | 深度几何、关键帧和后续记忆业务 |
 | 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标；当前 ROS CTest 16/16 通过 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
 
 当前 vln_memory 中没有 Entity/Relation/Observation 正式业务类型和持久化，没有原文八个构建工具。vln_agent 的 SessionManager/ToolManager 是可复用基础；EnvironmentMemory 是逐观测历史，不计作永久空间记忆。详见 [范围对照第 6 节](sections_1_2_scope.md)。
@@ -43,7 +43,7 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | --- | --- | --- | --- | --- |
 | S0 数据契约/配置 | 1.1–1.6、2.10 | map/clock/来源/版本、Observation 与实体/关系字段规则，配置 schema/加载与校验 | 单位、引用、缺项、版本语义明确；配置不静默猜数据含义 | 部分完成：传感器/准备数据契约及 bag 配置已落地；正式业务类型、map/版本和其他配置待补 |
 | S1 自动配对与读取 | 2.1、2.10 | 先实现无 ROS rgbd_sync，再 reader、话题类型/编码与时间索引 | 确定配对、平局/一对一、时钟段边界、来源可回查 | 主要能力已实现；全包时间索引与真实短片段提取已验证，物理同步/尺度/注册仍待验收 |
-| S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 已有标定兼容、有效模型和 preparation；数值位姿、深度几何与后续观测组织待完善 |
+| S2 完整离线观测 | 1.3、2.1、2.3、2.10 | 有效相机模型、TF 位姿求解、注册/时间质量、关键帧、证据与 Observation 输出 | 真实 bag 的两图时间/位姿、标定与文件引用一致，缺项进入 pending | 已有标定兼容、有效模型和数值位姿；深度几何与后续观测组织待完善 |
 | S3 几何与工作库 | 1.2/1.4/1.6、2.3–2.7 | 点/区域到 map、对象/空间、关系、事务存储、基本索引与版本 | 已知几何答案、永久 ID、代表点、inside/region_id、revision | 待实现 |
 | S4 工具与模型构建 | 1.5、2.1/2.2/2.4/2.6 | 八工具、上下文/图像、批次循环、进度/幂等恢复 | 真实模型服务、多视图 ID 复用、轮数上限/失败不误报完成、重复 call_id 不重复写 | 待实现 |
 | S5 纠错/标注与发布 | 2.7–2.10 | 四纠错、关系刷新、注释历史、完整记忆产物和原子 manifest | 整体提交/引用修复、人工信息保留、几何缓存失效、半成品不发布 | 待实现 |
@@ -70,7 +70,7 @@ reader 负责 bag 存储/类型/反序列化、来源与稳定顺序，当前纯
 
 ### 4.3 历史位姿与相机几何
 
-TF 模块在既有链/样本选择之上补数值插值、逆变换与组合，得到 map<-body、body<-camera_optical、map<-camera_optical；返回查询时刻与所用原始依据，缺失/超界/跳变明确处理，不用 latest 补历史。
+TF 模块已在链与样本选择之上实现插值、逆变换和组合。Builder 导出 map 相机与底盘位姿、查询时刻和端点来源。时间超限和插值跳变通过独立状态报告。
 
 CameraModel 已实现实际网格 K/D/P、ROI/binning 和单点射线：raw 去畸变，rectified 经 P 内参与 R 逆旋转。非 optical-z 值在模型明确后换算；未注册深度先按标定/外参重投影。支持范围按真实输入验证，未支持的组合进入明确错误/pending，不能默认生成单位模型。
 
@@ -165,14 +165,14 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 D8 兼容、原始/派生标定、reader/索引/直接 ROS 匹配贯通，raw/rectified 有效模型和像素射线已实现，见 [实施](camera_model_implementation.md) 与 [验收](../reviews/camera_model_verification.md)。
 
-完整真实 bag：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整媒体和临时输入已于 2026-11-03 按用户要求清理；build/camera-model-20261103 仅保留小型摘要、日志、配置和审计快照，当前构建/安装保留。完整数据集需从原始 ZIP 重建，见 [清理记录](../reviews/build_cleanup_20261103.md)。
+BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整媒体和临时输入已于 2026-11-03 按用户要求清理；build/camera-model-20261103 仅保留小型摘要、日志、配置和审计快照，当前构建/安装保留。完整数据集需从原始 ZIP 重建，见 [清理记录](../reviews/build_cleanup_20261103.md)。
 
 ### 10.2 后续任务与依赖
 
 | 顺序 | 工作 | 交付/验收 |
 | --- | --- | --- |
-| 1 | TF 数值位姿 | 在现有历史索引上插值、求逆、链组合；各图使用自己的时间，body 使用 RGB 时间；已知答案、超间隔/跳变和真实短 bag 验证 |
-| 2 | 深度几何 | 核实单位、原始 optical-z 坐标和注册依据，接入相机射线与 TF；需要的重投影/运动处理有明确模型，缺项继续 pending |
+| 已实现 | TF 数值位姿 | 复用 checkTime 端点完成插值、求逆和链组合。各图用自己的时间，body 用 RGB 时间。按本轮要求使用构造样本和 tf2 对照验证 |
+| 1 | 深度几何 | 核实单位、原始 optical-z 坐标和注册依据，接入相机射线与 TF；需要的重投影/运动处理有明确模型，缺项继续 pending |
 | 后续 API 输入组织时 | preparation 读取、引用和筛选 | 复用现有 frames/pairs/calibration/model/evidence，不先新增最小 Observation 类型或独立数据集 |
 | 随离线构建推进 | 关键帧/批次输入选择 | 依据有效位姿和明确采样规则选择需要的观测，保留稳定来源和像素坐标；与 API 输入组织协同落地 |
 

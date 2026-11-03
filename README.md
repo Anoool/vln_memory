@@ -4,9 +4,9 @@ ROS 2 Humble / C++17 空间语义记忆功能包。**当前交付目标限定为
 
 逐条完成情况见 [原设计第 1、2 部分范围对照](docx/project/sections_1_2_scope.md)。当前两个原文部分均未完成。
 
-**当前已实现观测准备层的读取/解码/配对、D8 受控兼容、raw/rectified 有效相机模型及 preparation 导出；下一步补 TF 数值位姿和深度几何。preparation 的读取/引用/筛选放到后续 API 输入组织时处理，不先新增最小 Observation。**
+**当前已实现观测准备层的读取/解码/配对、D8 受控兼容、raw/rectified 有效相机模型及 preparation 导出；TF 数值位姿已接入导出，下一步是深度几何。preparation 的读取/引用/筛选放到后续 API 输入组织时处理，不先新增最小 Observation。**
 
-传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。数值位姿、关键帧和后续记忆业务仍待实现；有效相机模型已接入逐帧输出，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
+传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。有效相机模型与数值位姿已接入逐帧输出，关键帧与后续记忆业务待实现，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
 
 收敛后的目标、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
 
@@ -47,11 +47,11 @@ RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 
 
 完整真实 bag 已提取：21441 条消息，3474 RGB + 3415 Depth 全部解码并生成 6889 个相机模型；7268 条原始 D8 保留、显式兼容生成 D5。30 ms 下 2671 对全部具备两图模型，prepared_pairs=0 仍由动态 TF 精确时间/注册依据阻断。当前使用显式固定标定复用，索引复核全段一致；物理同步、尺度及注册精度仍待验收。
 
-当前产物为 bag_preparation/1，builder_version=4。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。没有数值 map 位姿或关键帧。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
+当前产物为 bag_preparation/1，builder_version=5。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。可用的 map 数值位姿与样本证据一起写入逐帧记录。关键帧待实现。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
 
 本录包话题/frame/兼容策略见 [camera_record.yaml](config/camera_record.yaml)，修改路径后可用原 CLI 运行。完整验收及独立回查命令见上述报告。
 
-下一步按 [系统规划第 10 节](docx/project/system_plan.md#10-当前最近行动) 补 TF 数值位姿，再完善深度几何；preparation 输入筛选在调用 API 时实现。S3–S6 工作库、工具/模型构建、纠错发布和 Viewer 尚未实现。
+下一步按 [系统规划第 10 节](docx/project/system_plan.md#10-当前最近行动) 完善深度几何；preparation 输入筛选在调用 API 时实现。S3–S6 工作库、工具/模型构建、纠错发布和 Viewer 尚未实现。
 
 ## 当前接口
 

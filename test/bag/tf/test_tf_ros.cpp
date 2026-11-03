@@ -6,6 +6,7 @@
 #include <vln_memory/bag/common/sensor_names.hpp>
 #include <tf2/time.hpp>
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -99,6 +100,17 @@ int main()
       "Native tf2 disagreed with covered chain: " + error);
     expect(!reference.canTransform("map", "camera_optical", tf2::TimePoint(std::chrono::seconds(4)), &error),
       "Native tf2 unexpectedly allowed extrapolation");
+    const auto when = tf2::TimePoint(std::chrono::seconds(2));
+    const auto native_pose = reference.lookupTransform("map", "camera_optical", when).transform;
+    const auto numeric_pose = index.lookupPose("map", "camera_optical", {2, 0}, query);
+    expect(numeric_pose.ok(), "Numerical pose missing for tf2 fixture");
+    const auto & translation = numeric_pose.pose->translation_m;
+    const auto & rotation = numeric_pose.pose->rotation_xyzw;
+    expect(std::abs(translation[0] - native_pose.translation.x) < 1e-10 &&
+      std::abs(translation[1] - native_pose.translation.y) < 1e-10 &&
+      std::abs(translation[2] - native_pose.translation.z) < 1e-10 &&
+      std::abs(std::abs(rotation[2] * native_pose.rotation.z + rotation[3] * native_pose.rotation.w) - 1.0) < 1e-10,
+      "Numerical pose disagreed with native tf2");
     report = ingestRosTf(index, fixed, "/tf_static", "bag_1:message_9");
     expect(report.ok() && report.duplicates == 1 && index.sampleCount() == 3,
       "Repeated static broadcast expanded history");

@@ -1,6 +1,6 @@
 # BagBuilder 接口与文件契约（可配置最近配对版本）
 
-更新：2026-11-03，builder_version=4。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
+更新：2026-11-03，builder_version=5。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
 
 ## 1. 从哪里调用
 
@@ -54,7 +54,8 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
 | depth | DepthOptions：米/毫米、optical_z、范围、注册状态/依据及声明网格；不从编码或尺寸猜测 |
 | sync_tolerance_ns | 非负 int64 纳秒最大绝对时差（含边界）；0 严格，正值为 RGB 基准单调一对一最近候选。省略/API 默认 0，示例显式 30000000（30 ms 试用值） |
-| tf_max_gap_ns | 非负 int64 纳秒；0 只接受动态精确点；各图使用自身采样时刻 |
+| tf_max_gap_ns | 可选非负 int64 纳秒。省略时按所需链的动态样本估计，显式 0 只接受精确动态点 |
+| tf_max_translation_step_m / tf_max_rotation_step_rad | 可选有限正值，限制相邻插值端点的平移量/最短旋转角 |
 | limits | 分别限制消息/图像/标定/TF 条目与样本、序列化单消息、像素/源图像字节、全部输出字节 |
 
 BagScan 拥有小元数据/TF 历史。CameraInfoIndex 借用其 records，不可在使用中修改。BagImageConsumer 收到 const Image* 只在回调内有效，不能缓存；nullptr 表示 CDR 或压缩负载无法解析；用 deserialization_error/payload_error_code 区分，负载坏时仍可有真实 header。标准帧由既有解码模块拥有，写出后释放。
@@ -88,9 +89,11 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 
 ## 6. 准备状态与几何边界
 
-prepared_for_geometry 要求两图解码、各自标定/有效模型、各自 map 相机 TF 及 RGB 时刻 body TF、注册声明核对和深度质量通过；它仍没有求解实际位姿。pending 的 reasons 列出失败项，不自动改配。
+prepared_for_geometry 要求两图解码、各自标定/有效模型、各自的 map 相机位姿、RGB 时刻底盘位姿、注册声明核对和深度质量检查通过。pending 的 reasons 列出失败项，不自动改配。
 
-pose_computed 仍为 false；effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功；manifest/summary 的对应布尔值表示至少一帧成功，完整数量看 camera_models。没有 keyframes 或正式 observations.jsonl；covered 不能当作已完成的 map 位姿。
+builder_version=5 输出数值位姿。frames 中 map_camera_tf 和 map_body_tf 保留原始时间检查及端点引用，新增 pose_code、pose_failed_frame 和可空 pose。pose 包含 target_frame、source_frame、translation_m、rotation_xyzw，表示 T_target_source。code 仍为时间状态，pose_code 为独立求解状态。
+
+pose_computed 在 Depth 帧表示相机位姿成功，在 RGB 帧表示相机和底盘均成功，在配对表示两路相机与 RGB 时刻底盘均成功。摘要的 posed_frames、posed_pairs 给出数量。manifest 的 pose_computed 和摘要的 numeric_poses_computed 表示至少一帧所需位姿成功。配对的准备状态还检查解码、模型、注册和深度质量。effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功，完整数量看 camera_models。关键帧及正式 observations.jsonl 待实现。
 
 ## 7. 检查方法
 

@@ -38,8 +38,8 @@ struct PreparedFrame
   std::string calibration_code;
   bool camera_matched{false};
   bool model_ready{false};
-  bool tf_covered{false};
-  bool body_tf_covered{false};
+  bool camera_pose_ready{false};
+  bool body_pose_ready{false};
   bool alignment_checked{false};
   bool aligned{false};
   bool depth_quality{true};
@@ -229,7 +229,7 @@ Json cameraModelJson(const CameraModelResult & result)
   return record;
 }
 
-/** @brief 选择派生标定并生成图像模型，TF 仍按原始采样时刻检查，不伪造位姿。 */
+/** @brief 生成相机模型，并按各图原始采样时刻求 map 位姿。 */
 void attachGeometryChecks(
   const BagImageRecord & image, bool is_rgb, const BagBuildOptions & options,
   const BagScan & scan, const CameraInfoIndex & calibrations, PreparedFrame & prepared, Json & record)
@@ -259,15 +259,18 @@ void attachGeometryChecks(
   TfTimeOptions time;
   time.clock_id = options.clock_id;
   time.segment_id = options.segment_id;
-  time.max_interpolation_gap_ns = options.tf_max_gap_ns;
-  const auto camera_tf = scan.tf_index.checkTime(options.map_frame, image.frame_id, image.stamp, time);
-  prepared.tf_covered = camera_tf.covered();
-  record["map_camera_tf"] = tfTimeJson(camera_tf);
+  time.max_interpolation_gap_ns = options.tf_max_gap_ns.value();
+  const auto camera_tf = scan.tf_index.lookupPose(
+    options.map_frame, image.frame_id, image.stamp, time, options.tf_jump_limits);
+  prepared.camera_pose_ready = camera_tf.ok();
+  record["map_camera_tf"] = tfPoseJson(camera_tf);
   if (is_rgb) {
-    const auto body_tf = scan.tf_index.checkTime(options.map_frame, options.body_frame, image.stamp, time);
-    prepared.body_tf_covered = body_tf.covered();
-    record["map_body_tf"] = tfTimeJson(body_tf);
+    const auto body_tf = scan.tf_index.lookupPose(
+      options.map_frame, options.body_frame, image.stamp, time, options.tf_jump_limits);
+    prepared.body_pose_ready = body_tf.ok();
+    record["map_body_tf"] = tfPoseJson(body_tf);
   }
+  record["pose_computed"] = prepared.camera_pose_ready && (!is_rgb || prepared.body_pose_ready);
 }
 
 /** @brief 单帧原始布局与数值转换结果；坏 CDR 明确没有可用 header。 */
@@ -361,9 +364,9 @@ std::vector<std::string> pairReasons(const PreparedFrame & rgb, const PreparedFr
   if (!depth.camera_matched) {reasons.push_back("depth_calibration_unavailable");}
   if (!rgb.model_ready) {reasons.push_back("rgb_camera_model_unavailable");}
   if (!depth.model_ready) {reasons.push_back("depth_camera_model_unavailable");}
-  if (!rgb.tf_covered) {reasons.push_back("rgb_tf_unavailable");}
-  if (!depth.tf_covered) {reasons.push_back("depth_tf_unavailable");}
-  if (!rgb.body_tf_covered) {reasons.push_back("body_tf_unavailable");}
+  if (!rgb.camera_pose_ready) {reasons.push_back("rgb_tf_unavailable");}
+  if (!depth.camera_pose_ready) {reasons.push_back("depth_tf_unavailable");}
+  if (!rgb.body_pose_ready) {reasons.push_back("body_tf_unavailable");}
   if (!depth.alignment_checked || !depth.aligned) {reasons.push_back("depth_rgb_alignment_unverified");}
   if (!depth.depth_quality) {reasons.push_back("insufficient_valid_depth");}
   return reasons;
@@ -380,13 +383,15 @@ void writePairs(
     const auto & depth = frames.at(pair.depth.message_id);
     const auto pair_id = "p_" + pair.rgb.message_id;
     const auto reasons = pairReasons(rgb, depth);
+    const bool pose_ready = rgb.camera_pose_ready && depth.camera_pose_ready && rgb.body_pose_ready;
+    if (pose_ready) {++result.posed_pairs;}
     Json record{{"pair_id", pair_id}, {"rgb_message_id", pair.rgb.message_id},
       {"depth_message_id", pair.depth.message_id}, {"rgb_stamp", stampJson(pair.rgb.stamp)},
       {"depth_stamp", stampJson(pair.depth.stamp)}, {"delta_ns", std::to_string(pair.delta_ns)},
       {"exact", pair.delta_ns == 0}, {"policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"capture_sync_status", "unknown"},
       {"rgb_calibration_id", rgb.calibration_id}, {"depth_calibration_id", depth.calibration_id},
-      {"status", "pending"}, {"reasons", reasons}, {"pose_computed", false},
+      {"status", "pending"}, {"reasons", reasons}, {"pose_computed", pose_ready},
       {"effective_model_computed", rgb.model_ready && depth.model_ready}};
     if (reasons.empty()) {record["status"] = "prepared_for_geometry"; ++result.prepared_pairs;} else {
       writeJsonLine(output, "reports/pending.jsonl", record);
@@ -453,8 +458,12 @@ Json effectiveOptions(const BagBuildOptions & options)
   return {{"clock_id", options.clock_id}, {"clock_basis", options.clock_basis}, {"clock_relation", "same_clock"},
     {"segment_id", options.segment_id}, {"segment_basis", options.segment_basis},
     {"map_frame", options.map_frame}, {"body_frame", options.body_frame},
-    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)}, {"tf_max_gap_ns", std::to_string(
-        options.tf_max_gap_ns)},
+    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
+    {"tf_max_gap_ns", std::to_string(options.tf_max_gap_ns.value())},
+    {"tf_max_translation_step_m", options.tf_jump_limits.translation_m ?
+        Json(*options.tf_jump_limits.translation_m) : Json(nullptr)},
+    {"tf_max_rotation_step_rad", options.tf_jump_limits.rotation_rad ?
+        Json(*options.tf_jump_limits.rotation_rad) : Json(nullptr)},
     {"max_header_reorder_ns", std::to_string(options.max_header_reorder_ns)},
     {"rgb_camera", camera(options.rgb_camera)}, {"depth_camera", camera(options.depth_camera)}, {"depth", depth},
     {"min_valid_depth_ratio", options.min_valid_depth_ratio}, {"tf_topic", options.tf_topic},
@@ -468,7 +477,7 @@ Json coverageReports(const BagBuildOptions & options, const BagScan & scan)
     options.depth_camera.optical_frame};
   Json reports = Json::array();
   for (const auto & source : sources) {
-    const auto chain = scan.tf_index.inspectChain(options.map_frame, source, {options.tf_max_gap_ns});
+    const auto chain = scan.tf_index.inspectChain(options.map_frame, source, {options.tf_max_gap_ns.value()});
     Json intervals = Json::array();
     for (const auto & interval : chain.intervals) {
       intervals.push_back({{"start", stampJson(interval.start)}, {"end", stampJson(interval.end)}});
@@ -497,7 +506,8 @@ Json summaryRecord(
     {"max_abs_delta_ns", std::to_string(sync.max_abs_delta_ns)}, {"prepared_pairs", result.prepared_pairs},
     {"pending_pairs", result.pairs - result.prepared_pairs}, {"issue_count", result.issue_count},
     {"tf_raw_entries", scan.tf_entries}, {"tf_inserted", scan.tf_inserted}, {"tf_duplicates", scan.tf_duplicates},
-    {"tf_unique_samples", scan.tf_index.sampleCount()}, {"numeric_poses_computed", false},
+    {"tf_unique_samples", scan.tf_index.sampleCount()}, {"numeric_poses_computed", result.posed_frames > 0},
+    {"posed_frames", result.posed_frames}, {"posed_pairs", result.posed_pairs},
     {"effective_models_computed", result.camera_models > 0}, {"camera_models", result.camera_models},
     {"keyframes_selected", false}};
 }
@@ -505,7 +515,7 @@ Json summaryRecord(
 /** @brief 写完整数据集说明及来源，字段/版本明确区分 preparation 和正式 memory。 */
 void writeManifest(
   const BagBuildOptions & options, const BagScan & scan, const BagBuildResult & result,
-  OutputFiles & output)
+  bool automatic_tf_gap, OutputFiles & output)
 {
   Json sources = Json::array();
   for (const auto & file : scan.source_files) {
@@ -519,16 +529,17 @@ void writeManifest(
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
   writeJsonFile(
-    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 4},
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 5},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
       {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
       {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"},
       {"metadata_sha256", scan.metadata_sha256}, {"source_files", sources}, {"topics", topics},
       {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
+      {"tf_gap_policy", automatic_tf_gap ? "twice_lower_median_v1" : "explicit"},
       {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
           "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"}},
-      {"pose_computed", false}, {"effective_model_computed", result.camera_models > 0},
+      {"pose_computed", result.posed_frames > 0}, {"effective_model_computed", result.camera_models > 0},
       {"camera_models", result.camera_models}, {"keyframes_selected", false}});
 }
 
@@ -566,13 +577,18 @@ void publishDirectory(const fs::path & work, const fs::path & final_path)
 }
 
 /** @brief 将扫描、配对、逐图转换和发布串联；大对象只在本次运行生命周期内拥有。 */
-void runBuild(const BagBuildOptions & options, BagBuildResult & result)
+void runBuild(BagBuildOptions options, BagBuildResult & result)
 {
   const auto work = createWorkDirectory(options);
   result.work_directory = work.string();
   OutputFiles output(work, options.max_output_bytes);
   initializeOutput(output);
   auto scan = scanBag(options, output);
+  const bool automatic_tf_gap = !options.tf_max_gap_ns.has_value();
+  if (automatic_tf_gap) {
+    options.tf_max_gap_ns = scan.tf_index.inferInterpolationGapNs(options.map_frame,
+      {options.body_frame, options.rgb_camera.optical_frame, options.depth_camera.optical_frame});
+  }
   const auto sync = synchronize(options, scan);
   result.timestamp_match_status = timestampMatchStatus(sync, options.sync_tolerance_ns);
   const auto rgb_grids = pairedRgbGrids(scan, sync);
@@ -585,6 +601,11 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
       if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;} else {++result.depth_frames;}
       if (!prepared.media_path.empty()) {++result.decoded_frames;}
       if (prepared.model_ready) {++result.camera_models;}
+      if (prepared.camera_pose_ready &&
+        (image.source.topic != options.rgb_camera.image_topic || prepared.body_pose_ready))
+      {
+        ++result.posed_frames;
+      }
       frames.emplace(image.source.message_id, std::move(prepared));
     });
   if (result.rgb_frames == 0 || result.depth_frames == 0) {
@@ -605,7 +626,7 @@ void runBuild(const BagBuildOptions & options, BagBuildResult & result)
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
   writeJsonFile(output, "reports/summary.json", summaryRecord(options, scan, sync, result));
-  writeManifest(options, scan, result, output);
+  writeManifest(options, scan, result, automatic_tf_gap, output);
   output.close();
   const auto final_path = fs::weakly_canonical(options.output_directory);
   if (fs::exists(final_path) || fs::is_symlink(final_path)) {

@@ -234,9 +234,14 @@ std::vector<std::string> validateBagBuildOptions(const BagBuildOptions & options
     errors.push_back("One explicit same-clock segment and its acquisition basis are required");
   }
   if (!validFrame(options.map_frame) || !validFrame(options.body_frame) || options.sync_tolerance_ns < 0 ||
-    options.tf_max_gap_ns < 0 || options.max_header_reorder_ns < 0)
+    options.tf_max_gap_ns.value_or(0) < 0 || options.max_header_reorder_ns < 0)
   {
     errors.push_back("Invalid frames or negative time thresholds");
+  }
+  for (const auto & limit : {options.tf_jump_limits.translation_m, options.tf_jump_limits.rotation_rad}) {
+    if (limit && (!std::isfinite(*limit) || *limit <= 0.0)) {
+      errors.push_back("TF jump limits must be finite positive values");
+    }
   }
   checkCamera(options.rgb_camera, errors);
   checkCamera(options.depth_camera, errors);
@@ -285,6 +290,7 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
     checkKeys(
       node, {"input", "output", "storage_id", "clock_id", "clock_basis", "segment_id",
         "segment_basis", "clock_relation", "map_frame", "body_frame", "sync_tolerance_ns", "tf_max_gap_ns",
+        "tf_max_translation_step_m", "tf_max_rotation_step_rad",
         "max_header_reorder_ns", "rgb_camera", "depth_camera", "depth", "tf_topic", "tf_static_topic",
         "min_valid_depth_ratio", "limits"});
     BagBuildOptions options;
@@ -305,7 +311,13 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
     if (options.sync_tolerance_ns < 0) {
       throw BagBuildError("invalid_config", "sync_tolerance_ns must be nonnegative integer nanoseconds");
     }
-    readScalar(node, "tf_max_gap_ns", options.tf_max_gap_ns);
+    if (node["tf_max_gap_ns"]) {options.tf_max_gap_ns = node["tf_max_gap_ns"].as<std::int64_t>();}
+    if (node["tf_max_translation_step_m"]) {
+      options.tf_jump_limits.translation_m = node["tf_max_translation_step_m"].as<double>();
+    }
+    if (node["tf_max_rotation_step_rad"]) {
+      options.tf_jump_limits.rotation_rad = node["tf_max_rotation_step_rad"].as<double>();
+    }
     readScalar(node, "max_header_reorder_ns", options.max_header_reorder_ns);
     readScalar(node, "tf_topic", options.tf_topic);
     readScalar(node, "tf_static_topic", options.tf_static_topic);

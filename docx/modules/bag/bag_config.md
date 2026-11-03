@@ -27,3 +27,5 @@ max_messages/max_frames/max_calibrations/max_tf_entries/max_serialized_bytes/max
 sync_tolerance_ns 为非负 int64 纳秒最大绝对时差。0 严格，正值显式开启最近候选；YAML 省略/C++ 默认仍为 0，负数/小数/溢出拒绝。示例显式 30000000（30 ms 试用值），不自动扩大门限。C++ 设置 options.sync_tolerance_ns = 30000000 后调用 buildBag(options)。
 
 输出保留原始时间和真实差值；标定与 TF 阈值独立。配置不能证明曝光同步。实际效果见 [最近配对验收](../../reviews/rgbd_nearest_pairing_verification.md)。
+
+TF 插值门限可省略并按当前段动态样本估计。显式 tf_max_gap_ns 优先，0 只接受精确动态样本。插值跳变上限及实际门限记录见 [配置说明](../../config/vln_memory.md)。

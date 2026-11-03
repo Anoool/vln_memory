@@ -11,7 +11,7 @@ bag:
   segment_basis: 'Supplied capture: prior full scan found no backwards image/CameraInfo
     headers; no automatic cross-reset pairing'
   sync_tolerance_ns: 30000000
-  tf_max_gap_ns: 0
+  # tf_max_gap_ns: 0  # 省略时根据当前录包的 TF 样本间隔估计。
   max_header_reorder_ns: 0
   map_frame: map
   body_frame: base_link

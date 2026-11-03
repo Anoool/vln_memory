@@ -14,7 +14,7 @@ writeJsonLine(OutputFiles&,relative_path,json object) 添加 schema_version=bag_
 
 CameraInfo/TF 非有限原值写 null 并带 source_nonfinite；原始 CDR 保留实际位模式。Depth 像素 NaN 只在 NPY；无界 max_depth_m 的 JSON null 表示未设置上界。
 
-tfTimeJson 的 covered 仅说明原始端点可用，明确 pose_computed=false。正式 Observation/实体/关系 schema 不由本文件提前伪造。
+tfTimeJson 输出原始端点。tfPoseJson 在同一结构上附加 pose_code、pose_failed_frame 和可选数值位姿。正式 Observation/实体/关系 schema 不由本文件提前伪造。
 
 ## 使用与验证
 
