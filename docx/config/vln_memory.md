@@ -22,9 +22,11 @@ BagBuildOptions 默认值和 YAML 省略值仍为 0。示例显式设置 sync_to
 
 min_valid_depth_ratio 在 [0,1]，全无效深度始终失败。limits 各项必须正数；max_tf_entries 限制原始 TF 条目（含重复），max_tf_samples 限制索引唯一样本，max_output_bytes 计原始 CDR、标准图像和文本总字节。
 
+bag.depth_storage 可选 metric_npy 或 source_png16。默认 metric_npy 保留米制 NPY。source_png16 只将 16UC1 保存为无损源整数 PNG，32FC1 继续写米制 NPY。录包示例显式启用 PNG。读取时按逐帧存储描述处理，见 [文件契约](../interfaces/bag_builder_api.md)。
+
 ## 格式与使用
 
-目前仅未压缩 SQLite ROS 2 bag；支持原 Image 及白名单压缩图像，详见 [压缩适配](../modules/bag/image_decoder_ros.md)。MCAP、ROS 1 和自动跨段处理不支持。示例单位/时钟声明不是设备事实，使用前按真实录制配置填写；输出预算包含标准 float32 NPY，实际大小可能显著超过压缩 bag。
+目前仅未压缩 SQLite ROS 2 bag；支持原 Image 及白名单压缩图像，详见 [压缩适配](../modules/bag/image_decoder_ros.md)。MCAP、ROS 1 和自动跨段处理不支持。示例单位/时钟声明不是设备事实，使用前按真实录制配置填写；输出预算包含实际媒体、原始 CDR 和文本。
 
 ## 2026-11-03 相机兼容
 

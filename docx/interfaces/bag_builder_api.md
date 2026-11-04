@@ -1,6 +1,6 @@
 # BagBuilder 接口与文件契约（可配置最近配对版本）
 
-更新：2026-11-03，builder_version=5。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
+更新：2026-11-04，builder_version=6。以下为实际已实现接口，命名空间均为 vln_memory。[实施记录](../project/bag_builder_v1_implementation.md) 说明范围与实际验证；[原方案](../project/rosbag_integration_plan.md) 保留设计依据。
 
 ## 1. 从哪里调用
 
@@ -14,7 +14,7 @@
 | scanBag | bag_reader_ros.hpp/.cpp | options、OutputFiles& → BagScan | 第一遍/原始证据/完整轻量索引 |
 | readBagImages | bag_reader_ros.hpp/.cpp | options、const BagScan&、BagImageConsumer → void | 第二遍，回调只临时借用 Image |
 | verifyBagSources | bag_reader_ros.hpp/.cpp | options、const BagScan& → void | 文件/metadata/日志及跨遍内容校验 |
-| writeRgb/writeDepth | media_writer.hpp/.cpp | OutputFiles&、安全 ID、拥有型标准帧 → string 相对路径 | PNG/米制 NPY |
+| writeRgb/writeDepth/writeDepthPng16 | media_writer.hpp/.cpp | OutputFiles&、安全 ID、图像帧 → string 相对路径 | RGB PNG、米制 NPY 或源 16UC1 PNG |
 | writeJsonLine/writeJsonFile | jsonl_writer.hpp/.cpp | OutputFiles&、相对路径、json object → void | 带 schema_version 的 JSON 输出 |
 
 bag_types.hpp 为 header-only 共享身份/错误/结果；CLI 是 src/apps/bag_builder_main.cpp。除 buildBag 外的底层 I/O/配置入口可抛 BagBuildError/标准异常；只有 buildBag 统一返回失败状态。
@@ -84,8 +84,15 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | evidence/raw/*.cdr | 选定消息完整原始序列化字节 | messages 中 topic/type（类型由 manifest inventory 提供）/格式/摘要共同解释 |
 | evidence/rgb/*.png | 标准 RGB8，无裁剪/缩放 | 保留原图像素坐标 |
 | evidence/depth/*.npy | height×width、C 顺序、little-endian float32 米制 optical-z、NaN 无效 | 用 numpy.load(allow_pickle=False) 或标准 NPY reader |
+| evidence/depth/*.png | 仅显式 source_png16 模式的 16UC1 源整数，单通道 uint16 | 无转换读取 PNG，按 details.storage 恢复米制深度 |
 
 每条 JSONL 都有 schema_version。源 stamp 以 sec/nanosec 数字表达；int64 记录时间/时差及 uint64 来源序号用十进制字符串，解析者不能先转 double。非有限标定/TF 原值写 null 并标记，原始 CDR 保留真实字节。路径相对发布根目录。
+
+### 深度媒体存储
+
+bag.depth_storage 支持 metric_npy（默认，包括省略字段的旧配置）和 source_png16。显式 source_png16 时，16UC1 Image 和解码为 16UC1 的 compressedDepth 保存原始整数 PNG。32FC1 仍使用现有米制 NPY。manifest.effective_options.depth_storage 记录配置，每个成功的 Depth 记录以 details.storage 描述实际媒体。
+
+details.storage 的 format、dtype、unit（m 或 mm）、scale_to_m 描述文件中实际保存的样本。details.encoding、details.unit 和质量计数描述现有解码后的米制数据。读取 PNG 时保留 uint16，将每个源整数乘 scale_to_m（先以 float64 换算）。原值为零或换算后不在闭区间 [min_depth_m, max_depth_m] 的位置设为 NaN，其余转为 float32。max_depth_m 为 null 表示无上界。NPY 样本已经是米，scale_to_m 为 1，无效值已为 NaN。旧产物缺少 details.storage 时沿用既有米制 NPY 契约。
 
 ## 6. 准备状态与几何边界
 

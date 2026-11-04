@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <sensor_msgs/msg/image.hpp>
+
 #include <vln_memory/bag/builder/bag_types.hpp>
 #include <vln_memory/bag/depth/depth.hpp>
 #include <vln_memory/bag/rgb/rgb.hpp>
@@ -47,5 +49,9 @@ private:
 std::string writeRgb(OutputFiles & files, const std::string & message_id, const RgbFrame & frame);
 /** @brief 保存二维小端 float32 米制 NPY，NaN 保留；不做毫米量化或归一化。 */
 std::string writeDepth(OutputFiles & files, const std::string & message_id, const DepthFrame & frame);
+
+/** @brief 同步读取 16UC1 Image 的源整数并写无损 PNG，保留零值和超量程整数。 */
+std::string writeDepthPng16(
+  OutputFiles & files, const std::string & message_id, const sensor_msgs::msg::Image & source);
 
 }  // namespace vln_memory

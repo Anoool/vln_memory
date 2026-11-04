@@ -187,4 +187,39 @@ std::string writeDepth(OutputFiles & files, const std::string & message_id, cons
   return path;
 }
 
+/** @brief 按源步长和字节序读整数，经共用预算写独立 PNG，失败时不发布。 */
+std::string writeDepthPng16(
+  OutputFiles & files, const std::string & message_id, const sensor_msgs::msg::Image & source)
+{
+  checkMessageId(message_id);
+  if (source.encoding != "16UC1" || source.width == 0 || source.height == 0 ||
+    source.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+    source.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+    source.step < static_cast<std::uint64_t>(source.width) * 2 ||
+    static_cast<std::uint64_t>(source.step) * source.height != source.data.size() ||
+    source.is_bigendian > 1)
+  {
+    throw BagBuildError("invalid_frame", "Invalid source layout for 16UC1 PNG");
+  }
+  cv::Mat pixels(static_cast<int>(source.height), static_cast<int>(source.width), CV_16UC1);
+  const std::size_t high_byte = source.is_bigendian ? 0U : 1U;
+  for (std::size_t row = 0; row < source.height; ++row) {
+    const auto * source_row = source.data.data() + row * source.step;
+    auto * output_row = pixels.ptr<std::uint16_t>(static_cast<int>(row));
+    for (std::size_t column = 0; column < source.width; ++column) {
+      const auto * sample = source_row + column * 2;
+      output_row[column] = static_cast<std::uint16_t>(
+        (static_cast<std::uint32_t>(sample[high_byte]) << 8U) | sample[1U - high_byte]);
+    }
+  }
+
+  std::vector<std::uint8_t> png;
+  if (!cv::imencode(".png", pixels, png, {cv::IMWRITE_PNG_COMPRESSION, 3})) {
+    throw BagBuildError("io_error", "Depth PNG encoding failed");
+  }
+  const auto path = "evidence/depth/" + message_id + ".png";
+  files.write(path, png.data(), png.size());
+  return path;
+}
+
 }  // namespace vln_memory

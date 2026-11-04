@@ -1,8 +1,10 @@
 #include <vln_memory/bag/builder/bag_builder.hpp>
 #include <vln_memory/bag/builder/bag_reader_ros.hpp>
+#include <vln_memory/bag/depth/depth_ros.hpp>
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -28,7 +30,7 @@ using namespace vln_memory;
 using Json = nlohmann::json;
 enum class FixtureKind {
   normal, d8, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
-  compressed, mixed_compressed, bad_compressed, offset_depth, near_depth, near_compressed, far_depth
+  compressed, mixed_compressed, bad_compressed, offset_depth, near_depth, near_compressed, far_depth, storage_layout
 };
 
 /** @brief Release 同样检查测试条件，失败描述实际不符合的契约。 */
@@ -242,10 +244,19 @@ void createFixture(const fs::path & path, FixtureKind kind)
     first_depth.header.stamp.sec = 9;
     first_depth.header.stamp.nanosec = 999999999;
   }
+  if (kind == FixtureKind::storage_layout) {
+    first_depth.is_bigendian = 1;
+    first_depth.step = 6;
+    first_depth.data = {0x03, 0xe8, 0, 0, 0xaa, 0xbb};
+  }
   writeFixtureImage(writer, "/depth", 1000000000LL, first_depth, kind);
   writeFixtureImage(writer, "/rgb", 2000000000LL, rgb(11), kind);
   if (kind == FixtureKind::invalid_depth) {
     writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 0, 0), kind);
+  } else if (kind == FixtureKind::storage_layout) {
+    const cv::Mat samples = (cv::Mat_<float>(1, 2) << 2000.0F, 3000.0F);
+    writeMessage(writer, "/depth", 2000000000LL,
+      *cv_bridge::CvImage(depth(11, 0, 0, 0).header, "32FC1", samples).toImageMsg());
   } else {
     if (kind == FixtureKind::near_depth || kind == FixtureKind::near_compressed) {offset_ns = 2;}
     writeFixtureImage(writer, "/depth", 2000000000LL, depth(11, offset_ns, 2000, 3000), kind);
@@ -345,6 +356,9 @@ void writeFixtureConfig(const fs::path & path, const BagBuildOptions & options)
   bag["segment_basis"] = options.segment_basis;
   bag["body_frame"] = "base";
   bag["sync_tolerance_ns"] = options.sync_tolerance_ns;
+  if (options.depth_storage == BagDepthStorage::source_png16) {
+    bag["depth_storage"] = "source_png16";
+  }
   bag["tf_max_gap_ns"] = 6000000000LL;
   for (const auto * name : {"rgb", "depth"}) {
     auto camera = bag[std::string(name) + "_camera"];
@@ -374,6 +388,14 @@ void configCases(const fs::path & root, const fs::path & config)
 {
   auto options = loadBagBuildOptions(config.string());
   expect(validateBagBuildOptions(options).empty(), "Fixture YAML not usable");
+  expect(options.depth_storage == BagDepthStorage::metric_npy, "Legacy config did not default to NPY");
+  auto png = options;
+  png.depth_storage = BagDepthStorage::source_png16;
+  writeFixtureConfig(root / "png_storage.yaml", png);
+  expect(loadBagBuildOptions((root / "png_storage.yaml").string()).depth_storage ==
+    BagDepthStorage::source_png16, "YAML did not select PNG");
+  png.depth_storage = static_cast<BagDepthStorage>(99);
+  expect(!validateBagBuildOptions(png).empty(), "Invalid depth storage enum accepted");
   auto negative = options;
   negative.sync_tolerance_ns = -1;
   const auto refused = buildBag(negative);
@@ -480,7 +502,7 @@ void checkNearestOutput(const fs::path & output, std::int64_t tolerance_ns, std:
   const auto manifest = readJson(output / "bag_manifest.json");
   const auto policy = "rgb_reference_monotonic_nearest_one_to_one_v1";
   expect(summary.at("timestamp_match_policy") == policy, "Summary mislabeled nearest policy");
-  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 5,
+  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 6,
     "Manifest did not declare current behavior");
   expect(summary.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing summary tolerance");
   expect(manifest.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing manifest tolerance");
@@ -623,6 +645,62 @@ void cameraCompatibilityCases(const fs::path & root)
   expect(rejected, "Unknown YAML compatibility accepted");
 }
 
+/** @brief 验证源整数、范围掩码、大端行填充及混合编码的存储回退。 */
+void depthStorageCases(const fs::path & root)
+{
+  for (const auto * fixture : {"normal", "compressed", "storage_layout"}) {
+    const bool mixed = std::string_view(fixture) == "storage_layout";
+    const auto input = root / (std::string(fixture) + "_bag");
+    if (mixed) {createFixture(input, FixtureKind::storage_layout);}
+    const auto output = root / (std::string(fixture) + "_png_out");
+    auto options = fixtureOptions(input, output);
+    options.depth_storage = BagDepthStorage::source_png16;
+    options.depth.max_depth_m = 2.5;
+    const auto built = buildBag(options);
+    expect(built.ok(), "PNG build failed: " + built.message);
+    const auto manifest = readJson(output / "bag_manifest.json");
+    expect(manifest.at("effective_options").at("depth_storage") == "source_png16",
+      "Manifest lost depth storage option");
+
+    std::size_t depth_count = 0;
+    for (const auto & frame : readLines(output / "frames.jsonl")) {
+      if (frame.at("kind") != "depth") {continue;}
+      const auto stamp_sec = frame.at("stamp").at("sec").get<int>();
+      const auto & details = frame.at("details");
+      const auto & storage = details.at("storage");
+      const auto media = output / frame.at("media_path").get<std::string>();
+      ++depth_count;
+      if (mixed && stamp_sec == 11) {
+        expect(media.extension() == ".npy" && storage.at("dtype") == "float32" &&
+          storage.at("scale_to_m") == 1 && details.at("source_encoding") == "32FC1",
+          "32FC1 did not retain metric NPY");
+        continue;
+      }
+      expect(media.extension() == ".png" && storage.at("format") == "png" &&
+        storage.at("dtype") == "uint16" && storage.at("unit") == "mm" &&
+        storage.at("scale_to_m") == 0.001 && storage.at("max_depth_m") == 2.5 &&
+        storage.at("invalid_rule") == "zero_or_out_of_range_to_nan" && details.at("encoding") == "32FC1",
+        "Depth media metadata conflated raw and decoded units");
+      const auto pixels = cv::imread(media.string(), cv::IMREAD_UNCHANGED);
+      expect(pixels.type() == CV_16UC1 && pixels.rows == 1 && pixels.cols == 2,
+        "Depth PNG lost integer layout");
+      if (stamp_sec == 10) {
+        expect(pixels.at<std::uint16_t>(0, 0) == 1000 && pixels.at<std::uint16_t>(0, 1) == 0,
+          "PNG changed source integer or zero");
+      } else if (stamp_sec == 11) {
+        expect(pixels.at<std::uint16_t>(0, 0) == 2000 && pixels.at<std::uint16_t>(0, 1) == 3000,
+          "PNG did not preserve the above-range source integer");
+        const auto message = cv_bridge::CvImage(depth(11, 0, 0, 0).header, "16UC1", pixels).toImageMsg();
+        const auto metric = decodeRosDepth(*message, options.depth);
+        expect(metric.ok() && metric.frame->depth_m[0] == 2.0F &&
+          std::isnan(metric.frame->depth_m[1]) && metric.frame->out_of_range_pixels == 1,
+          "PNG did not reconstruct the original metric values and mask");
+      }
+    }
+    expect(depth_count == 3, "Incomplete depth media export");
+  }
+}
+
 /** @brief 同输入重复构建、覆盖/预算失败、单文件范围和所有特殊路径回归。 */
 void integrationCases(const fs::path & root)
 {
@@ -655,6 +733,7 @@ void integrationCases(const fs::path & root)
   failureAndQualityCases(root);
   sourceChangeCase(root);
   strictCompressedCases(root);
+  depthStorageCases(root);
   nearestCases(root);
   cameraCompatibilityCases(root);
 }

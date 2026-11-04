@@ -47,7 +47,9 @@ RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 
 
 历史 v4 真实全包验收覆盖 21,441 条消息，6,889 张图像全部解码并生成相机模型，7,268 条原始 D8 保留并派生 D5。30 ms 下 2,671 对具备两图模型。该次运行的 prepared_pairs=0，原因是当时的动态 TF 精确时间策略和注册依据不足。当前 v5 的真实位姿覆盖和投影落点待验证。详见 [v4 相机模型验收](docx/reviews/camera_model_verification.md)。
 
-当前产物为 bag_preparation/1，builder_version=5。每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。可用的 map 数值位姿与样本证据一起写入逐帧记录。关键帧待实现。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
+当前产物为 bag_preparation/1，builder_version=6。可设置 bag.depth_storage: source_png16，将源 16UC1 逐帧保存为无损 PNG。省略时沿用米制 NPY，32FC1 也继续使用米制 NPY。录包示例已启用 PNG，逐帧恢复规则见 [深度媒体存储](docx/interfaces/bag_builder_api.md#深度媒体存储)。
+
+每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。可用的 map 数值位姿与样本证据一起写入逐帧记录。关键帧待实现。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
 
 本录包话题/frame/兼容策略见 [camera_record.yaml](config/camera_record.yaml)，修改路径后可用原 CLI 运行。完整验收及独立回查命令见上述报告。
 

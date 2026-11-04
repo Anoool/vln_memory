@@ -40,6 +40,7 @@ bag:
     time_policy: static_calibration
     max_delta_ns: 0
     compatibility: plumb_bob_zero_tail_d8_v1
+  depth_storage: source_png16  # 源 16UC1 整数写无损 PNG。
   depth:
     input_unit: millimeters
     convention: optical_z

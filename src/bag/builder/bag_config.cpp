@@ -216,10 +216,25 @@ void checkDepth(const DepthOptions & depth, std::vector<std::string> & errors)
 
 }  // namespace
 
+/** @brief 返回 YAML 与 manifest 共用的名称，未知枚举返回 unknown。 */
+const char * bagDepthStorageName(BagDepthStorage storage) noexcept
+{
+  switch (storage) {
+    case BagDepthStorage::metric_npy: return "metric_npy";
+    case BagDepthStorage::source_png16: return "source_png16";
+  }
+  return "unknown";
+}
+
 /** @brief 汇集配置错误，无文件访问；输入/输出目录冲突由 reader/顶层进一步检查。 */
 std::vector<std::string> validateBagBuildOptions(const BagBuildOptions & options)
 {
   std::vector<std::string> errors;
+  if (options.depth_storage != BagDepthStorage::metric_npy &&
+    options.depth_storage != BagDepthStorage::source_png16)
+  {
+    errors.push_back("Unknown depth_storage");
+  }
   if (options.rgb_camera.camera_info_topic == options.depth_camera.camera_info_topic &&
     options.rgb_camera.compatibility != options.depth_camera.compatibility)
   {
@@ -292,7 +307,7 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
         "segment_basis", "clock_relation", "map_frame", "body_frame", "sync_tolerance_ns", "tf_max_gap_ns",
         "tf_max_translation_step_m", "tf_max_rotation_step_rad",
         "max_header_reorder_ns", "rgb_camera", "depth_camera", "depth", "tf_topic", "tf_static_topic",
-        "min_valid_depth_ratio", "limits"});
+        "min_valid_depth_ratio", "depth_storage", "limits"});
     BagBuildOptions options;
     readScalar(node, "input", options.bag_uri);
     readScalar(node, "output", options.output_directory);
@@ -327,6 +342,14 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
     options.rgb_camera.clock_relation = options.clock_relation;
     options.depth_camera.clock_relation = options.clock_relation;
     readDepth(node["depth"], options.depth);
+    if (node["depth_storage"]) {
+      const auto storage = node["depth_storage"].as<std::string>();
+      if (storage == bagDepthStorageName(BagDepthStorage::source_png16)) {
+        options.depth_storage = BagDepthStorage::source_png16;
+      } else if (storage != bagDepthStorageName(BagDepthStorage::metric_npy)) {
+        throw BagBuildError("invalid_config", "depth_storage must be metric_npy or source_png16");
+      }
+    }
     if (node["limits"]) {readLimits(node["limits"], options);}
     return options;
   } catch (const YAML::Exception & error) {

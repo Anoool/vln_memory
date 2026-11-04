@@ -15,6 +15,11 @@
 namespace vln_memory
 {
 
+enum class BagDepthStorage {metric_npy, source_png16};
+
+/** @brief 返回写入 manifest 的静态存储策略名称。 */
+const char * bagDepthStorageName(BagDepthStorage storage) noexcept;
+
 /**
  * @brief 第一版只处理一个明确声明的时钟段；复用实际相机/深度契约，不多层包装。
  * @note 路径可由 CLI 覆盖；所有时间阈值是整数纳秒。既有核心上限不等于反序列化预算。
@@ -42,6 +47,8 @@ struct BagBuildOptions
   std::string tf_topic{"/tf"};
   std::string tf_static_topic{"/tf_static"};
   DepthOptions depth;
+  // source_png16 只改变 16UC1 的磁盘格式，其他编码继续写米制 NPY。
+  BagDepthStorage depth_storage{BagDepthStorage::metric_npy};
   RgbLimits rgb_limits;
   DepthLimits depth_limits;
   TfLimits tf_limits;

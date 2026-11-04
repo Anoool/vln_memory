@@ -186,7 +186,13 @@ ConvertedFrame convertDepth(
   result.message = decoded.message;
   if (!decoded.ok()) {return result;}
   const auto & frame = *decoded.frame;
-  result.media_path = writeDepth(output, image.source.message_id, frame);
+  const bool store_source_png = options.depth_storage == BagDepthStorage::source_png16 &&
+    frame.source_numeric_type == DepthNumericType::uint16;
+  if (store_source_png) {
+    result.media_path = writeDepthPng16(output, image.source.message_id, message);
+  } else {
+    result.media_path = writeDepth(output, image.source.message_id, frame);
+  }
   result.depth_quality = frame.valid_pixels > 0 && frame.valid_ratio >= options.min_valid_depth_ratio;
   result.details = {{"encoding", "32FC1"}, {"unit", "meters"}, {"convention", "optical_z"},
     {"source_encoding", frame.source_encoding}, {"source_unit", depthUnitName(frame.source_unit)},
@@ -196,6 +202,13 @@ ConvertedFrame convertDepth(
     {"zero_pixels", frame.zero_pixels}, {"negative_pixels", frame.negative_pixels},
     {"nonfinite_pixels", frame.nonfinite_pixels}, {"out_of_range_pixels", frame.out_of_range_pixels},
     {"unrepresentable_pixels", frame.unrepresentable_pixels}, {"alignment_basis", frame.alignment_basis}};
+  result.details["storage"] = {
+    {"format", store_source_png ? "png" : "npy"},
+    {"dtype", store_source_png ? "uint16" : "float32"},
+    {"unit", store_source_png ? depthUnitName(frame.source_unit) : "m"},
+    {"scale_to_m", store_source_png ? frame.source_scale_to_m : 1.0},
+    {"invalid_rule", store_source_png ? "zero_or_out_of_range_to_nan" : "nan"},
+    {"min_depth_m", frame.min_depth_m}, {"max_depth_m", frame.max_depth_m}};
   const auto grid = rgb_grids.find(image.source.message_id);
   result.details["alignment_code"] = "not_checked_no_pair";
   if (grid != rgb_grids.end()) {
@@ -466,6 +479,7 @@ Json effectiveOptions(const BagBuildOptions & options)
         Json(*options.tf_jump_limits.rotation_rad) : Json(nullptr)},
     {"max_header_reorder_ns", std::to_string(options.max_header_reorder_ns)},
     {"rgb_camera", camera(options.rgb_camera)}, {"depth_camera", camera(options.depth_camera)}, {"depth", depth},
+    {"depth_storage", bagDepthStorageName(options.depth_storage)},
     {"min_valid_depth_ratio", options.min_valid_depth_ratio}, {"tf_topic", options.tf_topic},
     {"tf_static_topic", options.tf_static_topic}, {"limits", effectiveLimits(options)}};
 }
@@ -529,7 +543,7 @@ void writeManifest(
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
   writeJsonFile(
-    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 5},
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 6},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
       {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
