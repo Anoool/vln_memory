@@ -4,13 +4,13 @@ ROS 2 Humble / C++17 空间语义记忆功能包。**当前交付目标限定为
 
 逐条完成情况见 [原设计第 1、2 部分范围对照](docx/project/sections_1_2_scope.md)。当前两个原文部分均未完成。
 
-**当前处于 S2。已实现 BagBuilder 读取、解码、配对与准备数据导出，以及 D8 受控兼容、有效相机模型、TF 数值位姿和单点 Depth→map、Depth→RGB。下一步用真实短 bag 验收 v5 的深度几何链路。**
+**当前处于 S2。BagBuilder v6 已支持无损深度 PNG、有效相机模型和历史 TF 位姿。`loadPreparedPair` 可按配对 ID 读取 v5/v6 数据，固定真实短包已通过单点 Depth→map 与 Depth→RGB 候选落点的数值对照。下一步组织离线构建输入，完成多对筛选、关键帧和批次选择。**
 
-传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。当前已实现 BagBuilder 第一版：SQLite rosbag 两遍读取、自动配对、标定选择/TF 历史检查、原始 CDR、PNG/米制 NPY 和 JSONL 导出。有效相机模型与数值位姿已接入逐帧输出，关键帧与后续记忆业务待实现，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
+传感器基础的历史核查见 [核查报告](docx/reviews/observation_preparation_audit.md)，集中参数/返回值及提供文件见 [接口手册](docx/interfaces/observation_preparation_api.md)。BagBuilder 两遍读取 SQLite rosbag，完成配对、标定选择和历史 TF 求解，并导出原始 CDR、图像和 JSONL。有效相机模型与数值位姿已接入逐帧输出，关键帧与后续记忆业务待实现，详见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md)。
 
 收敛后的目标、各层职责与开发顺序见 [系统整体规划](docx/project/system_plan.md)。
 
-RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测准备层与源码组织](docx/project/architecture.md)。BagBuilder 输出媒体、配对、有效模型和位姿。离线构建输入阶段负责读取、校验引用和选择关键帧，正式记忆版本发布时导出业务观测。
+RGB、Depth、CameraInfo、TF、bag 五模块的职责和实施顺序见 [观测准备层与源码组织](docx/project/architecture.md)。BagBuilder 输出媒体、配对、有效模型和位姿。Preparation reader 校验单对数据的引用并恢复米制深度。后续离线构建使用该接口组织关键帧和批次，正式记忆版本发布时导出业务观测。
 
 ## 当前源码布局
 
@@ -29,7 +29,7 @@ TF 位于本层 tf，bag 读取与准备组装位于 builder，薄入口位于 s
 
 ## BagBuilder 运行（严格或最近时间配对）
 
-先修改 [config/vln_memory.yaml](config/vln_memory.yaml) 的真实话题、光学 frame、深度单位/注册及同钟分段依据。第一版只支持一个明确段的未压缩 SQLite ROS 2 bag；目录读取 metadata 的全部分卷，单独 .db3 明确标记单文件范围。
+先修改配置中的真实话题、光学 frame、深度单位、注册及同钟分段依据。默认和录包示例分别见 [vln_memory.yaml](config/vln_memory.yaml) 与 [camera_record.yaml](config/camera_record.yaml)。第一版只支持一个明确段的未压缩 SQLite ROS 2 bag；目录读取 metadata 的全部分卷，单独 .db3 明确标记单文件范围。
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -43,22 +43,18 @@ RGB-D 的 sync_tolerance_ns 支持非负整数纳秒：0 严格，正值按 RGB 
 
 ## 当前验证与下一步
 
-投影基线 6d809e8 的无 ROS 核心测试 10/10、非录包 ROS 测试 15/15 通过，两种安装模式的投影消费者独立编译运行通过。接口见 [单点深度投影](docx/modules/depth/depth_projection.md)。
+- **BagBuilder v6** 输出 `bag_preparation/1`。设置 `bag.depth_storage: source_png16` 可把源 `16UC1` 保存为无损 PNG，读取时按逐帧元数据恢复米制值和无效值掩码。省略该配置或输入 `32FC1` 时沿用米制 NPY。[深度媒体契约](docx/interfaces/bag_builder_api.md#深度媒体存储)
+- **固定真实短包验收**覆盖 PNG/NPY 回读、来源引用、原始 TF 端点复核和三个像素的 C++ 投影。两种媒体的投影结果一致，并与独立数值参考吻合。短包有 10 对带数值位姿的 RGB-D，均保留注册依据未核实的 pending 原因。实际深度尺度、注册精度和曝光同步仍需独立实测。[系统规划第 10.2 节](docx/project/system_plan.md#102-后续任务与依赖)
+- **Preparation reader 回归**在 `f19fd3b` 基线上通过 ROS CTest 18/18 和无 ROS 核心 CTest 10/10。现有 ROS 与无 ROS 安装消费者均复跑了固定短包的读取与投影对照。构造回归覆盖 v5 兼容、断引用、错时刻位姿、位姿缺项和损坏 NPY。[读取接口与复跑命令](docx/modules/bag/preparation_reader.md)
+- **历史全包验收**使用 BagBuilder v4，包含 21,441 条消息、6,889 张解码图像与有效模型、2,671 对 RGB-D。相关媒体和临时输入按清理记录处理。[全包验收](docx/reviews/camera_model_verification.md) · [清理记录](docx/reviews/build_cleanup_20261103.md)
 
-历史 v4 真实全包验收覆盖 21,441 条消息，6,889 张图像全部解码并生成相机模型，7,268 条原始 D8 保留并派生 D5。30 ms 下 2,671 对具备两图模型。该次运行的 prepared_pairs=0，原因是当时的动态 TF 精确时间策略和注册依据不足。当前 v5 的真实位姿覆盖和投影落点待验证。详见 [v4 相机模型验收](docx/reviews/camera_model_verification.md)。
-
-当前产物为 bag_preparation/1，builder_version=6。可设置 bag.depth_storage: source_png16，将源 16UC1 逐帧保存为无损 PNG。省略时沿用米制 NPY，32FC1 也继续使用米制 NPY。录包示例已启用 PNG，逐帧恢复规则见 [深度媒体存储](docx/interfaces/bag_builder_api.md#深度媒体存储)。
-
-每帧/配对的 effective_model_computed 记录实际成功；全局标志表示至少一帧成功，数量看 camera_models。可用的 map 数值位姿与样本证据一起写入逐帧记录。关键帧待实现。完整媒体、临时输入/子集及重复测试产物已按用户要求于 2026-11-03 清理；小型验收摘要/日志/元数据快照仍在 build/camera-model-20261103，当前构建与安装保留。需要完整 preparation 时从原始 ZIP 重建，快照不能直接消费。见 [清理记录](docx/reviews/build_cleanup_20261103.md)。
-
-本录包话题/frame/兼容策略见 [camera_record.yaml](config/camera_record.yaml)，修改路径后可用原 CLI 运行。完整验收及独立回查命令见上述报告。
-
-下一步用真实短 bag 验收 v5 的帧、模型与位姿交接，并检查 Depth→map、Depth→RGB 落点。preparation 的引用核对及按操作筛选随 API 输入组织实现。详见 [系统规划第 10 节](docx/project/system_plan.md#10-当前最近行动)。S3–S6 工作库、工具/模型构建、纠错发布和 Viewer 尚未实现。
+下一步在离线构建入口复用 `loadPreparedPair`，按用途校验模型、位姿和媒体并保留 pending 原因。根据有效底盘位姿和显式采样策略选择关键帧及批次，再在构建链路中落地正式观测及其地图、版本和证据引用。S3 随后实现区域投影、实体／关系和 SQLite 工作库。模型工具与批次执行、纠错发布和 Viewer 按 S4–S6 推进。[后续任务与验收](docx/project/system_plan.md#102-后续任务与依赖)
 
 ## 当前接口
 
-- `buildBag(BagBuildOptions)`：返回结构化结果和完整 preparation 数据集路径；不含虚构位姿。
+- `buildBag(BagBuildOptions)`：返回结构化结果和完整 preparation 数据集路径。
 - `pairRgbDepth(...)` / `CameraInfoIndex::select(...)`：独立时间配对与标定候选选择。
+- `loadPreparedPair(preparation_root, pair_id)` 按已保存的 ID 读取一对 RGB-D。结果持有时间段与来源、媒体路径、可选相机模型和位姿、可选米制深度及 pending 原因。调用方链接 `vln_memory::vln_memory_preparation_reader`，按操作检查必需字段。[Preparation reader](docx/modules/bag/preparation_reader.md)
 
 - `decodeRgb(RgbImageView, RgbLimits)`：支持 rgb8、bgr8、mono8，输出独立持有的紧密 RGB 数据。
 - `decodeRosRgb(sensor_msgs::msg::Image, RgbLimits)`：ROS 消息薄适配，复用核心校验。
@@ -122,7 +118,7 @@ g++ -std=c++17 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
 
 ## Git 审阅
 
-本包是独立仓库，远程为 [Anoool/vln_memory](https://github.com/Anoool/vln_memory)。main 保留 RGB 基线。当前进度分支为 `codex/preparation-doc-alignment`，已包含 TF 数值位姿与单点重投影实现，并整理了 preparation 到几何消费端的接口约定。实时状态可用以下命令查看。
+本包的远程仓库为 [Anoool/vln_memory](https://github.com/Anoool/vln_memory)。深度 PNG 和单对 preparation 读取器的功能基线为 `f19fd3b`。分支及待审阅修改可用以下命令查看。
 
 ```bash
 git status --short --branch
