@@ -47,10 +47,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_info_index PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 # 模型库独立于 ROS，内部复用已安装的 OpenCV 几何运算。
-find_package(OpenCV REQUIRED COMPONENTS core calib3d)
+find_package(OpenCV REQUIRED COMPONENTS core calib3d imgcodecs)
+find_package(nlohmann_json REQUIRED)
 add_library(vln_memory_camera_model SHARED src/bag/camera_info/camera_model.cpp)
 add_library(vln_memory::vln_memory_camera_model ALIAS vln_memory_camera_model)
-target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE ${OpenCV_LIBS})
+target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE opencv_core opencv_calib3d)
 target_include_directories(vln_memory_camera_model SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_model PRIVATE -Wall -Wextra -Wpedantic)
@@ -62,7 +63,15 @@ target_link_libraries(vln_memory_depth_projection PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_depth_projection PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-set(memory_export_targets vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
+add_library(vln_memory_preparation_reader SHARED src/bag/builder/preparation_reader.cpp)
+add_library(vln_memory::vln_memory_preparation_reader ALIAS vln_memory_preparation_reader)
+target_link_libraries(vln_memory_preparation_reader PUBLIC
+  vln_memory_depth vln_memory_camera_model vln_memory_tf
+  PRIVATE nlohmann_json::nlohmann_json opencv_core opencv_imgcodecs)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_preparation_reader PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+set(memory_export_targets vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
@@ -103,7 +112,6 @@ if(VLN_MEMORY_ENABLE_ROS)
   find_package(rosbag2_storage REQUIRED)
   find_package(rclcpp REQUIRED)
   find_package(rcutils REQUIRED)
-  find_package(nlohmann_json REQUIRED)
   find_package(yaml-cpp REQUIRED)
   find_package(OpenSSL REQUIRED)
   find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
@@ -155,6 +163,9 @@ endforeach()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_preparation_reader test/bag/builder/test_preparation_reader.cpp)
+  target_link_libraries(test_preparation_reader PRIVATE vln_memory_preparation_reader
+    vln_memory_depth_projection nlohmann_json::nlohmann_json)
   add_executable(test_depth_projection test/bag/depth/test_depth_projection.cpp)
   target_link_libraries(test_depth_projection PRIVATE vln_memory_depth_projection)
   add_test(NAME depth_projection_core COMMAND test_depth_projection)
@@ -199,6 +210,8 @@ if(BUILD_TESTING)
     target_include_directories(test_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
     add_test(NAME bag_builder_ros COMMAND test_bag_builder ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
     set_tests_properties(bag_builder_ros PROPERTIES FIXTURES_SETUP bag_builder_dataset)
+    add_test(NAME preparation_reader COMMAND test_preparation_reader ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(preparation_reader PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME bag_output_numpy COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/bag/builder/test_bag_output.py ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
@@ -237,6 +250,7 @@ install(FILES include/vln_memory/bag/common/sensor_types.hpp
 install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
   include/vln_memory/bag/builder/bag_types.hpp
   include/vln_memory/bag/builder/camera_info_index.hpp
+  include/vln_memory/bag/builder/preparation_reader.hpp
   DESTINATION include/vln_memory/bag/builder)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)

@@ -176,8 +176,8 @@ BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成�
 | 已实现 | 单深度像素到 map | 复用米制 optical-z、有效相机模型与该帧历史 TF 位姿，输出一个地图点或明确失败码。见 [单点投影接口](../modules/depth/depth_projection.md) |
 | 已实现 | 单点 Depth→RGB | 按两帧各自时刻的位姿求几何候选像素。见 [单点投影接口](../modules/depth/depth_projection.md) |
 | 已实现 | 深度媒体压缩 | 通过 bag.depth_storage 选择源 16UC1 无损 PNG，保留旧米制 NPY。每帧记录恢复米制值所需的元数据 |
-| 1 | 真实深度几何验收 | 从真实短 bag 生成 preparation，按配对引用取两帧。核对光轴、尺度、注册依据、逐边 TF 插值跨度及位姿覆盖，再核对地图点和 RGB 落点。按操作保留可用结果和 pending 原因 |
-| 后续 API 输入组织时 | preparation 读取、引用和筛选 | 复用 frames/pairs/calibration/model/evidence。读取入口核对 bag_id、时钟段、地图上下文及模型和位姿引用，复用有效配对与门限，按操作所需条件筛选。参见 [时间基准与配对门限](../interfaces/bag_builder_api.md#rgb-d-时间基准与配对门限) |
+| 固定样本通过 | 真实短 bag 数值链路 | v6 PNG/NPY 回读、原始 TF 端点复核和三个投影点均通过。物理尺度和 RGB/Depth 注册精度仍需外部参考 |
+| 单对读取已实现 | preparation 读取与引用 | loadPreparedPair 使用已保存的配对 ID，校验来源、标定、位姿和媒体。复用 v5/v6 准备数据并保留 pending 原因。见 [读取接口](../modules/bag/preparation_reader.md) |
 | 随离线构建推进 | 关键帧/批次输入选择 | 依据有效位姿和明确采样规则选择需要的观测，保留稳定来源和像素坐标；与 API 输入组织协同落地 |
 
 ### 10.3 后续业务

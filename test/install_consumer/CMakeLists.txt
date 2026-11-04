@@ -51,3 +51,9 @@ target_link_libraries(camera_model_consumer PRIVATE vln_memory::vln_memory_camer
 
 add_executable(depth_projection_consumer ../bag/depth/test_depth_projection.cpp)
 target_link_libraries(depth_projection_consumer PRIVATE vln_memory::vln_memory_depth_projection)
+
+# 独立链接安装后的读取和投影入口，复用构造夹具或真实短包核查。
+find_package(nlohmann_json REQUIRED)
+add_executable(preparation_reader_consumer ../bag/builder/test_preparation_reader.cpp)
+target_link_libraries(preparation_reader_consumer PRIVATE vln_memory::vln_memory_preparation_reader
+  vln_memory::vln_memory_depth_projection nlohmann_json::nlohmann_json)
