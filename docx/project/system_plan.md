@@ -10,9 +10,10 @@
 
 ```text
 ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
-  -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析、关键帧
+  -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析
   -> preparation JSONL + evidence/ + pending/质量报告
-  -> MemoryEngine：几何、实体/关系、构建读取与修改工具、模型批次/恢复
+  -> 离线构建输入：读取和核对引用、按用途筛选、关键帧/批次选择
+  -> MemoryEngine：几何、观测与实体/关系、构建读取与修改工具、模型批次/恢复
   -> 原文 1.6 规定的完整版本、索引与原子发布 manifest
   -> MemoryViewer：map 实体/关系、图像/选区/轨迹/位姿联动及命名标注
 ```
@@ -28,12 +29,12 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | 已有内容 | 当前能力 | 明确未完成 |
 | --- | --- | --- |
 | RGB | rgb8/bgr8/mono8 到紧密 rgb8，输入检查与独立输出；builder 已接入原 Image/JPEG 并保存 PNG | 单帧模块不承担物理同步或相机几何 |
-| Depth | 16UC1/32FC1、明确米/毫米、米制 optical-z、质量统计 | 物理配准、径向深度换算、可直接用于投影的几何链 |
-| CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查；builder 已实现标定候选索引/选择 | 物理标定精度和跨流重投影；D8 兼容、有效模型及单点射线已实现 |
+| Depth 与单点投影 | 16UC1/32FC1、米制 optical-z、质量统计。独立投影库实现单点 Depth→map 和 Depth→RGB 候选像素 | 真实几何验收、物理尺度与注册依据、区域投影 |
+| CameraInfo | 完整 K/D/R/P、显式绑定、ROI/binning 网格和时间检查。支持 D8 兼容、有效模型及单点射线，builder 可索引并选择标定 | 物理标定精度验收 |
 | TF | 静/动态原始消息、child/时间索引、链/区间交集、端点、插值/求逆/组合及 map 相机和底盘位姿 | 整段轨迹跳变与物理定位精度验收 |
 | common | SensorStamp/ImageGeometry、候选时差与统一名称检查；builder 已保留消息来源和显式 clock/segment | 正式 Observation 的统一 map/版本契约 |
 | BagBuilder | SQLite bag 两遍读取、Image/指定压缩图像解码、严格/最近配对、标定候选与 TF 历史检查、CDR/PNG/NPY/JSONL 及 pending 导出 | 深度几何、关键帧和后续记忆业务 |
-| 构建与文档 | 无 ROS 核心、真实 ROS 适配、安装目标；当前 ROS CTest 16/16 通过 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
+| 构建与文档 | 无 ROS 核心、ROS 适配、安装目标与独立投影消费者 | 完整 Observation、MemoryEngine/Viewer 和完整记忆产物 |
 
 当前 vln_memory 中没有 Entity/Relation/Observation 正式业务类型和持久化，没有原文八个构建工具。vln_agent 的 SessionManager/ToolManager 是可复用基础；EnvironmentMemory 是逐观测历史，不计作永久空间记忆。详见 [范围对照第 6 节](sections_1_2_scope.md)。
 
@@ -82,7 +83,7 @@ CameraModel 已实现实际网格 K/D/P、ROI/binning 和单点射线：raw 去�
 
 记录两张图各自 frame/stamp、CameraInfo 原始模型/选择版本、有效投影参数、原始与标准媒体、bag 来源、clock/segment、配对策略/时差、TF 查询与质量。未定位/坏帧保留证据进入 pending。
 
-关键帧依据有效底盘位姿的位移/转角及明确采样策略选择，输出 observation_id 引用；处理首帧、静止、缺姿态、定位跳变，不把每张解码图像自动称关键帧。BagBuilder 完成后必须产出真实 observations.jsonl/evidence/及报告。
+关键帧依据有效底盘位姿的位移/转角及明确采样策略选择，输出 observation_id 引用；处理首帧、静止、缺姿态、定位跳变，不把每张解码图像自动称关键帧。BagBuilder 负责 preparation 与原始证据。离线构建组织关键帧和业务观测，完整记忆版本发布时导出 observations.jsonl 及相关证据。
 
 ## 5. S3：原文第 1 部分的数据与几何业务
 
@@ -157,7 +158,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 - Viewer 按实体/关系/时间联动检查和标注回读；
 - 三个入口使用实际 config/vln_memory.yaml，支持字段和错误有验证。
 
-当前代码已重新构建，ROS CTest 16/16、无 ROS 9/9 通过；模型接口及安装/真实数据验收见 [相机模型验收](../reviews/camera_model_verification.md)。构造回归支持已实现接口可调用，真实时间索引/短片段核查支持读取、解码和配对；均不能代替正式几何和完整系统验收。原文第 1、2 部分完成前，README 和进度报告不得写成完整离线记忆系统已经交付。
+投影基线 6d809e8 的无 ROS 核心测试 10/10、非录包 ROS 测试 15/15 通过，两种安装模式的投影消费者独立编译运行通过。真实全包提取仍以 v4 的 [相机模型验收](../reviews/camera_model_verification.md) 为准。v5 的真实位姿覆盖、投影落点和当前配对准备状态待验证。原文第 1、2 部分完成前，README 和进度报告不得写成完整离线记忆系统已经交付。
 
 ## 10. 当前最近行动
 
@@ -165,7 +166,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 D8 兼容、原始/派生标定、reader/索引/直接 ROS 匹配贯通，raw/rectified 有效模型和像素射线已实现，见 [实施](camera_model_implementation.md) 与 [验收](../reviews/camera_model_verification.md)。
 
-BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。prepared_pairs=0 由当前动态 TF 时间策略和注册依据阻断，不再由 CameraInfo 格式阻断。完整媒体和临时输入已于 2026-11-03 按用户要求清理；build/camera-model-20261103 仅保留小型摘要、日志、配置和审计快照，当前构建/安装保留。完整数据集需从原始 ZIP 重建，见 [清理记录](../reviews/build_cleanup_20261103.md)。
+BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成功解码图像及模型，30 ms 下 2671 对。原始参数、时间及 CDR 保留。当时的 prepared_pairs=0，原因是 v4 验收所用的精确动态 TF 策略与注册依据不足。完整媒体和临时输入已于 2026-11-03 按用户要求清理；build/camera-model-20261103 仅保留小型摘要、日志、配置和审计快照，当前构建/安装保留。完整数据集需从原始 ZIP 重建，见 [清理记录](../reviews/build_cleanup_20261103.md)。
 
 ### 10.2 后续任务与依赖
 
@@ -174,8 +175,8 @@ BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成�
 | 已实现 | TF 数值位姿 | 复用 checkTime 端点完成插值、求逆和链组合。各图用自己的时间，body 用 RGB 时间。按本轮要求使用构造样本和 tf2 对照验证 |
 | 已实现 | 单深度像素到 map | 复用米制 optical-z、有效相机模型与该帧历史 TF 位姿，输出一个地图点或明确失败码。见 [单点投影接口](../modules/depth/depth_projection.md) |
 | 已实现 | 单点 Depth→RGB | 按两帧各自时刻的位姿求几何候选像素。见 [单点投影接口](../modules/depth/depth_projection.md) |
-| 1 | 真实深度几何验收 | 核实物理尺度、原始 optical-z 坐标和注册依据，缺项继续 pending。用真实短 bag 核查位姿覆盖和重投影落点 |
-| 后续 API 输入组织时 | preparation 读取、引用和筛选 | 复用现有 frames/pairs/calibration/model/evidence，不先新增最小 Observation 类型或独立数据集 |
+| 1 | 真实深度几何验收 | 用 v5 从真实短 bag 生成 preparation，按配对引用取两帧。核对光轴、尺度、注册依据、逐边 TF 插值跨度及位姿覆盖，再核对地图点和 RGB 落点。按操作保留可用结果和 pending 原因 |
+| 后续 API 输入组织时 | preparation 读取、引用和筛选 | 复用 frames/pairs/calibration/model/evidence。读取入口核对 bag_id、时钟段、地图上下文及模型和位姿引用，复用有效配对与门限，按操作所需条件筛选。参见 [时间基准与配对门限](../interfaces/bag_builder_api.md#rgb-d-时间基准与配对门限) |
 | 随离线构建推进 | 关键帧/批次输入选择 | 依据有效位姿和明确采样规则选择需要的观测，保留稳定来源和像素坐标；与 API 输入组织协同落地 |
 
 ### 10.3 后续业务

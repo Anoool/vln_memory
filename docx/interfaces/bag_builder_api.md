@@ -50,7 +50,7 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 | --- | --- |
 | bag_uri | 未压缩 SQLite ROS 2 目录（metadata.yaml + 所有分卷）或独立 .db3；只读关闭状态，不可边录边提取；发布当前支持 Linux/Ubuntu/WSL |
 | output_directory | 不存在的新目录；不能与输入路径包含彼此；失败只保留独立 .partial 工作目录 |
-| clock/segment | 单个明确同钟段和采集依据；不自动对齐时钟/跨 epoch 排序；允许重排量由 max_header_reorder_ns 声明 |
+| clock/segment | 单个明确同钟段和采集依据。两路 header 须已处于同一可比较时间基准，最大重排量由 max_header_reorder_ns 声明 |
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
 | depth | DepthOptions：米/毫米、optical_z、范围、注册状态/依据及声明网格；不从编码或尺寸猜测 |
 | sync_tolerance_ns | 非负 int64 纳秒最大绝对时差（含边界）；0 严格，正值为 RGB 基准单调一对一最近候选。省略/API 默认 0，示例显式 30000000（30 ms 试用值） |
@@ -91,6 +91,8 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 
 prepared_for_geometry 要求两图解码、各自标定/有效模型、各自的 map 相机位姿、RGB 时刻底盘位姿、注册声明核对和深度质量检查通过。pending 的 reasons 列出失败项，不自动改配。
 
+后续读取 preparation 时按实际操作判断输入是否齐备。Depth→map 需要有效 Depth 像素、该帧模型和相机位姿。Depth→RGB 再需要配对、RGB 模型、RGB 相机位姿和共同时间及地图上下文。注册依据或底盘位姿不足的记录仍可用于满足上述条件的单点验算，保留 pending 原因及候选像素的限制。关键帧选择单独核对底盘位姿。
+
 builder_version=5 输出数值位姿。frames 中 map_camera_tf 和 map_body_tf 保留原始时间检查及端点引用，新增 pose_code、pose_failed_frame 和可空 pose。pose 包含 target_frame、source_frame、translation_m、rotation_xyzw，表示 T_target_source。code 仍为时间状态，pose_code 为独立求解状态。
 
 pose_computed 在 Depth 帧表示相机位姿成功，在 RGB 帧表示相机和底盘均成功，在配对表示两路相机与 RGB 时刻底盘均成功。摘要的 posed_frames、posed_pairs 给出数量。manifest 的 pose_computed 和摘要的 numeric_poses_computed 表示至少一帧所需位姿成功。配对的准备状态还检查解码、模型、注册和深度质量。effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功，完整数量看 camera_models。关键帧及正式 observations.jsonl 待实现。
@@ -105,7 +107,7 @@ pose_computed 在 Depth 帧表示相机位姿成功，在 RGB 帧表示相机和
 
 ## 8. 时间配对版本与兼容
 
-manifest builder_version=3；JSON schema 仍为 bag_preparation/1。v2 的零配置继续有效，BagBuildOptions 默认仍为 0。本次允许显式正容差，不能再假设全部 exact=true。没有修改现有结构布局或 pairRgbDepth 签名；下游应使用匹配的新版头和库。
+v3 引入以下配对契约，v5 继续沿用。JSON schema 为 bag_preparation/1。v2 的零配置继续有效，BagBuildOptions 默认仍为 0。本次允许显式正容差，不能再假设全部 exact=true。没有修改现有结构布局或 pairRgbDepth 签名；下游应使用匹配的新版头和库。
 
 | 位置 | 字段格式 | 实际语义 |
 | --- | --- | --- |
@@ -125,6 +127,14 @@ manifest builder_version=3；JSON schema 仍为 bag_preparation/1。v2 的零配
 两图标定与 TF 各用自身原时间，body 用 RGB 时间；不把 Depth 当作发生在 RGB 时刻。近似匹配没有运动补偿，prepared_for_geometry 仅通过已有准备检查，不是最终几何精度结论。
 
 零配对保留提取证据：零模式问题 no_exact_rgbd_pairs，正模式 no_rgbd_pairs，空有效流为 empty_stream。result.ok() 只表示完整发布，必须另查对数/策略/差值/质量。sync_tolerance_violation/strict_sync_violation 是内部不变量错误，整次失败。
+
+### RGB-D 时间基准与配对门限
+
+配对先核对两路索引的 clock_id、segment_id，以及显式 same_clock 声明和 clock_basis，再计算 delta_ns = t_depth − t_rgb。配置为 30 ms 时，候选满足 |delta_ns| ≤ 30,000,000 ns。BagBuilder 在一个数据集内对两路索引和历史 TF 查询使用同一个声明的 clock/segment，保留原始 header、实际差值和配对策略。
+
+两台设备可使用各自的硬件时钟。只有 header 已映射到同一时间基准，或者有可验证的时钟转换关系，两个数值的差才有采样时间意义。BagBuilder 当前消费已处于同一声明时间基准的 header。clock_basis 记录这一前提的采集依据，30 ms 门限度量该前提下的时差。设备曝光同步状态单独记录，当前 capture_sync_status 为 unknown。
+
+复用同一可信 preparation 的配对时，输入组织层按 pair 中的消息 ID 读取两帧，从同一 manifest 继承 bag_id 和 clock/segment，核对两帧与各自标定、位姿的引用，并沿用保存的配对结果和门限。若输入来自独立数据源，需先验证时间关系和地图配准依据。仅凭同名 map 和相近的 header 数值无法建立这些关系。
 
 ## 9. 图像格式与来源
 

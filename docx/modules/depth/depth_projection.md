@@ -21,4 +21,6 @@ projectDepthPixelToRgb 在单点地图投影之后，用 RGB 位姿执行 p_rgb 
 
 DepthToRgbResult::pixel_rgb 是 RGB 实际网格上的浮点列、行，成功时有效。code 区分 Depth 侧失败、RGB 模型或位姿不匹配、RGB 位姿缺失、数值失败和 RGB 正投影失败。depth_code 和 camera_code 分别保留对应子阶段的错误。两帧有时差时按地图点静止计算候选像素。可见性、遮挡、物理尺度与注册证据由后续验收处理。
 
+投影函数核对每个 TfPoseResult 的查询时刻、光学帧和目标帧名。两帧的 clock/segment、地图身份和标定来源由输入组织层绑定。来自同一可信 preparation 的帧按 rgbd_pairs.jsonl 和 manifest 读取，复用已有配对门限与时钟依据。直接组装调用参数时，调用方须先确认这些关系。参见 [RGB-D 时间基准与配对门限](../../interfaces/bag_builder_api.md#rgb-d-时间基准与配对门限)。
+
 验证入口见 [test_depth_projection](tests/test_depth_projection.md)。

@@ -2,7 +2,7 @@
 
 更新：2026-11-03。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。TF 数值位姿、单点 Depth→map 和 Depth→RGB 已实现，下一步核实深度几何依据并用真实短 bag 验收；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
 
-最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。
+最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。文档中指向源码、测试和仓库配置的相对链接适用于源码检出目录。安装后的文档可在对应的源码检出版本中查看这些引用。
 
 ## 从哪里开始
 

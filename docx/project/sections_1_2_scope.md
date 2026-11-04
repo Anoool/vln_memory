@@ -19,7 +19,7 @@
 
 | 原文条款 | 当前状态 | 已有代码/证据 | 尚缺的实际能力 |
 | --- | --- | --- | --- |
-| 1.1 坐标、单位与信息保留 | 基础部分 | 米制 optical-z、SensorStamp、CameraInfo 原值、TF 父子链/样本来源；原始 CDR 和标准媒体已落盘 | 统一 map_id/geometry_revision/单位契约，真正 map 相机/底盘位姿、像素到 map 与空间关系依据 |
+| 1.1 坐标、单位与信息保留 | 基础部分 | 米制 optical-z、SensorStamp、CameraInfo 原值、TF 父子链/样本来源；原始 CDR 和标准媒体已落盘 | 统一 map_id/geometry_revision/单位契约、当前位姿及单点投影的真实数据验收、空间关系依据 |
 | 1.2 Entity（含 1.2.1 空间） | 未实现 | 无 Entity/Region 模型或存储 | 永久 ID、物品/空间统一实体、已观测代表点、可选边界/朝向、证据/revision、未定位 pending |
 | 1.3 Observation | 基础部分 | 已导出 RGB/Depth 媒体；frames/pairs 保存尺寸、原始时间、媒体路径、标定候选及 TF 端点/来源 | 正式 Observation 结构/校验/序列化、关键帧及正式引用校验。数值位姿与有效模型已在准备数据中实现 |
 | 1.4 SemanticRelation | 未实现 | 无语义关系业务 | near/on/hanging_on/inside、门的多端点 connects_regions、证据/状态、去重、inside 与 region_id 同步 |
@@ -30,9 +30,9 @@
 
 | 原文条款 | 当前状态 | 已有代码/证据 | 尚缺的实际能力 |
 | --- | --- | --- | --- |
-| 2.1 输入与总体流程 | 基础部分 | BagBuilder 两遍读取、原始/指定压缩图像解码、严格/最近配对、标定候选/TF 检查及准备导出；真实短片段已验证 | 数值几何/有效模型、关键帧、正式观测、模型构建、检查标注闭环（reader/配对/标定选择/准备导出已实现） |
+| 2.1 输入与总体流程 | 基础部分 | BagBuilder 两遍读取、原始/指定压缩图像解码、严格/最近配对、标定候选/TF 检查及准备导出；真实短片段已验证 | v5 产物到几何消费端的真实验证、关键帧、正式观测、模型构建与检查标注闭环 |
 | 2.2 构建工具 | 未实现 | 通用 ToolManager 不是这八个工具 | search_entities/get_observation/project_depth/spatial_query/create_entity/update_entity/correct_memory/memory_annotate |
-| 2.3 深度定位 | 基础部分 | 深度米制、模型原始参数、历史链/端点选择 | TF 插值/求逆/组合，有效内参/畸变/ROI 处理，point/bbox/polygon 到 map，区域分簇/歧义、质量及失败结果 |
+| 2.3 深度定位 | 基础部分 | 米制深度、有效相机模型、TF 数值位姿、单点 Depth→map 和 Depth→RGB 候选投影 | v5 真实数据几何验收、完整 project_depth 工具、bbox/polygon 到 map、区域分簇与质量/歧义报告 |
 | 2.4 创建/更新协议 | 未实现 | 无永久实体及乐观 revision 校验 | 字段合并/观测追加、引用/版本校验、永久 ID、几何定位、关系更新 |
 | 2.5 空间加入记忆 | 未实现 | 无空间实体业务 | 从确认在区域内的 body_pose_map 取代表点，证据积累，inside/region_id 一致性 |
 | 2.6 同一实体/几何更新 | 未实现 | 通用 ToolManager 只对活动调用去重，不具备所需持久幂等 | 同观测区域去重、构建 call_id 执行结果复用、身份/位置冲突状态、静态融合/移动状态、轨迹更新后重算 |
@@ -41,7 +41,7 @@
 | 2.9 人工命名 | 未实现 | 无该实体 ID/注释接口 | display_name/aliases/note、annotations 历史、名称索引回读、Viewer 调用共用写入处理 |
 | 2.10 最小实现与发布 | 基础部分 | C++17/ROS 包、分类文档、现有消息测试和安装消费者 | 完整 Observation、MemoryEngine/MemoryViewer（已实现 bag 配置/CLI/准备导出）、单 writer 进度、完整版本与原子 manifest 发布、真实数据闭环 |
 
-截至 2026-11-03，当前源码重新构建后 ROS CTest 16/16、无 ROS 核心 9/9 通过；最新验收见 [相机模型验收](../reviews/camera_model_verification.md)。构造回归与真实 bag 时间索引/短片段验证分别记录，均不等于第 1、2 部分整体验收。
+投影基线 6d809e8 的无 ROS 核心测试 10/10、非录包 ROS 测试 15/15 通过，两种安装模式的投影消费者通过。历史真实全包结果见 [v4 相机模型验收](../reviews/camera_model_verification.md)，v5 的真实几何链路待验收。
 
 ## 4. 范围收敛后，哪些必须保留
 
@@ -89,7 +89,7 @@ Entity、SemanticRelation、Observation、索引和版本虽然在原文第 1 �
 8. Viewer 满足原文 2.10 的地图/关系/图像/轨迹联动及实体/关系/时间定位，并通过共用 memory_annotate 写入名称/别名/备注，重开后能回读。
 9. config/vln_memory.yaml 的每个已支持字段在三个程序入口生效；不把原文示例的 30ms/0.001/0.8m/25deg 等数值当通用正确默认值。
 
-以上全部通过才标记第 1、2 部分完成。RGB-D 自动配对与 preparation 导出已实现；相机兼容/有效模型已实现；TF 数值位姿已实现，最近待办为深度几何，preparation 的读取/引用/筛选在后续 API 输入组织时处理，具体交付与验收见 [整体规划第 10 节](system_plan.md#10-当前最近行动)。
+以上全部通过才标记第 1、2 部分完成。RGB-D 自动配对与 preparation 导出已实现；相机兼容/有效模型已实现；TF 数值位姿已实现，单点投影已实现，最近待办为真实短 bag 的深度几何验收。preparation 的读取、引用校验和按用途筛选在后续 API 输入组织时处理，具体交付与验收见 [整体规划第 10 节](system_plan.md#10-当前最近行动)。
 
 ## 2026-10-30 实施更新
 
