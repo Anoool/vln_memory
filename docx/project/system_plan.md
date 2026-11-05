@@ -177,7 +177,8 @@ BagBuilder v4 的历史全包验收：21441 消息、7268 原始 D8、6889 成�
 | 已实现 | 单点 Depth→RGB | 按两帧各自时刻的位姿求几何候选像素。见 [单点投影接口](../modules/depth/depth_projection.md) |
 | 已实现 | 深度媒体压缩 | 通过 bag.depth_storage 选择源 16UC1 无损 PNG，保留旧米制 NPY。每帧记录恢复米制值所需的元数据 |
 | 固定样本通过 | 真实短 bag 数值链路 | v6 PNG/NPY 回读、原始 TF 端点复核和三个投影点均通过。物理尺度和 RGB/Depth 注册精度仍需外部参考 |
-| 单对与索引多对读取已实现 | preparation 读取与引用 | loadPreparedPair 和 PreparationReader 复用 v5/v6 数据。openPreparation 一次建立五类 JSONL 偏移索引，pairs 保留源顺序，loadPair 完整读取指定配对并保留 pending 原因。metadata_only 为后续步骤。见 [读取接口](../modules/bag/preparation_reader.md) |
+| 单对与索引多对读取已实现 | preparation 读取与引用 | loadPreparedPair 和 PreparationReader 复用 v5/v6/v7 数据。openPreparation 一次建立五类 JSONL 偏移索引，pairs 保留源顺序，loadPair 完整读取指定配对并保留 pending 原因。metadata_only 为后续步骤。见 [读取接口](../modules/bag/preparation_reader.md) |
+| 已实现 | 精简 preparation 存储 | v7 默认省略 CDR，保留来源摘要与提取产物。两个读取入口兼容历史数据，preparation_compact 校验并原子发布精简副本。见 [CDR 验收](../reviews/cdr_storage_verification.md) |
 | 随离线构建推进 | 关键帧/批次输入选择 | 依据有效位姿和明确采样规则选择需要的观测，保留稳定来源和像素坐标；与 API 输入组织协同落地 |
 
 ### 10.3 后续业务

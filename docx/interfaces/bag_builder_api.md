@@ -73,7 +73,7 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | 文件 | 一条记录是什么 | 其他模块如何引用 |
 | --- | --- | --- |
 | bag_manifest.json | 数据集类型、完成状态、bag_id、源分卷/指纹、话题清单、有效配置、TF 覆盖、文件清单 | 先确认 artifact_kind=bag_preparation；不等同正式 memory manifest |
-| messages.jsonl | 每条配置消息的身份/记录时间/序号/摘要/原始 CDR 路径 | message_id 是所有其他来源引用的根，包括坏 CDR 和空 TFMessage |
+| messages.jsonl | 每条配置消息的身份/记录时间/序号/摘要/可空 CDR 路径 | message_id 是所有其他来源引用的根，包括坏 CDR 和空 TFMessage |
 | frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像；source_data_bytes 为源 Image 像素或 CompressedImage 负载字节数，numeric_quality_passed 只表示数值质量 |
 | rgbd_pairs.jsonl | 一对两图 ID/原始 stamp/有符号 delta_ns、标定 ID、策略、准备状态及原因 | pair_id；frames 中各自查询端点仍为自身采样时刻 |
 | camera_info.jsonl | 每条原始完整 K/D/R/P/ROI/binning 和来源/校验结果 | calibration_id=来源 message_id，重复广播来源不合并消失 |
@@ -81,12 +81,12 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | reports/issues.jsonl | stage/code/message 与消息/配对引用 | 按稳定码处理，无需解析中文/英文文本 |
 | reports/pending.jsonl | 坏帧/数值深度质量、不可准备配对、未配对 RGB、未使用 Depth | unused_depth 的 is_bad_frame=false；需要另查解码/质量 |
 | reports/summary.json | 实际数量、有效时间索引数量、配对/未配对/问题及 TF 统计 | 两流配对守恒针对 valid_time_*，不含无法解析的 Image |
-| evidence/raw/*.cdr | 选定消息完整原始序列化字节 | messages 中 topic/type（类型由 manifest inventory 提供）/格式/摘要共同解释 |
+| evidence/raw/*.cdr | save_raw_cdr=true 时的选定消息原始序列化字节 | messages 中 topic/type（类型由 manifest inventory 提供）/格式/摘要共同解释 |
 | evidence/rgb/*.png | 标准 RGB8，无裁剪/缩放 | 保留原图像素坐标 |
 | evidence/depth/*.npy | height×width、C 顺序、little-endian float32 米制 optical-z、NaN 无效 | 用 numpy.load(allow_pickle=False) 或标准 NPY reader |
 | evidence/depth/*.png | 仅显式 source_png16 模式的 16UC1 源整数，单通道 uint16 | 无转换读取 PNG，按 details.storage 恢复米制深度 |
 
-每条 JSONL 都有 schema_version。源 stamp 以 sec/nanosec 数字表达；int64 记录时间/时差及 uint64 来源序号用十进制字符串，解析者不能先转 double。非有限标定/TF 原值写 null 并标记，原始 CDR 保留真实字节。路径相对发布根目录。
+每条 JSONL 都有 schema_version。源 stamp 以 sec/nanosec 数字表达；int64 记录时间/时差及 uint64 来源序号用十进制字符串，解析者不能先转 double。非有限标定/TF 原值写 null 并标记，原始字节对照需要源消息。路径相对发布根目录。
 
 ### 深度媒体存储
 
@@ -164,3 +164,7 @@ frames.jsonl 新增 camera_model：code/message，成功时包含实际 width/he
 camera_models 是成功生成模型的帧数，CLI/result/summary/manifest 一致。配对失败原因新增 rgb_camera_model_unavailable / depth_camera_model_unavailable；TF/注册缺失时可以已有有效模型而 pair 仍 pending。
 
 接口与坐标约定见 [CameraModel](../modules/camera_info/camera_model.md)，实现与真实验证见 [实施说明](../project/camera_model_implementation.md) 和 [验收](../reviews/camera_model_verification.md)。
+
+## v7 CDR 保存策略
+
+bag.save_raw_cdr 默认 false，输出 builder_version=7 并记录实际策略。false 的 raw_path 为 null，true 保存 CDR。source ID、长度和 SHA-256 在两种模式下均保留。v5/v6 读取沿用要求 CDR 的历史契约。已有数据可通过 preparation_compact 生成精简目录，详见 [转换接口](../modules/bag/preparation_compactor.md) 和 [验收](../reviews/cdr_storage_verification.md)。

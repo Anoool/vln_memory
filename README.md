@@ -1,6 +1,6 @@
 # vln_memory
 
-`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前可用的 `bag_builder` 将 ROS 2 RGB-D 录包转换为离线观测准备数据，保留图像、标定、历史位姿、原始消息与质量报告，供后续构建空间记忆。
+`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前可用的 `bag_builder` 将 ROS 2 RGB-D 录包转换为离线观测准备数据，保留图像、标定、历史位姿、消息来源与质量报告，供后续构建空间记忆。
 
 ## 安装
 
@@ -57,13 +57,15 @@ ros2 run vln_memory bag_builder --config /tmp/vln_memory-local.yaml \
   --bag /absolute/path/to/recording --output "$PWD/build/my_preparation"
 ```
 
+`bag.save_raw_cdr` 默认 `false`，保留提取产物及消息摘要，省略 CDR 副本。显式 `true` 可保存 CDR。已有数据使用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 转换成新的精简目录。
+
 输出目录必须尚未存在。配置项 `bag.sync_tolerance_ns` 为 `0` 时按原始时间戳精确配对，正值启用容差内的一对一最近配对。样例中的 30 ms 是试用值，请按录制条件设定。配对会保留两路原始时间与实际时差，物理同步与图像注册需要独立验证。
 
 - `bag_manifest.json` 记录数据集版本、来源和有效配置。
-- `frames.jsonl` 和 `rgbd_pairs.jsonl` 记录帧、配对、模型、位姿和状态，`evidence/` 保存原始消息与媒体。
+- `frames.jsonl` 和 `rgbd_pairs.jsonl` 记录帧、配对、模型、位姿和状态，`evidence/` 保存媒体，原始 CDR 按配置保存。
 - `reports/summary.json`、`reports/issues.jsonl` 和 `reports/pending.jsonl` 记录统计、问题与待处理原因。`completed_with_issues` 表示数据集已写出，需结合 `prepared_pairs` 和报告判断可用性。
 
-C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory::vln_memory_preparation_reader`，调用 `loadPreparedPair(root, pair_id)` 读取已保存的 v5/v6 配对。遍历多对数据可先调用 `openPreparation(root)` 建立索引，再通过 `reader.pairs()` 和 `reader.loadPair(pair_id)` 访问。完整字段及调用方式见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md) 和 [Preparation 读取接口](docx/modules/bag/preparation_reader.md)。
+C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory::vln_memory_preparation_reader`，调用 `loadPreparedPair(root, pair_id)` 读取已保存的 v5/v6/v7 配对。遍历多对数据可先调用 `openPreparation(root)` 建立索引，再通过 `reader.pairs()` 和 `reader.loadPair(pair_id)` 访问。完整字段及调用方式见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md) 和 [Preparation 读取接口](docx/modules/bag/preparation_reader.md)。
 
 ## 项目进度与下一步
 

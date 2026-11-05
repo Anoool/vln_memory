@@ -2,7 +2,7 @@
 
 [公开头](../../../include/vln_memory/bag/builder/preparation_reader.hpp) 提供 `loadPreparedPair(root, pair_id)`，以及面向多对访问的 `openPreparation(root)` 和 `PreparationReader`。调用方链接 `vln_memory::vln_memory_preparation_reader`，ROS 与独立 C++ 构建均可使用。
 
-输入为已发布的 BagBuilder v5/v6 `bag_preparation/1`。两路图像保留各自原始采样时间、保存的配对关系和 pending 原因。结果独立持有元数据、可选模型、相机及底盘位姿、媒体路径和可选米制 `DepthFrame`。
+输入为已发布的 BagBuilder v5/v6/v7 `bag_preparation/1`。两路图像保留各自原始采样时间、保存的配对关系和 pending 原因。结果独立持有元数据、可选模型、相机及底盘位姿、媒体路径和可选米制 `DepthFrame`。
 
 多对调用先打开目录，再遍历轻量目录或按 ID 读取。
 
@@ -30,7 +30,7 @@ for (const auto & info : reader.pairs()) {
 
 `loadPair(pair_id)` 按索引读取当前配对引用的记录，并复用单对入口的标定、位姿链、证据和媒体校验。当前实现采用完整深度读取契约。结果独立持有存储，reader 销毁后仍可使用。metadata_only 属于后续设计步骤，见 [分步方案](../../project/preparation_multi_pair_reading_plan.md)。
 
-RGB 媒体校验相对路径和 PNG 头部尺寸、格式，返回绝对路径供消费端解码。NPY 支持 BagBuilder 写出的 v1.0 二维 C 顺序小端 float32，v5 的深度范围取自 manifest。v6 源 PNG 以单通道 uint16 读取，复用深度解码的比例、范围和无效值处理。原始 CDR 检查引用及文件长度，字节对照和独立位姿重算由验收工具负责。
+RGB 媒体校验相对路径和 PNG 头部尺寸、格式，返回绝对路径供消费端解码。NPY 支持 BagBuilder 写出的 v1.0 二维 C 顺序小端 float32，v5 的深度范围取自 manifest。v6 源 PNG 以单通道 uint16 读取，复用深度解码的比例、范围和无效值处理。CDR 路径与长度按版本和保存策略校验。v5/v6 与 v7 的 save_raw_cdr=true 要求文件存在，v7 false 要求 raw_path=null。rgb_raw_evidence 和 depth_raw_evidence 为可选路径。源消息字节对照由提供源 bag 的审计工具负责。
 
 | 情况 | 结果 |
 | --- | --- |
@@ -46,7 +46,7 @@ RGB 媒体校验相对路径和 PNG 头部尺寸、格式，返回绝对路径�
 
 设元数据字节数为 B、索引记录数为 N、一对引用的记录数及字节数为 Q/J、深度像素数为 D。在有界 ID 长度下，打开约为 O(B + N log N)，索引占用 O(N) 级空间。逐对读取约为 O(Q log N + J + D)，像素内存随调用方持有的读取结果增长。
 
-[回归程序](../../../test/bag/builder/test_preparation_reader.cpp)复用现有录包夹具，覆盖全目录新旧入口对照、v5/v6、PNG/NPY、源顺序及零/负/相同时间戳、空目录、重复键、合法缺项、断引用、坏媒体、路径/大小/修改时间变化和结果生命周期。CTest 的 preparation_reader 用例复用 bag_builder_ros 产物。
+[回归程序](../../../test/bag/builder/test_preparation_reader.cpp)复用现有录包夹具，覆盖全目录新旧入口对照、v5/v6/v7、PNG/NPY、源顺序及零/负/相同时间戳、空目录、重复键、合法缺项、断引用、坏媒体、路径/大小/修改时间变化和结果生命周期。CTest 的 preparation_reader 用例复用 bag_builder_ros 产物。
 
 2026-11-05 的索引版本通过 ROS CTest 18/18、核心 CTest 10/10 和两种安装模式的读取器消费者。固定真实短包的两种媒体各有 10 对，全部通过新旧入口对照，并保留注册依据未核实的 pending 原因。真实短包的单点投影继续使用既有独立数值参考。复跑命令如下。
 
@@ -56,3 +56,5 @@ build/preparation-index-core/test_preparation_reader \
   build/depth-png-ab-20261104/source_png16 \
   build/depth-geometry-acceptance-20261104/run-1.json
 ```
+
+2026-11-05 的 v7 CDR 存储策略及精简转换结果见 [验收](../../reviews/cdr_storage_verification.md)。下游需重新编译以适配可选 raw evidence 字段。

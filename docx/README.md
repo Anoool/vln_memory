@@ -100,7 +100,10 @@ docx/
 | 官方 reader、分卷及跨遍来源 | [bag_reader_ros](modules/bag/bag_reader_ros.md) |
 | 标定检索/版本歧义 | [camera_info_index](modules/bag/camera_info_index.md) |
 | 单对读取与持有索引的多对 PreparationReader | [preparation_reader](modules/bag/preparation_reader.md) |
-| 提取产物省略 CDR、来源契约和已有数据转换的待审阅方案 | [CDR 存储方案](project/preparation_cdr_retention_plan.md) |
+| 将历史 preparation 转换成省略 CDR 的新目录 | [preparation_compactor](modules/bag/preparation_compactor.md) |
+| 共用 partial 目录与不覆盖原子发布 | [preparation_storage](modules/bag/preparation_storage.md) |
+| CDR 保存策略、真实短包与容量验收 | [CDR 存储验收](reviews/cdr_storage_verification.md) |
+| 默认省略 CDR、v7 来源契约和已有数据转换的实施方案 | [CDR 存储方案](project/preparation_cdr_retention_plan.md) |
 | 多对读取分步方案，索引阶段已实现，按需深度模式待推进 | [多对读取方案](project/preparation_multi_pair_reading_plan.md) |
 | 媒体与字节预算 | [media_writer](modules/bag/media_writer.md) |
 | JSONL 数值/引用契约 | [jsonl_writer](modules/bag/jsonl_writer.md) |

@@ -101,3 +101,5 @@ PUBLIC 同时供本库编译和下游使用；target_link_libraries 继续保留
 ## 2026-11-03 CameraModel
 
 新增独立导出目标 vln_memory::vln_memory_camera_model，PUBLIC 依赖 CameraInfo，PRIVATE 使用 OpenCV core/calib3d。普通 C++ 公开头无 ROS/OpenCV 类型；无 ROS 构建也需 OpenCV 开发库。模型核心测试 camera_model_core 和安装消费者 camera_model_consumer 验证数值与依赖，现有核心库职责不变。
+
+preparation_reader 库同时提供 preparation_compactor，内部 preparation_storage 供它和 BagBuilder 共用不覆盖发布逻辑。preparation_compact 可执行程序支持 ROS 和独立构建，安装到 lib/vln_memory。公开头包含 preparation_compactor.hpp。

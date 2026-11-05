@@ -35,3 +35,7 @@ rgb_camera/depth_camera 新增 compatibility：省略/API 默认 strict；显式
 image_domain 必须根据实际生产链声明 raw/rectified；JPEG/PNG 是编码，alignment 是跨流注册，两者都不能决定图像域。静态标定复用仍须显式声明并由索引核查全段一致；不会为修复一张缺同刻 CameraInfo 的图像自动扩大时间门限。
 
 实际真实运行配置和结果见 [相机模型验收](../reviews/camera_model_verification.md)。
+
+## CDR 保存策略
+
+bag.save_raw_cdr 接受未加引号的 true/false，API 与 YAML 省略默认 false。v7 在 effective_options 中记录实际值。false 时 messages 和嵌套 source 的 raw_path 为 null，true 时保存原始 CDR。输入反序列化字节预算及来源摘要计算继续生效，输出预算累计实际生成的文件。使用说明见 [精简转换](../modules/bag/preparation_compactor.md)。

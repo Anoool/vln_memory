@@ -1,6 +1,6 @@
 # Preparation 可省略 CDR 的存储方案
 
-日期为 2026-11-05。状态为待审阅设计，本文中的配置和新接口均为拟议内容。
+日期为 2026-11-05。保存配置、v7 契约、兼容读取和已有数据转换已实现。验收见 [CDR 存储验收](../reviews/cdr_storage_verification.md)。
 
 ## 目标
 
@@ -130,4 +130,4 @@ test_bag_output.py 与 audit_camera_dataset.py 目前依赖 CDR 回读，需要�
 | 5 | 提供已有数据转换入口，完成目标校验和原子发布 |
 | 6 | 更新配置样例、接口、审计说明和 README |
 
-本方案的默认策略依据本次需求设为 false。审阅通过后先落地新导出与读取，再完成已有数据转换。
+本方案的默认策略依据本次需求设为 false。配置和转换操作见 [模块说明](../modules/bag/preparation_compactor.md)。
