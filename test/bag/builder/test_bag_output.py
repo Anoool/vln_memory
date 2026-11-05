@@ -31,14 +31,19 @@ def check_dataset(root):
     """Verify image references, NPY metric values, raw bytes and TF endpoint references."""
     frames = read_lines(root / "frames.jsonl")
     messages = read_lines(root / "messages.jsonl")
+    manifest = read_json(root / "bag_manifest.json")
+    save_raw = manifest["effective_options"].get("save_raw_cdr", True)
     message_ids = set()
     for message in messages:
         message_id = message["message_id"]
         assert message_id not in message_ids
         message_ids.add(message_id)
-        raw = (root / message["raw_path"]).read_bytes()
-        assert len(raw) == message["serialized_bytes"]
-        assert hashlib.sha256(raw).hexdigest() == message["payload_sha256"]
+        if save_raw:
+            raw = (root / message["raw_path"]).read_bytes()
+            assert len(raw) == message["serialized_bytes"]
+            assert hashlib.sha256(raw).hexdigest() == message["payload_sha256"]
+        else:
+            assert message["raw_path"] is None
     depth_arrays = []
     for frame in frames:
         assert frame["source"]["message_id"] in message_ids
@@ -92,6 +97,30 @@ def check_dataset(root):
     assert summary["approximate_pairs"] == 0
     assert summary["valid_time_rgb"] == summary["pairs"] + summary["unmatched_rgb"]
     assert summary["valid_time_depth"] == summary["pairs"] + summary["unused_depth"]
+
+
+def check_storage_modes(parent):
+    """Compare all extracted records and media while allowing nullable raw paths."""
+    full = parent / "normal_out"
+    lean = parent / "normal_no_cdr_out"
+    assert not (lean / "evidence/raw").exists()
+    for name in ("messages.jsonl", "frames.jsonl", "camera_info.jsonl", "tf.jsonl",
+                 "rgbd_pairs.jsonl", "reports/pending.jsonl", "reports/issues.jsonl"):
+        first = read_lines(full / name)
+        second = read_lines(lean / name)
+        assert len(first) == len(second)
+        for before, after in zip(first, second):
+            before.pop("raw_path", None)
+            after.pop("raw_path", None)
+            if "source" in before:
+                assert after["source"]["raw_path"] is None
+                before["source"].pop("raw_path")
+                after["source"].pop("raw_path")
+            assert before == after, name
+    for frame in read_lines(full / "frames.jsonl"):
+        path = frame["media_path"]
+        if path is not None:
+            assert (full / path).read_bytes() == (lean / path).read_bytes()
 
 
 def check_nearest_dataset(root):
@@ -160,6 +189,8 @@ def main():
     parent = Path(sys.argv[1])
     root = Path((parent / "latest.txt").read_text().strip())
     check_dataset(root / "normal_out")
+    check_dataset(root / "normal_no_cdr_out")
+    check_storage_modes(root)
     check_dataset(root / "repeat_out")
     for prefix in ("near_raw", "near_compressed"):
         for tolerance_ns in (0, 1, 2):

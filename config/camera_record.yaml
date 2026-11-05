@@ -1,5 +1,6 @@
 # Supplied recording profile: explicit diagnostic clock/domain/registration declarations remain in force.
 bag:
+  save_raw_cdr: false             # 保留提取媒体与 JSONL，省略原始消息副本。
   input: /absolute/path/to/camera_record
   output: /absolute/path/to/new_camera_preparation
   storage_id: sqlite3

@@ -41,8 +41,9 @@ struct PreparedPair
   CameraImageReference rgb_image;
   CameraImageReference depth_image;
   std::filesystem::path preparation_root;
-  std::filesystem::path rgb_raw_evidence;
-  std::filesystem::path depth_raw_evidence;
+  // 省略 CDR 的 v7 返回空值，历史格式和显式保留模式返回实际文件路径。
+  std::optional<std::filesystem::path> rgb_raw_evidence;
+  std::optional<std::filesystem::path> depth_raw_evidence;
   std::optional<std::filesystem::path> rgb_media;
   std::optional<std::filesystem::path> depth_media;
   std::optional<DepthFrame> depth;
@@ -111,14 +112,14 @@ struct PreparationOpenResult
 };
 
 /**
- * @brief 扫描 v5/v6 的五个 JSONL 建立 ID/偏移索引，并保留原始配对目录。
+ * @brief 扫描 v5/v6/v7 的五个 JSONL 建立 ID/偏移索引，并保留原始配对目录。
  * @note 打开时校验全局 schema 和键唯一性，关联与媒体在 loadPair 时校验。
  *       读取期间元数据需保持稳定；大小、修改时间或路径变化返回 source_changed。
  */
 PreparationOpenResult openPreparation(const std::filesystem::path & preparation_root);
 
 /**
- * @brief 只读加载 BagBuilder v5/v6 已保存的一个配对，不重新匹配。
+ * @brief 只读加载 BagBuilder v5/v6/v7 已保存的一个配对，不重新匹配。
  * @note 返回绝对媒体路径和米制深度。文件或引用损坏时不返回部分结果。
  *       导出记录中的缺项保留为空及原始 pending 原因。
  */

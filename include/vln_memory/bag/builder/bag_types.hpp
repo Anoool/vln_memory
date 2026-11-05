@@ -37,6 +37,7 @@ struct BagMessageRef
   std::int64_t bag_record_time_ns{0};
   std::size_t serialized_bytes{0};
   std::string payload_sha256;
+  bool raw_cdr_saved{false};
 };
 
 /** @brief 图像轻量索引，拥有字符串；不保存序列化或像素缓冲区。 */
@@ -52,7 +53,7 @@ struct BagImageRecord
   std::uint8_t is_bigendian{0};
   std::size_t data_bytes{0};
   std::string deserialization_error;
-  // 压缩消息没有原始 step；布局由编码头检查得到，原 format/CDR 单独保留。
+  // 压缩消息没有原始 step；布局由编码头检查得到，原 format 保留，CDR 副本按配置保存。
   std::string message_type{"sensor_msgs/msg/Image"};
   std::string compressed_format;
   std::string payload_error_code;

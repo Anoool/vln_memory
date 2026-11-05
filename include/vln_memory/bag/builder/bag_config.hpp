@@ -59,6 +59,8 @@ struct BagBuildOptions
   std::size_t max_tf_entries{1000000};
   std::size_t max_serialized_bytes{128U * 1024U * 1024U};
   std::uint64_t max_output_bytes{10ULL * 1024ULL * 1024ULL * 1024ULL};
+  // 默认仅保留提取产物；true 时另外保存每条原始 CDR。
+  bool save_raw_cdr{false};
 };
 
 /** @brief 读取严格 bag YAML；未知/重复字段、错误类型抛 BagBuildError，不启动处理。 */

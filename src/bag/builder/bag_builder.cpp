@@ -1,14 +1,7 @@
 #include <vln_memory/bag/builder/bag_builder.hpp>
 
-#include <chrono>
-#include <cerrno>
-#include <cstring>
-#ifdef __linux__
-#include <fcntl.h>
-#include <linux/fs.h>
-#include <sys/syscall.h>
-#include <unistd.h>
-#endif
+#include "preparation_storage.hpp"
+
 #include <filesystem>
 #include <map>
 #include <set>
@@ -56,35 +49,6 @@ struct ConvertedFrame
   bool depth_quality{true};
   Json details = Json::object();
 };
-
-/** @brief 检查路径包含关系，按组件比较，不能用字符串前缀误判 sibling。 */
-bool containsPath(const fs::path & parent, const fs::path & candidate)
-{
-  auto next = candidate.begin();
-  for (const auto & part : parent) {
-    if (next == candidate.end() || part != *next) {return false;}
-    ++next;
-  }
-  return true;
-}
-
-/** @brief 输出与输入不重叠、旧结果不覆盖；创建相同文件系统上的唯一工作目录。 */
-fs::path createWorkDirectory(const BagBuildOptions & options)
-{
-  const auto input = fs::weakly_canonical(options.bag_uri);
-  const auto output = fs::weakly_canonical(options.output_directory);
-  if (containsPath(input, output) || containsPath(output, input)) {
-    throw BagBuildError("invalid_output", "Input and output paths must not contain each other");
-  }
-  if (fs::exists(output) || fs::is_symlink(output)) {throw BagBuildError("output_exists", "Output already exists");}
-  fs::create_directories(output.parent_path());
-  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
-  for (int attempt = 0; attempt < 100; ++attempt) {
-    const auto work = fs::path(output.string() + ".partial-" + std::to_string(tick) + "-" + std::to_string(attempt));
-    if (fs::create_directory(work)) {return work;}
-  }
-  throw BagBuildError("invalid_output", "Cannot allocate unique work directory");
-}
 
 /** @brief 初始化固定 JSONL 文件，零条消息/问题仍有明确的空文件契约。 */
 void initializeOutput(OutputFiles & output)
@@ -480,6 +444,7 @@ Json effectiveOptions(const BagBuildOptions & options)
     {"max_header_reorder_ns", std::to_string(options.max_header_reorder_ns)},
     {"rgb_camera", camera(options.rgb_camera)}, {"depth_camera", camera(options.depth_camera)}, {"depth", depth},
     {"depth_storage", bagDepthStorageName(options.depth_storage)},
+    {"save_raw_cdr", options.save_raw_cdr},
     {"min_valid_depth_ratio", options.min_valid_depth_ratio}, {"tf_topic", options.tf_topic},
     {"tf_static_topic", options.tf_static_topic}, {"limits", effectiveLimits(options)}};
 }
@@ -543,7 +508,7 @@ void writeManifest(
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
   writeJsonFile(
-    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 6},
+    output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 7},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
       {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
@@ -563,7 +528,8 @@ void validateReferences(
   PreparedFrame> & frames)
 {
   for (const auto & message : scan.messages) {
-    if (!fs::is_regular_file(root / ("evidence/raw/" + message.message_id + ".cdr"))) {
+    if (message.raw_cdr_saved &&
+      !fs::is_regular_file(root / ("evidence/raw/" + message.message_id + ".cdr"))) {
       throw BagBuildError("broken_reference", "Missing raw evidence file");
     }
   }
@@ -574,26 +540,10 @@ void validateReferences(
   }
 }
 
-/** @brief Ubuntu/WSL 原生不覆盖原子改名；并发出现空目录也不能被替换。 */
-void publishDirectory(const fs::path & work, const fs::path & final_path)
-{
-#ifdef __linux__
-  if (::syscall(SYS_renameat2, AT_FDCWD, work.c_str(), AT_FDCWD, final_path.c_str(), RENAME_NOREPLACE) != 0) {
-    const auto error = errno;
-    if (error == EEXIST || error == ENOTEMPTY) {throw BagBuildError("output_exists", "Output appeared during build");}
-    throw BagBuildError("io_error", "Atomic publication failed: " + std::string(std::strerror(error)));
-  }
-#else
-  (void)work;
-  (void)final_path;
-  throw BagBuildError("unsupported_platform", "First-version publication requires Linux renameat2");
-#endif
-}
-
 /** @brief 将扫描、配对、逐图转换和发布串联；大对象只在本次运行生命周期内拥有。 */
 void runBuild(BagBuildOptions options, BagBuildResult & result)
 {
-  const auto work = createWorkDirectory(options);
+  const auto work = detail::createWorkDirectory(options.bag_uri, options.output_directory);
   result.work_directory = work.string();
   OutputFiles output(work, options.max_output_bytes);
   initializeOutput(output);
@@ -646,7 +596,7 @@ void runBuild(BagBuildOptions options, BagBuildResult & result)
   if (fs::exists(final_path) || fs::is_symlink(final_path)) {
     throw BagBuildError("output_exists", "Output appeared during build");
   }
-  publishDirectory(work, final_path);
+  detail::publishDirectory(work, final_path);
   result.output_directory = final_path.string();
   result.work_directory.clear();
   result.code = "ok";

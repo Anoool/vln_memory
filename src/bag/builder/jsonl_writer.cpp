@@ -6,7 +6,7 @@ namespace vln_memory
 {
 namespace
 {
-/** @brief 检查数组非有限值，原始位模式仍由 CDR 证据保留。 */
+/** @brief 检查数组非有限值，原始位模式对照需要源消息。 */
 template<typename Values>
 bool nonfinite(const Values & values)
 {
@@ -35,10 +35,12 @@ nlohmann::json stampJson(const SensorStamp & stamp)
 /** @brief 64 位时间和序号用十进制字符串，避免 JavaScript 消费丢精度。 */
 nlohmann::json sourceJson(const BagMessageRef & source)
 {
-  return {{"message_id", source.message_id}, {"topic", source.topic}, {"file_index", source.file_index},
+  nlohmann::json record{{"message_id", source.message_id}, {"topic", source.topic}, {"file_index", source.file_index},
     {"topic_ordinal", std::to_string(source.topic_ordinal)}, {"message_order", std::to_string(source.message_order)},
     {"bag_record_time_ns", std::to_string(source.bag_record_time_ns)}, {"serialized_bytes", source.serialized_bytes},
-    {"payload_sha256", source.payload_sha256}, {"raw_path", "evidence/raw/" + source.message_id + ".cdr"}};
+    {"payload_sha256", source.payload_sha256}, {"raw_path", nullptr}};
+  if (source.raw_cdr_saved) {record["raw_path"] = "evidence/raw/" + source.message_id + ".cdr";}
+  return record;
 }
 
 /** @brief 输出未经重写的标定字段，校验失败不会被默默删除。 */

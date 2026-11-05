@@ -63,7 +63,10 @@ target_link_libraries(vln_memory_depth_projection PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_depth_projection PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-add_library(vln_memory_preparation_reader SHARED src/bag/builder/preparation_reader.cpp)
+add_library(vln_memory_preparation_reader SHARED
+  src/bag/builder/preparation_reader.cpp
+  src/bag/builder/preparation_storage.cpp
+  src/bag/builder/preparation_compactor.cpp)
 add_library(vln_memory::vln_memory_preparation_reader ALIAS vln_memory_preparation_reader)
 target_link_libraries(vln_memory_preparation_reader PUBLIC
   vln_memory_depth vln_memory_camera_model vln_memory_tf
@@ -71,6 +74,10 @@ target_link_libraries(vln_memory_preparation_reader PUBLIC
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_preparation_reader PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+add_executable(preparation_compact src/apps/preparation_compact_main.cpp)
+target_link_libraries(preparation_compact PRIVATE vln_memory_preparation_reader nlohmann_json::nlohmann_json)
+install(TARGETS preparation_compact DESTINATION lib/${PROJECT_NAME})
+
 set(memory_export_targets vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
@@ -134,7 +141,7 @@ if(VLN_MEMORY_ENABLE_ROS)
   target_link_libraries(vln_memory_bag_builder PUBLIC
     vln_memory_rgb_ros vln_memory_depth_ros vln_memory_camera_info_ros vln_memory_tf_ros
     vln_memory_rgbd_sync vln_memory_camera_info_index vln_memory_camera_model nlohmann_json::nlohmann_json
-    PRIVATE yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
+    PRIVATE vln_memory_preparation_reader yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
   target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
   ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp rcutils cv_bridge)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -251,6 +258,7 @@ install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
   include/vln_memory/bag/builder/bag_types.hpp
   include/vln_memory/bag/builder/camera_info_index.hpp
   include/vln_memory/bag/builder/preparation_reader.hpp
+  include/vln_memory/bag/builder/preparation_compactor.hpp
   DESTINATION include/vln_memory/bag/builder)
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)

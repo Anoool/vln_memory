@@ -1,4 +1,5 @@
 #include <vln_memory/bag/builder/preparation_reader.hpp>
+#include <vln_memory/bag/builder/preparation_compactor.hpp>
 #include <vln_memory/bag/depth/depth_projection.hpp>
 
 #include <algorithm>
@@ -64,8 +65,15 @@ PreparedPair readPair(const fs::path & root, const std::string & id)
     pair.depth_pose->time.stamp.sec == pair.depth_image.stamp.sec &&
     pair.depth_pose->time.stamp.nanosec == pair.depth_image.stamp.nanosec,
     "Image and pose stamps differ");
-  expect(fs::is_regular_file(pair.rgb_raw_evidence) && fs::is_regular_file(pair.depth_raw_evidence),
-    "Missing raw evidence paths");
+  const auto manifest = readJson(root / "bag_manifest.json");
+  const bool saved = manifest.at("builder_version") != 7 ||
+    manifest.at("effective_options").at("save_raw_cdr").get<bool>();
+  expect(pair.rgb_raw_evidence.has_value() == saved && pair.depth_raw_evidence.has_value() == saved,
+    "Raw evidence presence contradicts storage policy");
+  if (saved) {
+    expect(fs::is_regular_file(*pair.rgb_raw_evidence) && fs::is_regular_file(*pair.depth_raw_evidence),
+      "Missing raw evidence paths");
+  }
   return pair;
 }
 
@@ -296,6 +304,89 @@ void indexedFailureCases(const fs::path & source)
   comparePair(*survivor.pair, *legacy.pair);
 }
 
+
+/** @brief 验证策略矛盾、旧格式缺文件和可选证据字段。 */
+void cdrPolicyCases(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("cdr_policy_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  const auto id = readJson(root / "rgbd_pairs.jsonl").at("pair_id").get<std::string>();
+  auto manifest = readJson(root / "bag_manifest.json");
+  const auto original = manifest;
+  manifest["effective_options"]["save_raw_cdr"] = false;
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+  auto opened = openPreparation(root);
+  expect(opened.ok(), opened.message);
+  expect(opened.reader->loadPair(id).code == PreparationReadCode::invalid_reference,
+    "Indexed reader accepted contradictory raw paths");
+  manifest["effective_options"]["save_raw_cdr"] = "false";
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  expectOpenFailure(root, PreparationReadCode::invalid_metadata);
+  manifest["effective_options"].erase("save_raw_cdr");
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  expectOpenFailure(root, PreparationReadCode::invalid_metadata);
+  manifest = original;
+  manifest["builder_version"] = 6;
+  manifest["effective_options"].erase("save_raw_cdr");
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  indexedDatasetCase(root);
+  const auto pair = loadPreparedPair(root, id);
+  expect(pair.ok() && pair.pair->rgb_raw_evidence, "Historical raw evidence not retained");
+  fs::remove(*pair.pair->rgb_raw_evidence);
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+  opened = openPreparation(root);
+  expect(opened.ok(), opened.message);
+  expect(opened.reader->loadPair(id).code == PreparationReadCode::invalid_reference,
+    "Indexed legacy missing CDR was accepted");
+}
+
+/** @brief 转换结果只改变存储引用，源目录和已发布目标不覆盖。 */
+void compactionCases(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto target = source.parent_path() / ("compact_out_" + std::to_string(tick));
+  const auto converted = compactPreparation(source, target);
+  expect(converted.ok(), converted.code + ": " + converted.message);
+  expect(converted.pairs_checked == readLines(source / "rgbd_pairs.jsonl").size() &&
+    converted.raw_bytes_omitted > 0 && !fs::exists(target / "evidence/raw"),
+    "Compaction counters or raw omission wrong");
+  const auto manifest = readJson(target / "bag_manifest.json");
+  expect(manifest.at("builder_version") == 7 &&
+    manifest.at("effective_options").at("save_raw_cdr") == false &&
+    manifest.at("conversion_source_builder_version") == readJson(source / "bag_manifest.json").at("builder_version"),
+    "Compaction provenance missing");
+  indexedDatasetCase(target);
+  for (const auto & row : readLines(target / "rgbd_pairs.jsonl")) {
+    const auto id = row.at("pair_id").get<std::string>();
+    const auto before = loadPreparedPair(source, id);
+    const auto after = loadPreparedPair(target, id);
+    expect(before.ok() && after.ok() && before.pair->rgb_raw_evidence &&
+      !after.pair->rgb_raw_evidence && !after.pair->depth_raw_evidence,
+      "Compaction evidence state wrong");
+    compareMedia(*before.pair, *after.pair);
+    compareModel(before.pair->depth_model, after.pair->depth_model);
+    comparePose(before.pair->depth_pose, after.pair->depth_pose);
+  }
+  expect(compactPreparation(source, target).code == "output_exists", "Existing target was overwritten");
+  expect(compactPreparation(source, source / "nested").code == "invalid_output", "Overlapping output accepted");
+  const auto repeated = compactPreparation(target, target.string() + "_repeat");
+  expect(repeated.ok() && repeated.raw_bytes_omitted == 0, "Already compact data could not be converted");
+
+  const auto broken = source.parent_path() / ("compact_broken_" + std::to_string(tick));
+  fs::copy(source, broken, fs::copy_options::recursive);
+  const auto id = readJson(broken / "rgbd_pairs.jsonl").at("pair_id").get<std::string>();
+  const auto pair = loadPreparedPair(broken, id);
+  expect(pair.ok(), pair.message);
+  {std::ofstream file(*pair.pair->depth_media, std::ios::binary); file << "broken";}
+  const auto failed_target = broken.string() + "_out";
+  const auto failed = compactPreparation(broken, failed_target);
+  expect(!failed.ok() && !fs::exists(failed_target) && !failed.work_directory.empty() &&
+    fs::is_directory(failed.work_directory) && fs::is_regular_file(*pair.pair->depth_media),
+    "Failed compaction published a partial dataset or changed the source");
+}
+
 /** @brief 从 ROS 构造 bag 导出物验证历史格式、坏引用、错时刻和坏媒体。 */
 void fixtureCases(const fs::path & parent)
 {
@@ -308,8 +399,12 @@ void fixtureCases(const fs::path & parent)
   const auto npy = readPair(normal, id);
   const auto png = readPair(root / "normal_png_out", id);
   indexedDatasetCase(normal);
+  indexedDatasetCase(root / "normal_no_cdr_out");
+  compareMedia(npy, readPair(root / "normal_no_cdr_out", id));
   indexedDatasetCase(root / "normal_png_out");
   indexedFailureCases(normal);
+  cdrPolicyCases(normal);
+  compactionCases(normal);
   compareMedia(npy, png);
   expect(npy.depth->depth_m.at(0) == 1.0F && std::isnan(npy.depth->depth_m.at(1)) &&
     npy.depth->alignment == DepthAlignment::aligned_to_rgb, "Fixture depth semantics differ");
@@ -331,6 +426,7 @@ void fixtureCases(const fs::path & parent)
   writeLines(frames_path, original);
   compareMedia(readPair(copy, id), png);
   indexedDatasetCase(copy);
+  compactionCases(copy);
 
   auto rows = original;
   /** @brief 按已配对的 Depth ID 定位要破坏的夹具记录。 */

@@ -307,11 +307,21 @@ BagBuildOptions loadBagBuildOptions(const std::string & yaml_path)
         "segment_basis", "clock_relation", "map_frame", "body_frame", "sync_tolerance_ns", "tf_max_gap_ns",
         "tf_max_translation_step_m", "tf_max_rotation_step_rad",
         "max_header_reorder_ns", "rgb_camera", "depth_camera", "depth", "tf_topic", "tf_static_topic",
-        "min_valid_depth_ratio", "depth_storage", "limits"});
+        "min_valid_depth_ratio", "depth_storage", "save_raw_cdr", "limits"});
     BagBuildOptions options;
     readScalar(node, "input", options.bag_uri);
     readScalar(node, "output", options.output_directory);
     readScalar(node, "storage_id", options.storage_id);
+    if (node["save_raw_cdr"]) {
+      const auto value = node["save_raw_cdr"];
+      if (!value.IsScalar() ||
+        (value.Tag() != "?" && value.Tag() != "tag:yaml.org,2002:bool") ||
+        (value.Scalar() != "true" && value.Scalar() != "false"))
+      {
+        throw BagBuildError("invalid_config", "save_raw_cdr must be true or false");
+      }
+      options.save_raw_cdr = value.Scalar() == "true";
+    }
     readScalar(node, "clock_id", options.clock_id);
     readScalar(node, "clock_basis", options.clock_basis);
     readScalar(node, "segment_id", options.segment_id);

@@ -332,6 +332,7 @@ BagMessageRef sourceReference(
   }
   BagMessageRef source;
   source.topic = raw.topic_name;
+  source.raw_cdr_saved = options.save_raw_cdr;
   source.file_index = cursor.current_file_index;
   source.topic_ordinal = cursor.ordinals[{source.file_index, source.topic}]++;
   source.message_order = cursor.order++;
@@ -426,7 +427,7 @@ void indexImage(
   scan.images.push_back(std::move(record));
 }
 
-/** @brief 保存所有标定（包含坏候选）及来源，原始 CDR 已由扫描主循环保存。 */
+/** @brief 保存所有标定（包含坏候选）及来源，CDR 副本按保存策略生成。 */
 void indexCameraInfo(
   const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
   const BagBuildOptions & options, OutputFiles & output)
@@ -462,7 +463,7 @@ void indexCameraInfo(
   scan.calibrations.push_back(std::move(record));
 }
 
-/** @brief 原始 TF 条目导出，NaN/Inf 由 JSON 库写 null 并标记；原字节在 CDR。 */
+/** @brief 原始 TF 条目导出，NaN/Inf 由 JSON 库写 null 并标记；原字节需源消息对照。 */
 nlohmann::json transformJson(
   const BagMessageRef & source, const geometry_msgs::msg::TransformStamped & value,
   std::size_t index, TfInsertCode code, bool is_static)
@@ -528,7 +529,10 @@ void scanMessages(const BagBuildOptions & options, Reader & reader, BagScan & sc
     const auto raw = reader.read_next();
     if (!raw) {throw BagBuildError("bag_read_failed", "Reader returned a null message");}
     auto source = sourceReference(reader, *raw, scan, cursor, options);
-    output.write("evidence/raw/" + source.message_id + ".cdr", raw->serialized_data->buffer, source.serialized_bytes);
+    if (options.save_raw_cdr) {
+      output.write("evidence/raw/" + source.message_id + ".cdr",
+        raw->serialized_data->buffer, source.serialized_bytes);
+    }
     writeJsonLine(output, "messages.jsonl", sourceJson(source));
     ++scan.topics[cursor.topics.at(source.topic)].scanned_count;
     scan.messages.push_back(source);

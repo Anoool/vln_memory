@@ -1,6 +1,7 @@
 # BagBuilder 第一版配置。先核对设备/采集依据，再替换下面的路径、话题和语义。
 # 只支持一个明确时钟段；不会自动标定时钟或物理注册 Depth。
 bag:
+  save_raw_cdr: false             # 保留提取媒体与 JSONL，省略原始消息副本。
   input: /absolute/path/to/recording
   output: /absolute/path/to/new_preparation_dataset
   storage_id: sqlite3

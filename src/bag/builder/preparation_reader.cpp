@@ -246,10 +246,23 @@ Json readManifest(const fs::path & root)
   file >> manifest;
   const auto version = manifest.at("builder_version");
   require(manifest.at("artifact_kind") == "bag_preparation" &&
-    manifest.at("schema_version") == "bag_preparation/1" && (version == 5 || version == 6) &&
+    manifest.at("schema_version") == "bag_preparation/1" && (version == 5 || version == 6 || version == 7) &&
     (manifest.at("status") == "completed" || manifest.at("status") == "completed_with_issues"),
-    Code::unsupported_dataset, "Expected published BagBuilder v5 or v6 preparation");
+    Code::unsupported_dataset, "Expected published BagBuilder v5, v6 or v7 preparation");
+  if (version == 7) {
+    require(manifest.at("effective_options").at("save_raw_cdr").is_boolean(),
+      Code::invalid_metadata, "v7 requires boolean save_raw_cdr");
+  }
   return manifest;
+}
+
+/** @brief 历史版本保存 CDR，v7 明确声明实际保存策略。 */
+bool savesRawCdr(const Json & manifest)
+{
+  if (manifest.at("builder_version") == 7) {
+    return manifest.at("effective_options").at("save_raw_cdr").get<bool>();
+  }
+  return true;
 }
 
 /** @brief 将已有文件、格式和引用错误映射到公开结果，保持失败时空值。 */
@@ -610,7 +623,7 @@ PreparedPair pairContext(const Json & manifest, const Json & row)
 /** @brief 对照消息清单核实选中帧、标定和 TF 的源证据文件引用。 */
 template<typename Select>
 void checkEvidence(PreparedPair & pair, const Json & rgb, const Json & depth,
-  const Records & calibrations, const Records & tf, Select select)
+  const Records & calibrations, const Records & tf, bool save_raw_cdr, Select select)
 {
   std::vector<const Json *> sources{&rgb.at("source"), &depth.at("source")};
   for (const auto & [id, record] : calibrations) {sources.push_back(&record.at("source"));}
@@ -629,11 +642,17 @@ void checkEvidence(PreparedPair & pair, const Json & rgb, const Json & depth,
       require(row.contains(field.key()) && row.at(field.key()) == field.value(),
         Code::invalid_reference, "Message source metadata differs: " + id);
     }
-    const auto raw = member(pair.preparation_root, row.at("raw_path").get<std::string>());
-    require(fs::file_size(raw) == integer<std::uintmax_t>(row.at("serialized_bytes")),
-      Code::invalid_reference, "Raw evidence size differs: " + id);
-    if (id == pair.rgb_message_id) {pair.rgb_raw_evidence = raw;}
-    if (id == pair.depth_message_id) {pair.depth_raw_evidence = raw;}
+    const auto serialized_bytes = integer<std::uintmax_t>(row.at("serialized_bytes"));
+    const auto & raw_path = row.at("raw_path");
+    require(save_raw_cdr == raw_path.is_string() && (save_raw_cdr || raw_path.is_null()),
+      Code::invalid_reference, "Raw path contradicts save_raw_cdr: " + id);
+    if (save_raw_cdr) {
+      const auto raw = member(pair.preparation_root, raw_path.get<std::string>());
+      require(fs::file_size(raw) == serialized_bytes,
+        Code::invalid_reference, "Raw evidence size differs: " + id);
+      if (id == pair.rgb_message_id) {pair.rgb_raw_evidence = raw;}
+      if (id == pair.depth_message_id) {pair.depth_raw_evidence = raw;}
+    }
   }
 }
 
@@ -688,7 +707,7 @@ PreparedPair readPair(
   result.depth_pose = readPose(depth, "map_camera_tf", result.depth_image.frame_id, result, tf);
   result.body_pose = readPose(rgb, "map_body_tf",
     manifest.at("effective_options").at("body_frame").get<std::string>(), result, tf);
-  checkEvidence(result, rgb, depth, calibrations, tf, select);
+  checkEvidence(result, rgb, depth, calibrations, tf, savesRawCdr(manifest), select);
   if (result.depth_media) {
     result.depth = readDepth(*result.depth_media, result.depth_image, depth.at("details"),
       manifest.at("effective_options").at("depth"), result.rgb_image);

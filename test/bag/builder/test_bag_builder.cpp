@@ -43,6 +43,7 @@ void expect(bool condition, const std::string & message)
 BagBuildOptions fixtureOptions(const fs::path & input, const fs::path & output)
 {
   BagBuildOptions options;
+  options.save_raw_cdr = true;  // 旧审计夹具显式保留原始字节。
   options.bag_uri = input.string();
   options.output_directory = output.string();
   options.clock_id = "fixture_clock";
@@ -322,7 +323,9 @@ void checkNormal(const fs::path & output, const BagBuildResult & result)
   bool negative_record = false;
   for (const auto & message : readLines(output / "messages.jsonl")) {
     if (message.at("bag_record_time_ns") == "-1000000000") {negative_record = true;}
-    expect(fs::is_regular_file(output / message.at("raw_path").get<std::string>()), "Missing raw evidence");
+    if (manifest.at("effective_options").at("save_raw_cdr").get<bool>()) {
+      expect(fs::is_regular_file(output / message.at("raw_path").get<std::string>()), "Missing raw evidence");
+    } else {expect(message.at("raw_path").is_null(), "Omitted CDR has a path");}
   }
   expect(negative_record, "Negative bag record time was silently skipped");
   for (const auto & frame : readLines(output / "frames.jsonl")) {
@@ -347,6 +350,7 @@ void writeFixtureConfig(const fs::path & path, const BagBuildOptions & options)
 {
   YAML::Node root;
   auto bag = root["bag"];
+  bag["save_raw_cdr"] = options.save_raw_cdr;
   bag["input"] = options.bag_uri;
   bag["output"] = options.output_directory;
   bag["clock_id"] = options.clock_id;
@@ -389,6 +393,20 @@ void configCases(const fs::path & root, const fs::path & config)
   auto options = loadBagBuildOptions(config.string());
   expect(validateBagBuildOptions(options).empty(), "Fixture YAML not usable");
   expect(options.depth_storage == BagDepthStorage::metric_npy, "Legacy config did not default to NPY");
+  auto yaml = YAML::LoadFile(config.string());
+  yaml["bag"].remove("save_raw_cdr");
+  {std::ofstream file(root / "default_cdr.yaml"); file << yaml;}
+  expect(!loadBagBuildOptions((root / "default_cdr.yaml").string()).save_raw_cdr,
+    "Missing save_raw_cdr did not default to false");
+  for (const auto * bad : {"1", "yes", "null", "'false'", "!!str false", "[false]"}) {
+    auto invalid = YAML::LoadFile(config.string());
+    invalid["bag"].remove("save_raw_cdr");
+    const auto path = root / "invalid_cdr.yaml";
+    {std::ofstream file(path); file << invalid << "\n  save_raw_cdr: " << bad << "\n";}
+    bool rejected = false;
+    try {loadBagBuildOptions(path.string());} catch (const BagBuildError &) {rejected = true;}
+    expect(rejected, std::string("Invalid save_raw_cdr accepted: ") + bad);
+  }
   auto png = options;
   png.depth_storage = BagDepthStorage::source_png16;
   writeFixtureConfig(root / "png_storage.yaml", png);
@@ -502,7 +520,7 @@ void checkNearestOutput(const fs::path & output, std::int64_t tolerance_ns, std:
   const auto manifest = readJson(output / "bag_manifest.json");
   const auto policy = "rgb_reference_monotonic_nearest_one_to_one_v1";
   expect(summary.at("timestamp_match_policy") == policy, "Summary mislabeled nearest policy");
-  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 6,
+  expect(manifest.at("timestamp_match_policy") == policy && manifest.at("builder_version") == 7,
     "Manifest did not declare current behavior");
   expect(summary.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing summary tolerance");
   expect(manifest.at("sync_tolerance_ns") == std::to_string(tolerance_ns), "Missing manifest tolerance");
@@ -710,6 +728,33 @@ void integrationCases(const fs::path & root)
   const auto normal = buildBag(options);
   expect(!rcutils_error_is_set(), "Message decoding left stale global ROS error state");
   checkNormal(root / "normal_out", normal);
+  expect(!BagBuildOptions{}.save_raw_cdr, "CDR should be omitted by default");
+  auto compact_options = options;
+  compact_options.save_raw_cdr = false;
+  compact_options.output_directory = (root / "normal_no_cdr_out").string();
+  checkNormal(root / "normal_no_cdr_out", buildBag(compact_options));
+  expect(!fs::exists(root / "normal_no_cdr_out/evidence/raw"), "Unexpected raw directory");
+  std::uint64_t full_bytes = 0;
+  std::uint64_t compact_bytes = 0;
+  for (const auto & entry : fs::recursive_directory_iterator(root / "normal_out")) {
+    if (entry.is_regular_file()) {full_bytes += entry.file_size();}
+  }
+  for (const auto & entry : fs::recursive_directory_iterator(root / "normal_no_cdr_out")) {
+    if (entry.is_regular_file()) {compact_bytes += entry.file_size();}
+  }
+  expect(full_bytes > compact_bytes, "Omitting CDR did not reduce storage");
+  auto limited = compact_options;
+  limited.max_output_bytes = compact_bytes + (full_bytes - compact_bytes) / 2;
+  limited.output_directory = (root / "compact_budget_out").string();
+  expect(buildBag(limited).ok(), "Output budget charged omitted CDR");
+  limited.save_raw_cdr = true;
+  limited.output_directory = (root / "raw_budget_out").string();
+  expect(buildBag(limited).code == "limit_exceeded", "Raw output escaped total budget");
+  limited.save_raw_cdr = false;
+  limited.max_serialized_bytes = 1;
+  limited.output_directory = (root / "serialized_budget_out").string();
+  expect(buildBag(limited).code == "limit_exceeded", "Raw omission bypassed input byte limit");
+
   const auto duplicate = buildBag(options);
   expect(!duplicate.ok() && duplicate.code == "output_exists", "Existing output overwritten");
   options.output_directory = (root / "repeat_out").string();
