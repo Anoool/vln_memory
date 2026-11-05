@@ -130,6 +130,147 @@ std::string tfKey(const std::string & id, const Json & index)
   return id + ":" + std::to_string(integer<std::size_t>(index));
 }
 
+/** @brief 保存元数据文件的位置与常规变更依据。 */
+struct SourceFile
+{
+  fs::path path;
+  std::uintmax_t bytes{0};
+  fs::file_time_type modified;
+};
+
+/** @brief 一个 JSONL 行的二进制位置，长度不含换行符。 */
+struct RowLocation
+{
+  std::streamoff offset{0};
+  std::size_t bytes{0};
+  std::size_t line{0};
+};
+
+/** @brief 单个文件的只读 ID 索引，完整 JSON 由逐对读取阶段解析。 */
+struct JsonlIndex
+{
+  SourceFile source;
+  std::map<std::string, RowLocation> rows;
+};
+
+/** @brief 取得根目录内文件的规范路径、大小和修改时间。 */
+SourceFile sourceFile(const fs::path & root, const std::string & name)
+{
+  const auto path = member(root, name);
+  return {path, fs::file_size(path), fs::last_write_time(path)};
+}
+
+/** @brief 检查路径、大小和修改时间，文件消失或变化时报告 source_changed。 */
+void checkSourceFile(const fs::path & root, const std::string & name, const SourceFile & source)
+{
+  const auto message = "Metadata changed: " + (root / name).string();
+  std::error_code error;
+  const auto path = fs::canonical(root / name, error);
+  require(!error && path == source.path, Code::source_changed, message);
+  const auto bytes = fs::file_size(path, error);
+  require(!error && bytes == source.bytes, Code::source_changed, message);
+  const auto modified = fs::last_write_time(path, error);
+  require(!error && modified == source.modified, Code::source_changed, message);
+}
+
+/** @brief 逐行建立 ID 到偏移的索引，校验所有行的 schema 与键唯一性。 */
+template<typename Key>
+JsonlIndex indexRows(const fs::path & root, const std::string & name, Key key)
+{
+  JsonlIndex index;
+  index.source = sourceFile(root, name);
+  require(index.source.bytes <= static_cast<std::uintmax_t>(
+    std::numeric_limits<std::streamoff>::max()), Code::invalid_metadata, "Metadata file is too large");
+  auto file = input(index.source.path);
+  std::size_t line_number = 0;
+  for (std::string line;;) {
+    const auto offset = file.tellg();
+    if (!std::getline(file, line)) {break;}
+    ++line_number;
+    const auto context = index.source.path.string() + ":" + std::to_string(line_number) + ": ";
+    try {
+      require(offset >= std::streampos(0) &&
+        line.size() <= static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()),
+        Code::invalid_metadata, "JSONL offset or length is out of range");
+      auto row = Json::parse(line);
+      require(row.at("schema_version") == "bag_preparation/1", Code::invalid_metadata,
+        "Unexpected schema");
+      const auto id = key(row);
+      require(!id.empty(), Code::invalid_reference, "Empty record ID");
+      const RowLocation location{static_cast<std::streamoff>(offset), line.size(), line_number};
+      require(index.rows.emplace(id, location).second, Code::invalid_reference,
+        "Duplicate reference: " + id);
+    } catch (const ReadError & error) {
+      throw ReadError(error.code, context + error.what());
+    } catch (const Json::exception & error) {
+      throw ReadError(Code::invalid_metadata, context + error.what());
+    } catch (const std::logic_error & error) {
+      throw ReadError(Code::invalid_metadata, context + error.what());
+    }
+    if (file.eof()) {break;}
+  }
+  require(file.eof() && !file.bad(), Code::io_error, "Cannot read " + index.source.path.string());
+  checkSourceFile(root, name, index.source);
+  return index;
+}
+
+/** @brief 按文件偏移读取所需行，缺失引用由配对组装阶段报告。 */
+template<typename Key>
+Records indexedRows(const JsonlIndex & index, const std::set<std::string> & keys, Key key)
+{
+  Records selected;
+  if (keys.empty()) {return selected;}
+  auto file = input(index.source.path);
+  for (const auto & id : keys) {
+    const auto found = index.rows.find(id);
+    if (found == index.rows.end()) {continue;}
+    const auto & location = found->second;
+    const auto context = index.source.path.string() + ":" + std::to_string(location.line);
+    file.seekg(location.offset);
+    std::string line(location.bytes, '\0');
+    require(static_cast<bool>(file.read(line.data(), static_cast<std::streamsize>(line.size()))),
+      Code::io_error, "Cannot read indexed row: " + context);
+    auto row = Json::parse(line);
+    require(key(row) == id && row.at("schema_version") == "bag_preparation/1",
+      Code::invalid_reference, "Indexed row identity differs: " + context);
+    selected.emplace(id, std::move(row));
+  }
+  return selected;
+}
+
+/** @brief 读取现有 v5/v6 已发布 manifest，保持单对入口的校验契约。 */
+Json readManifest(const fs::path & root)
+{
+  auto file = input(member(root, "bag_manifest.json"));
+  Json manifest;
+  file >> manifest;
+  const auto version = manifest.at("builder_version");
+  require(manifest.at("artifact_kind") == "bag_preparation" &&
+    manifest.at("schema_version") == "bag_preparation/1" && (version == 5 || version == 6) &&
+    (manifest.at("status") == "completed" || manifest.at("status") == "completed_with_issues"),
+    Code::unsupported_dataset, "Expected published BagBuilder v5 or v6 preparation");
+  return manifest;
+}
+
+/** @brief 将已有文件、格式和引用错误映射到公开结果，保持失败时空值。 */
+template<typename Result, typename Operation>
+Result readResult(Operation operation)
+{
+  try {
+    return operation();
+  } catch (const ReadError & error) {
+    return {error.code, error.what(), {}};
+  } catch (const fs::filesystem_error & error) {
+    return {Code::io_error, error.what(), {}};
+  } catch (const cv::Exception & error) {
+    return {Code::invalid_media, error.what(), {}};
+  } catch (const Json::exception & error) {
+    return {Code::invalid_metadata, error.what(), {}};
+  } catch (const std::logic_error & error) {
+    return {Code::invalid_metadata, error.what(), {}};
+  }
+}
+
 /** @brief 获取所需源消息 ID，不为缺失位姿创建替代值。 */
 void collectPoseRefs(const Json & frame, const char * key, std::set<std::string> & ids)
 {
@@ -427,8 +568,8 @@ std::optional<fs::path> readMediaPath(const fs::path & root, const Json & frame)
   return member(root, frame.at("media_path").get<std::string>());
 }
 
-/** @brief 解析配对上下文，不根据时间或 frame 名替换已保存的 ID。 */
-PreparedPair pairContext(const Json & manifest, const Json & row)
+/** @brief 校验数据集公共地图与时钟上下文，供目录和逐对读取复用。 */
+PreparedPair datasetContext(const Json & manifest)
 {
   PreparedPair result;
   const auto & options = manifest.at("effective_options");
@@ -441,6 +582,13 @@ PreparedPair pairContext(const Json & manifest, const Json & row)
     !result.time_scope.segment_id.empty() && !result.clock_basis.empty() &&
     !result.segment_basis.empty() && options.at("clock_relation") == "same_clock",
     Code::invalid_metadata, "Missing dataset or time scope");
+  return result;
+}
+
+/** @brief 解析配对来源与状态，保留已经保存的配对 ID。 */
+PreparedPair pairContext(const Json & manifest, const Json & row)
+{
+  auto result = datasetContext(manifest);
   result.pair_id = row.at("pair_id").get<std::string>();
   result.rgb_message_id = row.at("rgb_message_id").get<std::string>();
   result.depth_message_id = row.at("depth_message_id").get<std::string>();
@@ -460,8 +608,9 @@ PreparedPair pairContext(const Json & manifest, const Json & row)
 }
 
 /** @brief 对照消息清单核实选中帧、标定和 TF 的源证据文件引用。 */
+template<typename Select>
 void checkEvidence(PreparedPair & pair, const Json & rgb, const Json & depth,
-  const Records & calibrations, const Records & tf)
+  const Records & calibrations, const Records & tf, Select select)
 {
   std::vector<const Json *> sources{&rgb.at("source"), &depth.at("source")};
   for (const auto & [id, record] : calibrations) {sources.push_back(&record.at("source"));}
@@ -470,7 +619,7 @@ void checkEvidence(PreparedPair & pair, const Json & rgb, const Json & depth,
   for (const auto * source : sources) {
     ids.insert(source->at("message_id").get<std::string>());
   }
-  const auto messages = selectRows(member(pair.preparation_root, "messages.jsonl"), ids,
+  const Records messages = select("messages.jsonl", ids,
       [](const Json & j) {return j.at("message_id").get<std::string>();});
   for (const auto * source : sources) {
     const auto id = source->at("message_id").get<std::string>();
@@ -488,25 +637,19 @@ void checkEvidence(PreparedPair & pair, const Json & rgb, const Json & depth,
   }
 }
 
-/** @brief 在同一准备目录中绑定已导出的帧、标定、媒体和位姿。 */
-PreparedPair readPair(const fs::path & root, std::string_view pair_id)
+/** @brief 通过指定记录读取方式组装一对，复用来源、几何和媒体校验。 */
+template<typename Select>
+PreparedPair readPair(
+  const fs::path & root, const Json & manifest, std::string_view pair_id, Select select)
 {
-  auto file = input(member(root, "bag_manifest.json"));
-  Json manifest;
-  file >> manifest;
-  const auto version = manifest.at("builder_version");
-  require(manifest.at("artifact_kind") == "bag_preparation" && manifest.at("schema_version") == "bag_preparation/1" &&
-    (version == 5 || version == 6) &&
-    (manifest.at("status") == "completed" || manifest.at("status") == "completed_with_issues"),
-    Code::unsupported_dataset, "Expected published BagBuilder v5 or v6 preparation");
   const std::string id(pair_id);
-  const auto pairs = selectRows(member(root, "rgbd_pairs.jsonl"), {id},
+  const Records pairs = select("rgbd_pairs.jsonl", {id},
       [](const Json & row) {return row.at("pair_id").get<std::string>();});
   require(pairs.count(id) != 0, Code::pair_not_found, "Pair not found: " + id);
   const auto & row = pairs.at(id);
   auto result = pairContext(manifest, row);
   result.preparation_root = root;
-  const auto frames = selectRows(member(root, "frames.jsonl"), {result.rgb_message_id, result.depth_message_id},
+  const Records frames = select("frames.jsonl", {result.rgb_message_id, result.depth_message_id},
       [](const Json & j) {return j.at("source").at("message_id").get<std::string>();});
   const auto & rgb = pairFrame(row, frames, "rgb", result.rgb_message_id, result.rgb_calibration_id);
   const auto & depth = pairFrame(row, frames, "depth", result.depth_message_id, result.depth_calibration_id);
@@ -522,7 +665,7 @@ PreparedPair readPair(const fs::path & root, std::string_view pair_id)
     checkSource(key, result.bag_id);
     calibration_ids.insert(key);
   }
-  const auto calibrations = selectRows(member(root, "camera_info.jsonl"), calibration_ids,
+  const Records calibrations = select("camera_info.jsonl", calibration_ids,
       [](const Json & j) {return j.at("calibration_id").get<std::string>();});
   /** @brief 解析可空的标定引用并核对源消息身份。 */
   const auto cal = [&calibrations](const std::string & key) -> const Json * {
@@ -538,14 +681,14 @@ PreparedPair readPair(const fs::path & root, std::string_view pair_id)
   collectPoseRefs(rgb, "map_camera_tf", tf_ids);
   collectPoseRefs(depth, "map_camera_tf", tf_ids);
   collectPoseRefs(rgb, "map_body_tf", tf_ids);
-  const auto tf = selectRows(member(root, "tf.jsonl"), tf_ids, [](const Json & j) {
+  const Records tf = select("tf.jsonl", tf_ids, [](const Json & j) {
       return tfKey(j.at("source").at("message_id").get<std::string>(), j.at("transform_index"));
     });
   result.rgb_pose = readPose(rgb, "map_camera_tf", result.rgb_image.frame_id, result, tf);
   result.depth_pose = readPose(depth, "map_camera_tf", result.depth_image.frame_id, result, tf);
   result.body_pose = readPose(rgb, "map_body_tf",
     manifest.at("effective_options").at("body_frame").get<std::string>(), result, tf);
-  checkEvidence(result, rgb, depth, calibrations, tf);
+  checkEvidence(result, rgb, depth, calibrations, tf, select);
   if (result.depth_media) {
     result.depth = readDepth(*result.depth_media, result.depth_image, depth.at("details"),
       manifest.at("effective_options").at("depth"), result.rgb_image);
@@ -555,22 +698,110 @@ PreparedPair readPair(const fs::path & root, std::string_view pair_id)
 
 }  // namespace
 
-/** @brief 将文件、格式和引用错误转成结构化结果。 */
+/** @brief reader 私有状态，仅拥有元数据和行位置，逐对读取使用局部文件流。 */
+struct PreparationReaderState
+{
+  fs::path root;
+  SourceFile manifest_source;
+  Json manifest;
+  std::map<std::string, JsonlIndex> indexes;
+  std::vector<PreparationPairInfo> pairs;
+};
+
+namespace
+{
+
+/** @brief 在操作边界核对所有元数据文件，避免在变化的偏移索引上继续读取。 */
+void checkSources(const PreparationReaderState & state)
+{
+  checkSourceFile(state.root, "bag_manifest.json", state.manifest_source);
+  for (const auto & [name, index] : state.indexes) {
+    checkSourceFile(state.root, name, index.source);
+  }
+}
+
+}  // namespace
+
+/** @brief 接管已建立的只读状态，reader 对象由打开结果独占。 */
+PreparationReader::PreparationReader(std::unique_ptr<PreparationReaderState> state)
+: state_(std::move(state))
+{
+}
+
+/** @brief 释放元数据索引及目录，已返回配对拥有自己的存储。 */
+PreparationReader::~PreparationReader() = default;
+
+/** @brief 返回打开时建立的目录，顺序和原始时间均保持不变。 */
+const std::vector<PreparationPairInfo> & PreparationReader::pairs() const noexcept
+{
+  return state_->pairs;
+}
+
+/** @brief 只定位当前配对引用的行，成功结果独立持有数据，变化时丢弃本次结果。 */
+PreparationReadResult PreparationReader::loadPair(std::string_view pair_id) const
+{
+  return readResult<PreparationReadResult>([&]() -> PreparationReadResult {
+    checkSources(*state_);
+    /** @brief 用只读偏移索引替代整文件扫描，沿用配对组装所需的键规则。 */
+    const auto select = [this](const char * name, const std::set<std::string> & keys, auto key) {
+        return indexedRows(state_->indexes.at(name), keys, key);
+      };
+    try {
+      auto pair = readPair(state_->root, state_->manifest, pair_id, select);
+      checkSources(*state_);
+      return {Code::ready, "", std::move(pair)};
+    } catch (...) {
+      checkSources(*state_);
+      throw;
+    }
+  });
+}
+
+/** @brief 原子构建目录和五类索引，任意打开失败都不会发布部分 reader。 */
+PreparationOpenResult openPreparation(const fs::path & preparation_root)
+{
+  return readResult<PreparationOpenResult>([&]() -> PreparationOpenResult {
+    auto state = std::make_unique<PreparationReaderState>();
+    state->root = fs::canonical(preparation_root);
+    state->manifest_source = sourceFile(state->root, "bag_manifest.json");
+    state->manifest = readManifest(state->root);
+    datasetContext(state->manifest);
+    /** @brief 建立源顺序目录，配对字段用现有解析器校验。 */
+    const auto pair_key = [&state](const Json & row) {
+        const auto pair = pairContext(state->manifest, row);
+        state->pairs.push_back({pair.pair_id, pair.rgb_message_id, pair.depth_message_id,
+          readStamp(row.at("rgb_stamp")), readStamp(row.at("depth_stamp")), pair.delta_ns,
+          pair.status, pair.pending_reasons});
+        return pair.pair_id;
+      };
+    state->indexes.emplace("rgbd_pairs.jsonl", indexRows(state->root, "rgbd_pairs.jsonl", pair_key));
+    state->indexes.emplace("frames.jsonl", indexRows(state->root, "frames.jsonl",
+      [](const Json & row) {return row.at("source").at("message_id").get<std::string>();}));
+    state->indexes.emplace("camera_info.jsonl", indexRows(state->root, "camera_info.jsonl",
+      [](const Json & row) {return row.at("calibration_id").get<std::string>();}));
+    state->indexes.emplace("tf.jsonl", indexRows(state->root, "tf.jsonl", [](const Json & row) {
+        return tfKey(row.at("source").at("message_id").get<std::string>(), row.at("transform_index"));
+      }));
+    state->indexes.emplace("messages.jsonl", indexRows(state->root, "messages.jsonl",
+      [](const Json & row) {return row.at("message_id").get<std::string>();}));
+    checkSources(*state);
+    return {Code::ready, "", std::unique_ptr<PreparationReader>(
+      new PreparationReader(std::move(state)))};
+  });
+}
+
+/** @brief 保留单对入口的选择性扫描语义，复用完整配对组装与错误映射。 */
 PreparationReadResult loadPreparedPair(const fs::path & preparation_root, std::string_view pair_id)
 {
-  try {
-    return {Code::ready, "", readPair(fs::canonical(preparation_root), pair_id)};
-  } catch (const ReadError & error) {
-    return {error.code, error.what(), std::nullopt};
-  } catch (const fs::filesystem_error & error) {
-    return {Code::io_error, error.what(), std::nullopt};
-  } catch (const cv::Exception & error) {
-    return {Code::invalid_media, error.what(), std::nullopt};
-  } catch (const Json::exception & error) {
-    return {Code::invalid_metadata, error.what(), std::nullopt};
-  } catch (const std::logic_error & error) {
-    return {Code::invalid_metadata, error.what(), std::nullopt};
-  }
+  return readResult<PreparationReadResult>([&]() -> PreparationReadResult {
+    const auto root = fs::canonical(preparation_root);
+    const auto manifest = readManifest(root);
+    /** @brief 旧入口只保留当前 ID 的记录，校验范围沿用历史契约。 */
+    const auto select = [&root](const char * name, const std::set<std::string> & keys, auto key) {
+        return selectRows(member(root, name), keys, key);
+      };
+    return {Code::ready, "", readPair(root, manifest, pair_id, select)};
+  });
 }
 
 }  // namespace vln_memory

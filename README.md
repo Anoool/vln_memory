@@ -63,7 +63,7 @@ ros2 run vln_memory bag_builder --config /tmp/vln_memory-local.yaml \
 - `frames.jsonl` 和 `rgbd_pairs.jsonl` 记录帧、配对、模型、位姿和状态，`evidence/` 保存原始消息与媒体。
 - `reports/summary.json`、`reports/issues.jsonl` 和 `reports/pending.jsonl` 记录统计、问题与待处理原因。`completed_with_issues` 表示数据集已写出，需结合 `prepared_pairs` 和报告判断可用性。
 
-C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory::vln_memory_preparation_reader`，调用 `loadPreparedPair(root, pair_id)` 读取已保存的 v5/v6 配对。完整字段及调用方式见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md) 和 [Preparation 读取接口](docx/modules/bag/preparation_reader.md)。
+C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory::vln_memory_preparation_reader`，调用 `loadPreparedPair(root, pair_id)` 读取已保存的 v5/v6 配对。遍历多对数据可先调用 `openPreparation(root)` 建立索引，再通过 `reader.pairs()` 和 `reader.loadPair(pair_id)` 访问。完整字段及调用方式见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md) 和 [Preparation 读取接口](docx/modules/bag/preparation_reader.md)。
 
 ## 项目进度与下一步
 
@@ -73,7 +73,7 @@ C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory
 | --- | --- |
 | S0 数据契约与配置 | 传感器时间、来源和准备数据契约以及录包配置已落地。正式观测、地图及版本契约待完善。 |
 | S1 读取与配对 | 已支持 SQLite 录包读取、原始图像及指定压缩格式解码、精确配对与容差内最近配对、原始消息与媒体导出。 |
-| S2 完整离线观测 | 已支持有效相机模型、历史 TF 位姿、单点 Depth→map 与 Depth→RGB 候选投影、米制 NPY 与可选源 16UC1 无损 PNG，以及按 ID 读取单对数据。多对筛选、关键帧、批次及正式观测待完成。 |
+| S2 完整离线观测 | 已支持有效相机模型、历史 TF 位姿、单点 Depth→map 与 Depth→RGB 候选投影、米制 NPY 与可选源 16UC1 无损 PNG，以及持有索引的多对数据读取。多对筛选、关键帧、批次及正式观测待完成。 |
 | S3–S6 记忆构建与交付 | 待实现区域投影、实体与关系、SQLite 工作库、构建工具与模型批次、纠错与标注、版本发布及 MemoryViewer。 |
 
 固定真实短包已通过 PNG/NPY 回读、TF 端点复核和三个投影点的数值对照。该样本的 10 对数据均保留注册待核实状态。实际深度尺度、注册精度和曝光同步仍需独立实测。
