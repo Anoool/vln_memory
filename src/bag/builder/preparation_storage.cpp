@@ -26,11 +26,21 @@ bool containsPath(const fs::path & parent, const fs::path & candidate)
   return true;
 }
 
-/** @brief 输出与输入不重叠、旧结果不覆盖；创建相同文件系统上的唯一工作目录。 */
-fs::path createWorkDirectory(const fs::path & input_path, const fs::path & output_path)
+/** @brief 先变成绝对路径，避免单层相对目标没有可创建的父目录。 */
+fs::path resolveOutputDirectory(const fs::path & output)
 {
-  const auto input = fs::weakly_canonical(input_path);
-  const auto output = fs::weakly_canonical(output_path);
+  if (output.empty() || output.string().find('\0') != std::string::npos) {
+    throw BagBuildError("invalid_output", "A non-empty output directory is required");
+  }
+  const auto absolute = fs::absolute(output);
+  if (fs::is_symlink(absolute)) {throw BagBuildError("output_exists", "Output is a symbolic link");}
+  return fs::weakly_canonical(absolute);
+}
+
+/** @brief 输出与输入不重叠、旧结果不覆盖；创建相同文件系统上的唯一工作目录。 */
+fs::path createWorkDirectory(const fs::path & input_path, const fs::path & output)
+{
+  const auto input = fs::weakly_canonical(fs::absolute(input_path));
   if (containsPath(input, output) || containsPath(output, input)) {
     throw BagBuildError("invalid_output", "Input and output paths must not contain each other");
   }

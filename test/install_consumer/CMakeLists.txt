@@ -52,8 +52,35 @@ target_link_libraries(camera_model_consumer PRIVATE vln_memory::vln_memory_camer
 add_executable(depth_projection_consumer ../bag/depth/test_depth_projection.cpp)
 target_link_libraries(depth_projection_consumer PRIVATE vln_memory::vln_memory_depth_projection)
 
+add_executable(depth_region_consumer ../bag/depth/test_depth_region_projection.cpp)
+target_link_libraries(depth_region_consumer PRIVATE vln_memory::vln_memory_depth_projection)
+
+add_executable(observation_depth_region_consumer ../engine/test_observation_depth_region.cpp)
+target_link_libraries(observation_depth_region_consumer PRIVATE
+  vln_memory::vln_memory_observation_depth_region vln_memory::vln_memory_observation_builder)
+
 # 独立链接安装后的读取和投影入口，复用构造夹具或真实短包核查。
 find_package(nlohmann_json REQUIRED)
 add_executable(preparation_reader_consumer ../bag/builder/test_preparation_reader.cpp)
 target_link_libraries(preparation_reader_consumer PRIVATE vln_memory::vln_memory_preparation_reader
   vln_memory::vln_memory_depth_projection nlohmann_json::nlohmann_json)
+
+# 同一采样与磁盘验收程序通过安装目标验证公开契约及传递依赖。
+add_executable(build_input_consumer ../engine/test_build_input.cpp)
+target_link_libraries(build_input_consumer PRIVATE vln_memory::vln_memory_build_input nlohmann_json::nlohmann_json)
+
+# 实体消费者从安装包验证物品创建和观测引用。
+add_executable(entity_consumer ../memory/test_entity.cpp)
+target_link_libraries(entity_consumer PRIVATE
+  vln_memory::vln_memory_entity_builder vln_memory::vln_memory_observation_builder)
+
+# 正式观测消费者仅链接观测库，验证不依赖 builder/ROS 的公开契约。
+add_executable(observation_consumer ../memory/test_observation.cpp)
+target_link_libraries(observation_consumer PRIVATE vln_memory::vln_memory_observation nlohmann_json::nlohmann_json)
+
+add_executable(observation_builder_consumer ../engine/test_observation_builder.cpp)
+target_link_libraries(observation_builder_consumer PRIVATE vln_memory::vln_memory_observation_builder)
+
+add_executable(observation_preparation_consumer ../memory/test_observation_preparation.cpp)
+target_link_libraries(observation_preparation_consumer PRIVATE
+  vln_memory::vln_memory_observation_builder vln_memory::vln_memory_build_input)

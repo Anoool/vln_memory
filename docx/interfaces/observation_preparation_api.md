@@ -1,8 +1,8 @@
 # 观测准备层公开接口手册
 
-核查日期：2026-10-30。范围：当前 include/vln_memory/bag、src/bag、CMake 导出目标及安装消费者。本文按实际声明和实现编写；所有 C++ 类型/函数属于 vln_memory 命名空间。完整目标与审查结论分别见 [系统规划](../project/system_plan.md)、[本次核查报告](../reviews/observation_preparation_audit.md)。
+本手册保留 2026-10-30 准备层基础接口的核查口径，范围为当时的传感器、录包导出及安装消费者。后续新增的 Reader、观测发布、投影和实体接口见 [文档导航](../README.md)。历史审查见 [准备层核查报告](../reviews/observation_preparation_audit.md)。
 
-当前项目验收仅覆盖原设计第 1、2 部分，范围对照见 [当前规划](../project/sections_1_2_scope.md)。本手册只描述其中已经实现的观测准备接口，不代表实体、关系、MemoryEngine 和 Viewer 已实现。
+原设计第 1、2 部分的当前状态见 [范围与验收](../project/sections_1_2_scope.md)。
 
 ## 1. 能调用哪些接口
 

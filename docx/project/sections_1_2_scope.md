@@ -1,6 +1,6 @@
 # 原设计第 1、2 部分：范围、现状与验收对照
 
-更新：2026-11-03。依据为用户提供的《VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md》（文内更新 2026-10-27）。本轮用户要求：当前只完成原文第 1、2 部分。原始附件只读，不修改；本文为仓库内部的范围与追踪文件。
+更新：2026-11-08。依据为用户提供的《VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md》（文内更新 2026-10-27）。本轮用户要求：当前只完成原文第 1、2 部分。原始附件只读，不修改；本文为仓库内部的范围与追踪文件。
 
 这里的“部分 1、2”指原文的顶层标题，不是同步方案里的交付 A/B，也不是仅完成 RGB/Depth 两个子模块：
 
@@ -9,39 +9,37 @@
 
 ## 1. 当前实际完成到哪里
 
-当前 vln_memory 的源码仍集中在 include/vln_memory/bag 与 src/bag：RGB、Depth、CameraInfo、TF 链/覆盖、公共时间与名称检查。新增 builder 第一版及 config/vln_memory.yaml 的 bag 段，已能读取/转换/配对并输出 preparation 文件；没有 engine/memory/viewer 与正式 Observation，也没有原文八个业务工具。实际接口见 [BagBuilder](../interfaces/bag_builder_api.md)。
+当前推进到 S3。准备层已能生成带模型、历史位姿及媒体来源的 preparation。构建层已能从中选择关键帧、分批并发布正式观测。物品和空间已可创建为已定位或待定位的内存记录。下一项是事务工作库与实体修订，随后接入关系、模型工具及完整版本。见 [当前架构](architecture.md) 与 [系统规划](system_plan.md#102-后续任务与依赖)。
 
-因此：原文 1.1、1.3、2.1、2.3、2.10 有部分准备代码，其余业务尚未实现；没有任何一个原文顶层部分可以标记为完成。已有原始 TF 不是 map 数值位姿；现有 builder 已有实际时间配对，但不证明物理同步或空间注册；已有 float 深度不是 project_depth。
-
-状态定义：“基础部分”表示有可复用原语但未满足条款完整验收；“未实现”表示在 vln_memory 中没有对应业务入口/产物。原文只作为目标依据，不将其中示例当现有文件。
+“基础部分”表示已有对应能力，完整条款仍需后续验收。“未实现”表示尚无对应的业务入口。历史实现与测试记录在本文末尾。
 
 ## 2. 第 1 部分逐项对照
 
 | 原文条款 | 当前状态 | 已有代码/证据 | 尚缺的实际能力 |
 | --- | --- | --- | --- |
-| 1.1 坐标、单位与信息保留 | 基础部分 | 米制 optical-z、SensorStamp、CameraInfo 原值、TF 父子链/样本来源；原始 CDR 和标准媒体已落盘 | 统一 map_id/geometry_revision/单位契约、当前位姿及单点投影的真实数据验收、空间关系依据 |
-| 1.2 Entity（含 1.2.1 空间） | 未实现 | 无 Entity/Region 模型或存储 | 永久 ID、物品/空间统一实体、已观测代表点、可选边界/朝向、证据/revision、未定位 pending |
-| 1.3 Observation | 基础部分 | 已导出 RGB/Depth 媒体；frames/pairs 保存尺寸、原始时间、媒体路径、标定候选及 TF 端点/来源 | 正式 Observation 结构/校验/序列化、关键帧及正式引用校验。数值位姿与有效模型已在准备数据中实现 |
+| 1.1 坐标、单位与信息保留 | 基础部分 | 正式观测保留 map_id、geometry_revision、整数原始时刻、米制 optical-z、原标定与 TF 端点。 | 实测尺度、配准、物理同步和跨数据集几何版本管理。 |
+| 1.2 Entity（含 1.2.1 空间） | 基础部分 | [实体契约](../modules/memory/entity.md)、永久 ID、物品表面证据、空间内部确认与底盘锚点、观测引用与待定位状态 | 空间边界/朝向、实体持久化 |
+| 1.3 Observation | 基础部分 | [正式观测](../modules/memory/observation.md) 已实现模型、位姿和证据契约及 JSON 校验，支持 [筛选与批量发布](../modules/engine/observation_dataset.md)。 | 按 ID 回读的构建工具，及与完整记忆版本的归档和索引。 |
 | 1.4 SemanticRelation | 未实现 | 无语义关系业务 | near/on/hanging_on/inside、门的多端点 connects_regions、证据/状态、去重、inside 与 region_id 同步 |
-| 1.5 版本、证据与工具规范 | 未实现（有外部通用基础） | vln_agent 有会话与通用 function_call 外壳；vln_memory 没有业务工具 | 工具注册/分发、版本上下文、状态/证据校验、构建轮次与持久执行记录 |
-| 1.6 文件组织与索引 | 基础部分 | 已导出 preparation manifest/来源/图像/标定/TF/配对/报告；不是完整 memory 版本 | manifest、entities/observations/relations/annotations JSONL、evidence/reports/indexes、ID/名称/空间/关系索引 |
+| 1.5 版本、证据与工具规范 | 基础部分 | 已保留来源指纹、观测/实体修订及几何版本；vln_agent 提供通用会话与工具外壳。 | 业务工具注册与分发、事务执行记录、幂等恢复和完整版本。 |
+| 1.6 文件组织与索引 | 基础部分 | 已发布 preparation 及正式观测数据集，含 manifest、观测、批次和问题报告。 | 完整记忆 manifest、实体/关系/标注 JSONL 及 ID、名称、空间和关系索引。 |
 
 ## 3. 第 2 部分逐项对照
 
 | 原文条款 | 当前状态 | 已有代码/证据 | 尚缺的实际能力 |
 | --- | --- | --- | --- |
-| 2.1 输入与总体流程 | 基础部分 | BagBuilder 两遍读取、原始/指定压缩图像解码、严格/最近配对、标定候选/TF 检查及准备导出；真实短片段已验证 | v5 产物到几何消费端的真实验证、关键帧、正式观测、模型构建与检查标注闭环 |
+| 2.1 输入与总体流程 | 基础部分 | 已跑通录包读取、配对、筛选、关键帧、观测发布与 C++ 实体创建。 | 模型批次、事务进度、标注与回读闭环。 |
 | 2.2 构建工具 | 未实现 | 通用 ToolManager 不是这八个工具 | search_entities/get_observation/project_depth/spatial_query/create_entity/update_entity/correct_memory/memory_annotate |
-| 2.3 深度定位 | 基础部分 | 米制深度、有效相机模型、TF 数值位姿、单点 Depth→map 和 Depth→RGB 候选投影 | v5 真实数据几何验收、完整 project_depth 工具、bbox/polygon 到 map、区域分簇与质量/歧义报告 |
-| 2.4 创建/更新协议 | 未实现 | 无永久实体及乐观 revision 校验 | 字段合并/观测追加、引用/版本校验、永久 ID、几何定位、关系更新 |
-| 2.5 空间加入记忆 | 未实现 | 无空间实体业务 | 从确认在区域内的 body_pose_map 取代表点，证据积累，inside/region_id 一致性 |
+| 2.3 深度定位 | 基础部分 | 已实现单点 Depth→map、Depth→RGB 候选像素及深度原图 bbox/polygon 的投影、分簇和歧义判断。 | 封装完整 project_depth 工具，按用途验证物理尺度和跨图对应。 |
+| 2.4 创建/更新协议 | 基础部分 | [物品及空间创建](../modules/engine/entity_builder.md) 校验观测来源与证据，分配永久 ID 和初始 revision。 | 事务持久化、乐观 revision、证据追加、字段合并和关系更新。 |
+| 2.5 空间加入记忆 | 基础部分 | [空间创建](../modules/engine/entity_builder.md) 从经确认在区域内的历史底盘位姿取代表点，保留确认引用 | 空间证据积累、持久化、inside/region_id 一致性 |
 | 2.6 同一实体/几何更新 | 未实现 | 通用 ToolManager 只对活动调用去重，不具备所需持久幂等 | 同观测区域去重、构建 call_id 执行结果复用、身份/位置冲突状态、静态融合/移动状态、轨迹更新后重算 |
 | 2.7 关系刷新 | 未实现 | 无关系状态与几何缓存 | 更新/撤回/needs_review、几何版本与距离缓存失效、原始证据保留 |
 | 2.8 通用纠错 | 未实现 | 无 correct_memory | update/merge/split/retract 整体提交、引用重定向/重分配、理由与 revision_history、关系/归属/索引同步 |
-| 2.9 人工命名 | 未实现 | 无该实体 ID/注释接口 | display_name/aliases/note、annotations 历史、名称索引回读、Viewer 调用共用写入处理 |
-| 2.10 最小实现与发布 | 基础部分 | C++17/ROS 包、分类文档、现有消息测试和安装消费者 | 完整 Observation、MemoryEngine/MemoryViewer（已实现 bag 配置/CLI/准备导出）、单 writer 进度、完整版本与原子 manifest 发布、真实数据闭环 |
+| 2.9 人工命名 | 未实现 | 已有实体 ID 和语义标签。 | display_name/aliases/note、标注历史、名称索引及 Viewer 共用写入入口。 |
+| 2.10 最小实现与发布 | 基础部分 | C++17/ROS 包、录包配置、准备数据和观测发布 CLI，以及核心、ROS 和安装消费者验证。 | MemoryEngine、MemoryViewer、事务恢复、完整版本原子发布和实际闭环。 |
 
-投影基线 6d809e8 的无 ROS 核心测试 10/10、非录包 ROS 测试 15/15 通过，两种安装模式的投影消费者通过。历史真实全包结果见 [v4 相机模型验收](../reviews/camera_model_verification.md)，v5 的真实几何链路待验收。
+空间创建基线验证为无 ROS 15/15、ROS 28/28，两种安装模式的实体消费者通过。真实短包验证观测、数值投影和物品创建；空间正向定位以带明确确认的构造录包验证。物理尺度、注册与曝光同步仍需独立验收。
 
 ## 4. 范围收敛后，哪些必须保留
 
@@ -89,13 +87,17 @@ Entity、SemanticRelation、Observation、索引和版本虽然在原文第 1 �
 8. Viewer 满足原文 2.10 的地图/关系/图像/轨迹联动及实体/关系/时间定位，并通过共用 memory_annotate 写入名称/别名/备注，重开后能回读。
 9. config/vln_memory.yaml 的每个已支持字段在三个程序入口生效；不把原文示例的 30ms/0.001/0.8m/25deg 等数值当通用正确默认值。
 
-以上全部通过才标记第 1、2 部分完成。RGB-D 自动配对与 preparation 导出已实现；相机兼容/有效模型已实现；TF 数值位姿已实现，单点投影已实现，最近待办为真实短 bag 的深度几何验收。preparation 的读取、引用校验和按用途筛选在后续 API 输入组织时处理，具体交付与验收见 [整体规划第 10 节](system_plan.md#10-当前最近行动)。
+以上验收通过后才标记第 1、2 部分完成。按 [后续任务与依赖](system_plan.md#102-后续任务与依赖) 跟踪剩余工作。
 
-## 2026-10-30 实施更新
+## 历史实施记录
+
+以下记录保留各阶段当时的状态，当前进度以上方对照表为准。
+
+### 2026-10-30 实施更新
 
 BagBuilder 第一版已经通过实际序列化 SQLite 构造磁盘回归，包含分卷、负记录时间、媒体/JSONL 和失败发布；真实设备 bag、数值 map 位姿、有效相机模型及关键帧仍待验证/实现。进度条款不能因此标记原文两个部分完成。
 
-## 2026-11-02 当前进度更新
+### 2026-11-02 当前进度更新
 
 - 能力基线：24af181（codex/rgbd-timestamp-alignment）；builder_version=3，schema=bag_preparation/1。省略/API 默认 0，正门限需显式配置；保留原始 stamp、真实差值和两图各自标定/TF 查询时间。
 - S0 部分落地；S1 主要读取/配对能力已实现并有真实数据验证；S2 只有准备基础；S3–S6 尚未实现。
@@ -103,12 +105,20 @@ BagBuilder 第一版已经通过实际序列化 SQLite 构造磁盘回归，包�
 - 当前阻塞：plumb_bob/D8 参数数目不兼容、零插值间隔下缺少精确动态 TF、深度/RGB 注册依据 unknown；数值位姿、有效模型、关键帧仍待实现。近似配对不补足曝光同步、深度物理尺度或运动补偿。
 - 临时 DB 和短片段媒体已清理，audit_records 为不含完整媒体/CDR 的审计快照；下一轮验收需重新准备输入。详细证据见 [最近配对验收](../reviews/rgbd_nearest_pairing_verification.md)。
 
-## 2026-11-03 当前进度更新
+### 2026-11-03 当前进度更新
 
 原始 D8 与 CDR 保留，统一显式兼容贯通 reader/索引/匹配/模型/输出；有效相机模型及单点射线已实现。完整真实 bag 为 21441 消息、7268 标定、6889 解码图像/模型、2671 对。TF 数值位姿、物理注册、记忆工作库/工具/Viewer 仍未实现或验收，完整原文两部分仍未完成。
 
 按用户最新要求，不把最小 Observation 作为当前前置任务。既有 preparation 的读取、引用和筛选放在后续 API 输入组织时处理；后续业务仍须保留原设计要求的观测证据、时间、几何和引用完整性。以上旧日期的更新保留历史含义。详见 [当前系统规划](system_plan.md#10-当前最近行动)。
 
-### 2026-11-03 TF 数值位姿更新
+#### 2026-11-03 TF 数值位姿更新
 
 BagBuilder v5 复用历史端点求数值位姿并写入 preparation。省略 TF 门限时按本段动态样本间隔估计，显式设置优先。构造样本验证结果见 [TF 数值位姿](../modules/tf/tf_pose.md)。单个深度像素的 [map 投影](../modules/depth/depth_projection.md) 已实现。单点 Depth→RGB 候选像素投影也已实现。真实深度几何验收与后续记忆业务仍待完成。
+
+### 2026-11-05 构建输入更新
+
+已实现按用途筛选、RGB 原始时间稳定排序、底盘位姿关键帧、固定大小批次及带来源/pending/拒绝原因的 build_input/1 清单。该清单复用 preparation 回读，并未实现正式 Observation、实体/关系或记忆版本。下一步落实正式观测契约与序列化，见 [build_input](../modules/engine/build_input.md)。
+
+### 2026-11-06 正式 Observation 更新
+
+新增 memory/observation 正式拥有型记录、稳定来源身份、地图/几何 revision、内部一致性校验和 observation/1 严格 JSON。完整保存独立图像时间/网格、原始标定与选择参数/有效模型、TF 端点和源消息摘要；合法缺项保留 pending。仅记录模块已落地，生产批量组装/发布和物理几何验收继续推进。新增正向回归纠正 build_input 对 prepared_for_geometry 状态的消费判断。见 [模块](../modules/memory/observation.md)与[验收](../reviews/observation_verification.md)。

@@ -56,6 +56,8 @@ class CameraInfoIndex
 public:
   /** @brief 一次排序并分析模型变化/同刻矛盾；所有输入都属于 builder 的同一段。 */
   explicit CameraInfoIndex(const std::vector<BagCameraInfoRecord> & records);
+  /** @brief 拒绝借用临时容器，避免索引刚构造就失效。 */
+  CameraInfoIndex(const std::vector<BagCameraInfoRecord> && records) = delete;
   /** @brief 二分选最近候选或核对全段静态一致，再调用 checkCameraInfoImage。 */
   CameraInfoSelection select(
     const CameraImageReference & image, const CameraInfoMatchOptions & options) const;

@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "preparation_metadata.hpp"
+
 namespace vln_memory
 {
 namespace
@@ -106,7 +108,11 @@ void writeJsonLine(OutputFiles & files, const std::string & path, nlohmann::json
 {
   if (!record.is_object()) {throw BagBuildError("invalid_output", "JSONL record must be an object");}
   record["schema_version"] = "bag_preparation/1";
-  files.appendLine(path, record.dump());
+  const auto line = record.dump();
+  if (line.size() > detail::kMaxPreparationJsonBytes) {
+    throw BagBuildError("limit_exceeded", "JSONL record exceeds preparation reader limit: " + path);
+  }
+  files.appendLine(path, line);
 }
 
 /** @brief 整体 JSON 先编码再写临时文件，失败不产生已发布文件。 */
@@ -115,6 +121,9 @@ void writeJsonFile(OutputFiles & files, const std::string & path, nlohmann::json
   if (!record.is_object()) {throw BagBuildError("invalid_output", "JSON document must be an object");}
   record["schema_version"] = "bag_preparation/1";
   const auto content = record.dump(2) + "\n";
+  if (content.size() > detail::kMaxPreparationJsonBytes) {
+    throw BagBuildError("limit_exceeded", "JSON document exceeds preparation reader limit: " + path);
+  }
   files.write(path, reinterpret_cast<const std::uint8_t *>(content.data()), content.size());
 }
 

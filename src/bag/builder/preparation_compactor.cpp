@@ -11,6 +11,7 @@
 #include <vln_memory/bag/builder/bag_types.hpp>
 #include <vln_memory/bag/builder/preparation_reader.hpp>
 
+#include "preparation_metadata.hpp"
 #include "preparation_storage.hpp"
 
 namespace vln_memory
@@ -33,9 +34,11 @@ struct CopiedFile
 fs::path sourceMember(const fs::path & root, const std::string & name)
 {
   const fs::path relative(name);
+  if (relative.empty() || !relative.is_relative() || name.find('\0') != std::string::npos) {
+    throw BagBuildError("invalid_reference", "Invalid dataset file path");
+  }
   const auto path = fs::canonical(root / relative);
-  if (relative.empty() || !relative.is_relative() || !detail::containsPath(root, path) ||
-    !fs::is_regular_file(path))
+  if (!detail::containsPath(root, path) || !fs::is_regular_file(path))
   {
     throw BagBuildError("invalid_reference", "Invalid dataset file: " + name);
   }
@@ -53,8 +56,11 @@ void watch(const fs::path & path, std::vector<CopiedFile> & files)
 std::ofstream outputFile(const fs::path & root, const std::string & name)
 {
   const fs::path relative(name);
+  if (relative.empty() || !relative.is_relative() || name.find('\0') != std::string::npos) {
+    throw BagBuildError("invalid_reference", "Invalid output file path");
+  }
   const auto path = fs::weakly_canonical(root / relative);
-  if (relative.empty() || !relative.is_relative() || !detail::containsPath(root, path) || fs::exists(path)) {
+  if (!detail::containsPath(root, path) || fs::exists(path)) {
     throw BagBuildError("invalid_output", "Invalid or duplicate output file: " + name);
   }
   fs::create_directories(path.parent_path());
@@ -81,10 +87,10 @@ void rewriteLines(const fs::path & source, const fs::path & work, const std::str
   if (!input) {throw BagBuildError("io_error", "Cannot read " + path.string());}
   auto output = outputFile(work, name);
   std::size_t line_number = 0;
-  for (std::string line; std::getline(input, line);) {
+  for (std::string line; detail::readPreparationLine(input, line);) {
     ++line_number;
     try {
-      auto row = Json::parse(line);
+      auto row = detail::parsePreparationJson(line);
       convert(row);
       output << row.dump() << '\n';
     } catch (const Json::exception & error) {
@@ -138,14 +144,21 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
   auto source_reader = openPreparation(source);
   if (!source_reader.ok()) {throw BagBuildError("invalid_dataset", source_reader.message);}
   const auto source_pair_count = source_reader.reader->pairs().size();
+  const std::string source_fingerprint(source_reader.reader->manifestSha256());
   source_reader.reader.reset();
-  const auto work = detail::createWorkDirectory(source, requested_output);
+  const auto final_path = detail::resolveOutputDirectory(requested_output);
+  const auto work = detail::createWorkDirectory(source, final_path);
   result.work_directory = work;
   std::vector<CopiedFile> watched;
   const auto manifest_path = sourceMember(source, "bag_manifest.json");
   watch(source / "bag_manifest.json", watched);
-  Json manifest;
-  {std::ifstream file(manifest_path); file >> manifest;}
+  const auto manifest_bytes = detail::readPreparationDocument(manifest_path);
+  if (detail::preparationSha256(manifest_bytes) != source_fingerprint) {
+    throw BagBuildError("source_changed", "Preparation manifest changed during conversion");
+  }
+  auto manifest = detail::parsePreparationJson(manifest_bytes);
+  if (manifest.contains("media_integrity")) {watch(source / detail::kPreparationMediaIndexFile, watched);}
+  const auto source_media = detail::readPreparationMediaIndex(source, manifest);
   const auto original_version = manifest.at("builder_version");
   const bool saved = original_version != 7 || manifest.at("effective_options").at("save_raw_cdr").get<bool>();
   std::map<std::string, Json> messages;
@@ -157,12 +170,14 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
         throw BagBuildError("invalid_metadata", "Invalid serialized_bytes: " + id);
       }
       if (saved) {
-        const auto path = sourceMember(source, raw_path.get<std::string>());
-        if (fs::file_size(path) != row.at("serialized_bytes").get<std::uint64_t>())
-        {
-          throw BagBuildError("invalid_reference", "Raw evidence size differs: " + id);
-        }
+        const auto name = raw_path.get<std::string>();
+        const auto path = sourceMember(source, name);
+        watch(source / name, watched);
         const auto bytes = fs::file_size(path);
+        if (bytes != row.at("serialized_bytes").get<std::uint64_t>() ||
+          detail::preparationFileSha256(path) != row.at("payload_sha256").get<std::string>()) {
+          throw BagBuildError("invalid_reference", "Raw evidence size or digest differs: " + id);
+        }
         if (bytes > std::numeric_limits<std::uint64_t>::max() - result.raw_bytes_omitted) {
           throw BagBuildError("invalid_metadata", "Raw byte total overflow");
         }
@@ -175,14 +190,14 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
       row["raw_path"] = nullptr;
     };
   rewriteLines(source, work, "messages.jsonl", watched, convert_message);
-  std::set<std::string> media;
+  std::map<std::string, std::string> media;
   std::set<std::string> files{"messages.jsonl"};
   Json retained_files = Json::array({"messages.jsonl"});
   const std::set<std::string> required_files{"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl",
     "camera_info.jsonl", "tf.jsonl", "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"};
   for (const auto & value : manifest.at("files")) {
     const auto name = value.get<std::string>();
-    if (name == "messages.jsonl") {continue;}
+    if (name == "messages.jsonl" || name == detail::kPreparationMediaIndexFile) {continue;}
     if (fs::path(name).extension() == ".cdr" || name.rfind("evidence/raw/", 0) == 0) {continue;}
     retained_files.push_back(name);
     if (!files.insert(name).second) {throw BagBuildError("invalid_metadata", "Duplicate file: " + name);}
@@ -193,8 +208,17 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
             throw BagBuildError("invalid_metadata", "Unexpected JSONL schema: " + name);
           }
           clearSource(row, messages);
-          if (name == "frames.jsonl" && !row.at("media_path").is_null()) {
-            media.insert(row.at("media_path").get<std::string>());
+          if (name == "frames.jsonl") {
+            const auto * sealed = detail::preparationFrameMedia(source_media, row);
+            if (!row.at("media_path").is_null()) {
+              const auto id = row.at("source").at("message_id").get<std::string>();
+              const auto path = sourceMember(source, row.at("media_path").get<std::string>());
+              const auto relative = path.lexically_relative(source).generic_string();
+              if ((sealed && relative != sealed->path) || !media.emplace(id, relative).second) {
+                throw BagBuildError("invalid_reference", "Invalid frame media binding: " + id);
+              }
+              row["media_path"] = relative;
+            }
           }
         };
       rewriteLines(source, work, name, watched, convert);
@@ -203,14 +227,31 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
   for (const auto & name : required_files) {
     if (files.count(name) == 0) {throw BagBuildError("invalid_metadata", "Missing manifest file: " + name);}
   }
-  for (const auto & name : media) {
+  if (source_media && source_media->size() != media.size()) {
+    throw BagBuildError("invalid_reference", "Sealed media index does not match frame coverage");
+  }
+  auto media_file = outputFile(work, detail::kPreparationMediaIndexFile);
+  std::map<std::string, std::string> copied_digests;
+  for (const auto & [id, name] : media) {
     if (fs::path(name).extension() == ".cdr") {
       throw BagBuildError("invalid_reference", "Media cannot reference a CDR file: " + name);
     }
-    if (files.count(name) != 0) {continue;}
-    files.insert(name);
-    copyFile(source, work, name, watched);
+    if (files.insert(name).second) {copyFile(source, work, name, watched);}
+    auto digest = copied_digests.find(name);
+    if (digest == copied_digests.end()) {
+      digest = copied_digests.emplace(name, detail::preparationFileSha256(work / name)).first;
+    }
+    if (source_media && source_media->at(id).sha256 != digest->second) {
+      throw BagBuildError("invalid_media", "Copied media SHA-256 differs: " + name);
+    }
+    media_file << detail::preparationMediaRow(id, name, digest->second).dump() << '\n';
   }
+  closeOutput(media_file, detail::kPreparationMediaIndexFile);
+  const auto baseline = source_media ? manifest.at("media_integrity").at("baseline").get<std::string>() :
+    std::string("legacy_conversion");
+  manifest["media_integrity"] = {{"schema_version", detail::kPreparationMediaIndexSchema},
+    {"baseline", baseline}, {"index_sha256", detail::preparationFileSha256(work / detail::kPreparationMediaIndexFile)}};
+  retained_files.push_back(detail::kPreparationMediaIndexFile);
   manifest["files"] = std::move(retained_files);
   manifest["builder_version"] = 7;
   manifest["effective_options"]["save_raw_cdr"] = false;
@@ -237,7 +278,6 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
       throw BagBuildError("source_changed", "Source changed during conversion: " + file.path.string());
     }
   }
-  const auto final_path = fs::weakly_canonical(requested_output);
   detail::publishDirectory(work, final_path);
   result.output_directory = final_path;
   result.work_directory.clear();
@@ -254,6 +294,9 @@ PreparationCompactResult compactPreparation(const fs::path & source, const fs::p
     runCompact(source, output, result);
   } catch (const BagBuildError & error) {
     result.code = error.code();
+    result.message = error.what();
+  } catch (const detail::PreparationMetadataError & error) {
+    result.code = "invalid_dataset";
     result.message = error.what();
   } catch (const Json::exception & error) {
     result.code = "invalid_metadata";

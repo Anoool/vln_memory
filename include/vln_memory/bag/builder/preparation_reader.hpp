@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -18,6 +19,69 @@ enum class PreparationReadCode
 {
   ready, unsupported_dataset, pair_not_found, invalid_metadata, invalid_reference, invalid_media, io_error,
   source_changed
+};
+
+/** @brief 标定选择事实；即使无候选也保留配置，原始参数与有效模型分开。 */
+struct PreparedCalibration
+{
+  std::string calibration_id;
+  std::string source_message_id;
+  CameraInfoMatchOptions selection;
+  std::string selection_code{"not_evaluated"};
+  std::string selection_message;
+  std::optional<CameraInfoErrorCode> calibration_code;
+  bool used_static_calibration{false};
+  std::optional<SensorTimeCheck> timing;
+  std::optional<CameraInfoData> original;
+  std::optional<CameraInfoErrorCode> source_validation_code;
+  std::string source_validation_message;
+  std::optional<CameraInfoErrorCode> normalized_validation_code;
+  CameraInfoCompatibility source_compatibility{CameraInfoCompatibility::strict};
+  bool normalization_applied{false};
+  bool source_nonfinite{false};
+  std::string original_unavailable_reason;
+};
+
+/** @brief 当前配对实际引用的消息摘要；路径相对于 preparation 根，省略 CDR 时为空。 */
+struct PreparedMessageSummary
+{
+  std::string message_id;
+  std::string topic;
+  std::uint64_t file_index{0};
+  std::uint64_t topic_ordinal{0};
+  std::uint64_t message_order{0};
+  std::int64_t bag_record_time_ns{0};
+  std::uint64_t serialized_bytes{0};
+  std::string payload_sha256;
+  std::optional<std::filesystem::path> raw_path;
+};
+
+/** @brief 实际深度媒体解释，不含像素；与恢复出的 DepthFrame 使用同一份解析结果。 */
+struct PreparedDepthStorage
+{
+  std::string format;
+  std::string dtype;
+  DepthUnit unit{DepthUnit::unspecified};
+  double scale_to_m{0};
+  std::string invalid_rule;
+  std::string source_encoding;
+  DepthUnit source_unit{DepthUnit::unspecified};
+  double source_scale_to_m{0};
+  double min_depth_m{0};
+  std::optional<double> max_depth_m;
+  std::uint64_t valid_pixels{0};
+  std::uint64_t invalid_pixels{0};
+  // 旧记录无逐帧 storage 时使用米制 NPY 契约；可能来自 v5 的 v7 转换副本。
+  bool legacy_metric_npy{false};
+};
+
+/** @brief 已解析至根相对路径的媒体或 CDR；用于发现常规文件替换。 */
+struct PreparedFileSnapshot
+{
+  std::filesystem::path relative_path;
+  std::uintmax_t bytes{0};
+  std::filesystem::file_time_type modified;
+  std::string sha256{};
 };
 
 /** @brief 同一 preparation 目录的已保存配对，所有值和路径由结果持有。 */
@@ -52,6 +116,33 @@ struct PreparedPair
   std::optional<TfPoseResult> rgb_pose;
   std::optional<TfPoseResult> depth_pose;
   std::optional<TfPoseResult> body_pose;
+
+  // 组装需要的来源事实；不包含 map_id、geometry_revision 等业务决策。
+  int builder_version{0};
+  std::string source_manifest_sha256;
+  std::string body_frame;
+  std::int64_t sync_tolerance_ns{0};
+  std::int64_t tf_max_gap_ns{0};
+  TfJumpLimits tf_jump_limits;
+  std::string capture_sync_basis;
+  PreparedCalibration rgb_calibration;
+  PreparedCalibration depth_calibration;
+  std::vector<PreparedMessageSummary> message_summaries;
+  std::optional<PreparedDepthStorage> depth_storage;
+  std::optional<std::filesystem::path> rgb_media_relative;
+  std::optional<std::filesystem::path> depth_media_relative;
+  DepthAlignment depth_alignment{DepthAlignment::unknown};
+  std::optional<DepthAlignmentStatus> depth_alignment_check;
+  std::string alignment_basis;
+  std::vector<PreparedFileSnapshot> file_snapshots;
+};
+
+struct PreparationSourceCheck
+{
+  PreparationReadCode code{PreparationReadCode::io_error};
+  std::string message;
+  /** @brief 已核对索引来源和传入文件的路径、大小、修改时间。 */
+  bool ok() const noexcept {return code == PreparationReadCode::ready;}
 };
 
 struct PreparationReadResult
@@ -93,7 +184,24 @@ public:
   /** @brief 按索引读取一对并恢复深度，失败时返回空 pair，可继续读取其他 ID。 */
   PreparationReadResult loadPair(std::string_view pair_id) const;
 
+  /** @brief 校验配对、证据、媒体头和存储契约；不解码深度，PreparedPair::depth 为空。 */
+  PreparationReadResult loadPairMetadata(std::string_view pair_id) const;
+
+  /** @brief 返回打开时绑定的规范数据集根；引用随 reader 生命周期有效。 */
+  const std::filesystem::path & root() const noexcept;
+
+  /** @brief 返回 manifest 原始字节的 SHA-256；视图随 reader 生命周期有效。 */
+  std::string_view manifestSha256() const noexcept;
+
+  /** @brief 返回 preparation 中声明的 map frame；视图随 reader 生命周期有效。 */
+  std::string_view mapFrame() const noexcept;
+
+  /** @brief 复核索引、文件状态和已绑定的内容摘要，变化时报告 source_changed。 */
+  PreparationSourceCheck verifyUnchanged(const std::vector<PreparedFileSnapshot> & files = {}) const;
+
 private:
+  /** @brief 完整读取校验 RGB 像素并恢复深度；两种模式共享索引和元数据检查。 */
+  PreparationReadResult loadPairImpl(std::string_view pair_id, bool validate_pixels) const;
   /** @brief 接管已经完整建立的索引，调用方通过工厂取得唯一所有权。 */
   explicit PreparationReader(std::unique_ptr<PreparationReaderState> state);
 

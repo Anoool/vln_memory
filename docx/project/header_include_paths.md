@@ -1,10 +1,10 @@
 # 公共头文件位置、搜索根目录与 CMake 配置
 
-日期：2026-10-31。本轮修正公共头引用的可读性和 CMake 自身头路径声明，不改变消息处理、零容差配对或公开函数签名。
+当前公开头分布于 `include/vln_memory/{bag,memory,engine}/`，均以 `include/` 为搜索根。构建和安装目标见 [CMake 说明](CMakeLists.md)。下文保留 2026-10-31 统一公共头路径时的验证记录。
 
 ## 编码前核查与规划
 
-实际头文件均在 include/vln_memory/bag/ 下，src/bag/ 没有重复头文件。原 #include "vln_memory/bag/..." 在现有 include 搜索根下能够找到真实文件，并不是在 src/bag 下寻找同名头。已发现的可维护性问题是部分库通过依赖库间接获得本包 include 根目录，不便人工审阅其自身编译条件。
+当时的公开头在 include/vln_memory/bag/ 下，src/bag/ 没有重复的公开头文件。原 #include "vln_memory/bag/..." 在现有 include 搜索根下能够找到真实文件，并不是在 src/bag 下寻找同名头。已发现的可维护性问题是部分库通过依赖库间接获得本包 include 根目录，不便人工审阅其自身编译条件。
 
 实施拆分：
 
@@ -39,7 +39,7 @@
 
 实际设置集中在 CMakeLists.txt 的库目标列表之后。BUILD_INTERFACE 用于当前源码构建，INSTALL_INTERFACE 的 include 相对安装前缀；PUBLIC 使目标自身及下游都获得头文件位置。target_link_libraries 另外声明实现符号和模块依赖，不能将二者含义混为一谈。
 
-已安装下游仍使用 find_package(vln_memory REQUIRED)，链接相应 vln_memory:: 目标，并包含 <vln_memory/bag/...>。不需要借用仓库 src 目录，也不需要手动添加源码绝对路径。
+已安装下游仍使用 find_package(vln_memory REQUIRED)，链接相应 vln_memory:: 目标，并通过 <vln_memory/...> 包含对应层的公开头。不需要借用仓库 src 目录，也不需要手动添加源码绝对路径。
 
 官方依据：[CMake target_include_directories](https://cmake.org/cmake/help/latest/command/target_include_directories.html)、[GCC 头文件搜索路径](https://gcc.gnu.org/onlinedocs/cpp/Search-Path.html)。
 

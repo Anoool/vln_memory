@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "depth_projection_internal.hpp"
+
 namespace vln_memory
 {
 namespace
@@ -35,7 +37,28 @@ bool matchesImagePose(
     time.stamp.nanosec == stamp.nanosec;
 }
 
+/** @brief 核对模型网格、历史位姿和原始采样时刻。 */
+DepthProjectionCode checkGeometry(
+  const DepthFrame & depth, const CameraModel & model, const TfPoseResult & pose, std::string_view map_frame)
+{
+  using Code = DepthProjectionCode;
+  if (model.frame_id != depth.frame_id || model.width != depth.width || model.height != depth.height) {
+    return Code::model_mismatch;
+  }
+  if (!availablePose(pose)) {return Code::pose_unavailable;}
+  if (!matchesImagePose(depth.frame_id, depth.stamp, pose.time, map_frame)) {return Code::pose_mismatch;}
+  return Code::ready;
+}
+
 }  // namespace
+
+/** @brief 供整帧/选区消费端共享完整的投影输入检查。 */
+DepthProjectionCode detail::checkDepthProjectionContext(
+  const DepthFrame & depth, const CameraModel & model, const TfPoseResult & pose, std::string_view map_frame)
+{
+  if (!validDepthFrame(depth)) {return DepthProjectionCode::invalid_depth_frame;}
+  return checkGeometry(depth, model, pose, map_frame);
+}
 
 /** @brief 只读取选中深度值，使用该帧相机射线和历史位姿生成一个地图点。 */
 DepthProjectionResult projectDepthPixelToMap(
@@ -53,17 +76,8 @@ DepthProjectionResult projectDepthPixelToMap(
   if (!std::isfinite(optical_z_m) || optical_z_m <= 0.0) {
     return {Code::invalid_depth, std::nullopt};
   }
-  if (camera_model.frame_id != depth.frame_id || camera_model.width != depth.width ||
-    camera_model.height != depth.height)
-  {
-    return {Code::model_mismatch, std::nullopt};
-  }
-  if (!availablePose(camera_pose)) {
-    return {Code::pose_unavailable, std::nullopt};
-  }
-  if (!matchesImagePose(depth.frame_id, depth.stamp, camera_pose.time, map_frame)) {
-    return {Code::pose_mismatch, std::nullopt};
-  }
+  const auto geometry = checkGeometry(depth, camera_model, camera_pose, map_frame);
+  if (geometry != Code::ready) {return {geometry, std::nullopt};}
 
   const auto ray = pixelToCameraRay(camera_model, static_cast<double>(u), static_cast<double>(v));
   if (!ray.ok()) {return {Code::ray_unavailable, std::nullopt};}

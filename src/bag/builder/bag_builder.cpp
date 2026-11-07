@@ -1,5 +1,6 @@
 #include <vln_memory/bag/builder/bag_builder.hpp>
 
+#include "preparation_metadata.hpp"
 #include "preparation_storage.hpp"
 
 #include <filesystem>
@@ -54,7 +55,7 @@ struct ConvertedFrame
 void initializeOutput(OutputFiles & output)
 {
   for (const auto * path : {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl",
-      "tf.jsonl", "reports/issues.jsonl", "reports/pending.jsonl"})
+      "tf.jsonl", "reports/issues.jsonl", "reports/pending.jsonl", detail::kPreparationMediaIndexFile})
   {
     output.ensureLines(path);
   }
@@ -494,7 +495,7 @@ Json summaryRecord(
 /** @brief 写完整数据集说明及来源，字段/版本明确区分 preparation 和正式 memory。 */
 void writeManifest(
   const BagBuildOptions & options, const BagScan & scan, const BagBuildResult & result,
-  bool automatic_tf_gap, OutputFiles & output)
+  bool automatic_tf_gap, std::string_view media_index_sha256, OutputFiles & output)
 {
   Json sources = Json::array();
   for (const auto & file : scan.source_files) {
@@ -514,10 +515,13 @@ void writeManifest(
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
       {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"},
       {"metadata_sha256", scan.metadata_sha256}, {"source_files", sources}, {"topics", topics},
+      {"media_integrity", {{"schema_version", detail::kPreparationMediaIndexSchema},
+          {"baseline", "exported"}, {"index_sha256", media_index_sha256}}},
       {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
       {"tf_gap_policy", automatic_tf_gap ? "twice_lower_median_v1" : "explicit"},
       {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
-          "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json"}},
+          "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json",
+          detail::kPreparationMediaIndexFile}},
       {"pose_computed", result.posed_frames > 0}, {"effective_model_computed", result.camera_models > 0},
       {"camera_models", result.camera_models}, {"keyframes_selected", false}});
 }
@@ -543,7 +547,8 @@ void validateReferences(
 /** @brief 将扫描、配对、逐图转换和发布串联；大对象只在本次运行生命周期内拥有。 */
 void runBuild(BagBuildOptions options, BagBuildResult & result)
 {
-  const auto work = detail::createWorkDirectory(options.bag_uri, options.output_directory);
+  const auto final_path = detail::resolveOutputDirectory(options.output_directory);
+  const auto work = detail::createWorkDirectory(options.bag_uri, final_path);
   result.work_directory = work.string();
   OutputFiles output(work, options.max_output_bytes);
   initializeOutput(output);
@@ -563,7 +568,12 @@ void runBuild(BagBuildOptions options, BagBuildResult & result)
     options, scan, [&](const auto & image, const auto * message) {
       auto prepared = processImage(image, message, options, scan, calibrations, rgb_grids, output, issues);
       if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;} else {++result.depth_frames;}
-      if (!prepared.media_path.empty()) {++result.decoded_frames;}
+      if (!prepared.media_path.empty()) {
+        ++result.decoded_frames;
+        const auto digest = detail::preparationFileSha256(work / prepared.media_path);
+        output.appendLine(detail::kPreparationMediaIndexFile,
+          detail::preparationMediaRow(image.source.message_id, prepared.media_path, digest).dump());
+      }
       if (prepared.model_ready) {++result.camera_models;}
       if (prepared.camera_pose_ready &&
         (image.source.topic != options.rgb_camera.image_topic || prepared.body_pose_ready))
@@ -590,12 +600,9 @@ void runBuild(BagBuildOptions options, BagBuildResult & result)
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
   writeJsonFile(output, "reports/summary.json", summaryRecord(options, scan, sync, result));
-  writeManifest(options, scan, result, automatic_tf_gap, output);
   output.close();
-  const auto final_path = fs::weakly_canonical(options.output_directory);
-  if (fs::exists(final_path) || fs::is_symlink(final_path)) {
-    throw BagBuildError("output_exists", "Output appeared during build");
-  }
+  const auto media_index_sha256 = detail::preparationFileSha256(work / detail::kPreparationMediaIndexFile);
+  writeManifest(options, scan, result, automatic_tf_gap, media_index_sha256, output);
   detail::publishDirectory(work, final_path);
   result.output_directory = final_path.string();
   result.work_directory.clear();

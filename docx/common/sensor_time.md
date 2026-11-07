@@ -22,17 +22,17 @@ sec 可负、零时刻合法，nanosec 必须 <1e9。先转换 int64 再乘 1e9�
 
 ## 3. 当前模块是否同步
 
-现在 RGB、Depth、CameraInfo 都保存原始 header.stamp，并可调用本检查器检查候选消息的采样时差；它们不会自行对齐时间。没有实际 bag，不能判定设备同步情况。
+RGB、Depth、CameraInfo 保存原始 header.stamp，BagBuilder 在声明的同钟段内按配置配对，PreparationReader 沿用已保存的时间和引用。已有固定真实短包的数值验收，曝光同步与物理注册精度按各自采集依据判断。
 
 后续 builder 应统计各流频率、重复/倒退时间、RGB-D 有符号时差分布、CameraInfo 变化点、TF 覆盖和未配对比例。相同时钟才能分析 bag 接收时间与采样时间的延迟；不能把不同域相减后的数字当成传输延迟。模拟时间重置/硬件时钟重启必须分 clock epoch，不能跨重置点配对。
 
-ROS message_filters 的 ExactTime/ApproximateTime 按消息时间做队列同步；ApproximateTime 不会实现硬件同步或消除运动误差。离线 builder 会建立可重现的索引配对规则，当前这个函数仅核验已经选出的候选帧，不承担匹配队列。
+离线 BagBuilder 已采用确定的索引配对规则，checkSensorTimes 负责候选的时间差检查。原始时间、实际 delta、门限和策略一同保存。
 
 ## 4. 时间不同时，分别用哪一个
 
 | 用途 | 应采用的时间 | 原因与处理 |
 | --- | --- | --- |
-| Observation 索引/关键帧排序 | RGB header.stamp | 视觉语义证据以 RGB 为主；同时保留 depth_stamp，不取平均 |
+| Observation stamp/索引与关键帧排序 | RGB header.stamp | stamp 等于 rgb_stamp，depth_stamp 保留 Depth 原始时间 |
 | RGB 对象/区域在图中的证据 | RGB header.stamp | 对应真正的 RGB 采样；模型返回时间不能替代它 |
 | 深度点反投影与 map 变换 | Depth header.stamp | 深度属于该时刻的相机位姿，TF 查询在该时刻进行 |
 | RGB 相机/底盘观测位姿 | RGB header.stamp | 单独查询该时刻 TF；不能拿来替代 Depth 位姿 |
@@ -45,13 +45,13 @@ ROS message_filters 的 ExactTime/ApproximateTime 按消息时间做队列同步
 | 记忆构建/入库时间 | 实际处理系统时间，单独 stored_at/processed_at | 是软件处理时刻，不是物体被观察到的时间 |
 | 在线规划和底层控制 | 当前控制周期的机器人状态/控制时钟 | 历史传感数据先按采样时间转到 map，再结合当前状态、数据新鲜度和地图版本规划 |
 
-**时间容差通过不等于像素同时曝光，更不等于物理配准通过。** RGB-D 差异超限时应拒绝组合并保留 pending。容差通过但机器人运动明显时，仍有投影误差；降低容差、使用硬件同步或明确运动补偿。运动补偿涉及两个时刻的相机位姿和静态场景假设，当前没有实现，不能用改 stamp 或平均时间来代替。运动物体需要额外模型。
+**时间容差通过不等于像素同时曝光，更不等于物理配准通过。** RGB-D 差异超限时应拒绝组合并保留 pending。容差通过但机器人运动明显时，仍有投影误差；降低容差、使用硬件同步或明确运动补偿。当前单点 Depth→RGB 使用两图各自时刻的相机位姿，并按地图点静止计算候选像素。运动物体和遮挡需要额外模型或证据。
 
 在线控制不能直接把 bag 的历史时间当“现在”，也不能把历史图像坐标直接当当前车体坐标。记忆中对象的 map 坐标还需核对 map/geometry revision、定位跳变和观测新鲜度；控制器由当前定位和路径结果闭环执行。当前模块不会发布任何控制指令。
 
-## 5. 未来 JSONL 交接字段（规划，尚未写文件）
+## 5. Preparation 与正式 Observation 的交接
 
-builder 应保留：rgb_stamp、depth_stamp、各 CameraInfo 原始 stamp、每条源消息 bag_time、clock_id/epoch、map_id、rgb/depth 各自 pose 查询时间、配对 delta/tolerance/status、标定策略/版本/依据、来源 topic 和消息 ID。示例字段不等于已经确定完整 Observation schema。
+现有 preparation 已保存原始采样时间、来源、配对、标定与 TF 依据，单对和索引读取入口复用这些字段。后续业务 Observation 按统一参考 stamp 聚合两图及相关信息，map_id、geometry_revision 和业务 schema 随离线构建实现。字段绑定和简化相机模型条件见 [Observation 参考时刻契约](../project/observation_time_contract.md)。
 
 stamp 始终用 {sec,nanosec} 整数对象；若保存绝对 int64 纳秒，写成十进制字符串，避免 JS/Viewer 读取超出 2^53 的 JSON 数值而损失精度。没有检查的时差用 null 加策略说明，不能写 0 冒充同步。
 

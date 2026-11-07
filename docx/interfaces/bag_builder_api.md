@@ -75,6 +75,7 @@ BagBuildResult：status 为 failed/completed/completed_with_issues；code/messag
 | bag_manifest.json | 数据集类型、完成状态、bag_id、源分卷/指纹、话题清单、有效配置、TF 覆盖、文件清单 | 先确认 artifact_kind=bag_preparation；不等同正式 memory manifest |
 | messages.jsonl | 每条配置消息的身份/记录时间/序号/摘要/可空 CDR 路径 | message_id 是所有其他来源引用的根，包括坏 CDR 和空 TFMessage |
 | frames.jsonl | 每个 RGB/Depth 消息的原始元数据、decode_code、标准路径、标定/历史 TF/质量 | source.message_id；metadata_available=false 时 stamp=null；media_path=null 表示没有标准图像；source_data_bytes 为源 Image 像素或 CompressedImage 负载字节数，numeric_quality_passed 只表示数值质量 |
+| media_sha256.jsonl | 一帧导出媒体的 message_id、相对路径和文件 SHA-256 | manifest.media_integrity 绑定索引内容；历史无摘要产物可继续读取 |
 | rgbd_pairs.jsonl | 一对两图 ID/原始 stamp/有符号 delta_ns、标定 ID、策略、准备状态及原因 | pair_id；frames 中各自查询端点仍为自身采样时刻 |
 | camera_info.jsonl | 每条原始完整 K/D/R/P/ROI/binning 和来源/校验结果 | calibration_id=来源 message_id，重复广播来源不合并消失 |
 | tf.jsonl | 每条 TransformStamped 原始父子/时间/几何/来源条目/insert_code | source.message_id + transform_index；静态与动态显式区分 |
@@ -102,7 +103,7 @@ prepared_for_geometry 要求两图解码、各自标定/有效模型、各自的
 
 builder_version=5 输出数值位姿。frames 中 map_camera_tf 和 map_body_tf 保留原始时间检查及端点引用，新增 pose_code、pose_failed_frame 和可空 pose。pose 包含 target_frame、source_frame、translation_m、rotation_xyzw，表示 T_target_source。code 仍为时间状态，pose_code 为独立求解状态。
 
-pose_computed 在 Depth 帧表示相机位姿成功，在 RGB 帧表示相机和底盘均成功，在配对表示两路相机与 RGB 时刻底盘均成功。摘要的 posed_frames、posed_pairs 给出数量。manifest 的 pose_computed 和摘要的 numeric_poses_computed 表示至少一帧所需位姿成功。配对的准备状态还检查解码、模型、注册和深度质量。effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功，完整数量看 camera_models。关键帧及正式 observations.jsonl 待实现。
+pose_computed 在 Depth 帧表示相机位姿成功，在 RGB 帧表示相机和底盘均成功，在配对表示两路相机与 RGB 时刻底盘均成功。摘要的 posed_frames、posed_pairs 给出数量。manifest 的 pose_computed 和摘要的 numeric_poses_computed 表示至少一帧所需位姿成功。配对的准备状态还检查解码、模型、注册和深度质量。effective_model_computed 逐帧表示实际模型成功，逐对表示两图均成功，完整数量看 camera_models。关键帧和正式 observations.jsonl 由 [观测数据集入口](../modules/engine/observation_dataset.md) 从 preparation 生成。正式观测采用 RGB 时间作为参考 stamp，保留两图原始时间、差值、各自模型和位姿。字段组织与共同相机模型的条件见 [Observation 时间契约](../project/observation_time_contract.md)。
 
 ## 7. 检查方法
 

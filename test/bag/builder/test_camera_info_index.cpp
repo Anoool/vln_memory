@@ -3,10 +3,14 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 namespace
 {
 using namespace vln_memory;
+
+static_assert(!std::is_constructible_v<CameraInfoIndex, std::vector<BagCameraInfoRecord> &&>,
+  "CameraInfoIndex must reject temporary records");
 
 /** @brief Release 也验证契约，异常指出失败语义。 */
 void expect(bool condition, const char * message)

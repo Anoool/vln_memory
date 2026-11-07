@@ -1,6 +1,13 @@
 # vln_memory
 
-`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前可用的 `bag_builder` 将 ROS 2 RGB-D 录包转换为离线观测准备数据，保留图像、标定、历史位姿、消息来源与质量报告，供后续构建空间记忆。
+`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前已跑通 **ROS bag → preparation → 正式观测 → 物品与空间实体创建**，处于 S3 几何与工作库阶段。已发布的 preparation 和正式观测可在无 ROS 环境中使用。
+
+| 入口 | 作用 |
+| --- | --- |
+| `bag_builder` | 读取 RGB-D 录包，提取媒体、标定和历史 TF，保存配对、来源及待处理原因。 |
+| `memory_build_input` | 单独生成用途筛选、关键帧和分批清单，适合检查选帧结果。 |
+| `memory_observation_dataset` | 直接从 preparation 筛选并发布正式观测及批次。 |
+| `createObjectEntity` / `createRegionEntity` | C++ 接口。用观测和深度选区或空间内部确认创建拥有型实体记录。 |
 
 ## 安装
 
@@ -34,67 +41,87 @@ colcon test-result --verbose
 
 ### 无 ROS 构建
 
-仅使用核心库时，在仓库根目录执行以下命令。此模式提供标定、配对、TF、单点投影和 preparation 读取接口。录包 CLI 由 ROS 构建提供。
+已经有 preparation 数据时，可用无 ROS 构建完成回读、观测发布、投影和实体创建。首次从 ROS bag 提取数据使用上面的 ROS 构建。
 
 ```bash
-sudo apt install build-essential cmake libopencv-dev nlohmann-json3-dev
+sudo apt install build-essential cmake libopencv-dev nlohmann-json3-dev libssl-dev
 cmake -S . -B build/standalone -DVLN_MEMORY_ENABLE_ROS=OFF -DBUILD_TESTING=ON
 cmake --build build/standalone --parallel 2
 ctest --test-dir build/standalone --output-on-failure
 cmake --install build/standalone --prefix "$PWD/build/standalone-install"
 ```
 
-## 使用示例
+## 快速使用
 
-输入是单一时钟段的未压缩 SQLite rosbag。可传入含 `metadata.yaml` 的录包目录或指定一个 `.db3` 分卷。先复制配置，根据设备和录制方式填写 RGB、Depth、CameraInfo 与 TF 话题、坐标系、深度单位、注册状态及共同时间基准的依据。详见 [配置说明](docx/config/vln_memory.md)。
+### 1. 从录包导出 preparation
+
+输入可为带 `metadata.yaml` 的未压缩 SQLite 录包目录，或其中一个 `.db3` 分卷。复制配置后按采集条件填写话题、坐标系、深度单位、注册状态及共同时间基准的依据。输出目录应尚未存在。详见 [录包配置](docx/config/vln_memory.md)。
 
 ```bash
 cp config/vln_memory.yaml /tmp/vln_memory-local.yaml
-# 编辑 /tmp/vln_memory-local.yaml，并替换下面的录包路径
+# 按录包实际内容编辑配置，并替换下方录包路径
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 run vln_memory bag_builder --config /tmp/vln_memory-local.yaml \
   --bag /absolute/path/to/recording --output "$PWD/build/my_preparation"
 ```
 
-`bag.save_raw_cdr` 默认 `false`，保留提取产物及消息摘要，省略 CDR 副本。显式 `true` 可保存 CDR。已有数据使用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 转换成新的精简目录。
+`bag.sync_tolerance_ns=0` 使用精确时间配对，正值使用门限内一对一最近配对。两路原始时间和时差都会保留。`bag.save_raw_cdr` 默认省略 CDR 副本并保留消息摘要，显式设为 `true` 可保留原始消息。新导出绑定 PNG/NPY 内容摘要，历史数据可用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 生成带摘要的新副本。
 
-输出目录必须尚未存在。配置项 `bag.sync_tolerance_ns` 为 `0` 时按原始时间戳精确配对，正值启用容差内的一对一最近配对。样例中的 30 ms 是试用值，请按录制条件设定。配对会保留两路原始时间与实际时差，物理同步与图像注册需要独立验证。
+`bag_manifest.json` 描述来源与有效配置，`frames.jsonl`、`rgbd_pairs.jsonl` 记录帧和配对，媒体位于 `evidence/`。在 `reports/` 查看统计、错误及待处理原因。接口和回读方式见 [BagBuilder](docx/interfaces/bag_builder_api.md) 与 [PreparationReader](docx/modules/bag/preparation_reader.md)。
 
-- `bag_manifest.json` 记录数据集版本、来源和有效配置。
-- `frames.jsonl` 和 `rgbd_pairs.jsonl` 记录帧、配对、模型、位姿和状态，`evidence/` 保存媒体，原始 CDR 按配置保存。
-- `reports/summary.json`、`reports/issues.jsonl` 和 `reports/pending.jsonl` 记录统计、问题与待处理原因。`completed_with_issues` 表示数据集已写出，需结合 `prepared_pairs` 和报告判断可用性。
+### 2. 发布正式观测
 
-C++ 下游可用 `find_package(vln_memory CONFIG REQUIRED)`，链接 `vln_memory::vln_memory_preparation_reader`，调用 `loadPreparedPair(root, pair_id)` 读取已保存的 v5/v6/v7 配对。遍历多对数据可先调用 `openPreparation(root)` 建立索引，再通过 `reader.pairs()` 和 `reader.loadPair(pair_id)` 访问。完整字段及调用方式见 [BagBuilder 接口](docx/interfaces/bag_builder_api.md) 和 [Preparation 读取接口](docx/modules/bag/preparation_reader.md)。
+从上一步的 preparation 直接发布。将示例地图 ID、轨迹版本、frame 和依据换成这批数据的实际上下文，其中 `--map-frame` 必须与 preparation 一致。`--purpose rgb` 选择有 RGB 媒体的可读配对，`depth_map` 要求深度模型与历史位姿，`prepared_rgbd` 还要求来源配对达到完整 RGB-D 几何准备状态。
 
-## 项目进度与下一步
+```bash
+ros2 run vln_memory memory_observation_dataset \
+  --input "$PWD/build/my_preparation" --output "$PWD/build/my_observations" \
+  --purpose rgb --batch-size 4 \
+  --map-id sample_map --geometry-revision trajectory-v1 \
+  --map-frame map --map-basis "Recorded map and TF for this acquisition"
+```
 
-当前处于 **S2 离线观测准备**。原设计第 1、2 部分仍在实施中。
+无 ROS 安装使用 `build/standalone-install/lib/vln_memory/memory_observation_dataset`，参数相同。产物包括 `observation_manifest.json`、`observations.jsonl`、`batches.jsonl`、选帧清单和问题报告。媒体仍从来源 preparation 回读。只需预览选帧与分批时，可独立运行 [memory_build_input](docx/modules/engine/build_input.md)。完整输出与错误语义见 [观测数据集发布](docx/modules/engine/observation_dataset.md)。
+
+### 3. 使用观测创建实体
+
+C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::vln_memory_entity_builder`。用 `deserializeObservation` 读取 `observations.jsonl` 中的一行，用 `openPreparation` 打开对应来源。随后选择实际业务入口：
+
+- `createObjectEntity` 接收深度原图的 `bbox` 或 `polygon`，用该深度帧的历史位姿取得实测表面代表点。
+- `createRegionEntity` 接收上游给出的区域内部确认，在 RGB 参考时刻从历史底盘位姿取代表点。
+- 缺定位条件时保留 `pending_location`、观测引用和原因。有效记录由调用方持有，实体工作库待接入。
+
+详见 [实体契约](docx/modules/memory/entity.md)、[创建接口](docx/modules/engine/entity_builder.md) 和 [安装导出](docx/project/CMakeLists.md)。
+
+## 项目进度
 
 | 阶段 | 当前状态 |
 | --- | --- |
-| S0 数据契约与配置 | 传感器时间、来源和准备数据契约以及录包配置已落地。正式观测、地图及版本契约待完善。 |
-| S1 读取与配对 | 已支持 SQLite 录包读取、原始图像及指定压缩格式解码、精确配对与容差内最近配对、原始消息与媒体导出。 |
-| S2 完整离线观测 | 已支持有效相机模型、历史 TF 位姿、单点 Depth→map 与 Depth→RGB 候选投影、米制 NPY 与可选源 16UC1 无损 PNG，以及持有索引的多对数据读取。多对筛选、关键帧、批次及正式观测待完成。 |
-| S3–S6 记忆构建与交付 | 待实现区域投影、实体与关系、SQLite 工作库、构建工具与模型批次、纠错与标注、版本发布及 MemoryViewer。 |
+| S0–S1 数据契约、读取与配对 | 传感器时间、来源、录包配置、读取配对及 preparation 导出已实现。完整构建系统配置随业务模块补齐。 |
+| S2 离线观测 | 相机模型、历史 TF、索引回读、用途筛选、关键帧和正式观测发布已实现。 |
+| S3 几何与工作库 | 单点和深度原图区域投影、物品及空间创建已实现。事务工作库、实体更新、关系和索引待实现。 |
+| S4–S6 构建、发布与查看 | 八项构建工具、模型批次、纠错标注、完整记忆版本和 MemoryViewer 待实现。 |
 
-固定真实短包已通过 PNG/NPY 回读、TF 端点复核和三个投影点的数值对照。该样本的 10 对数据均保留注册待核实状态。实际深度尺度、注册精度和曝光同步仍需独立实测。
+真实短包已验证媒体回读、历史位姿、数值投影和物品创建。空间定位与异常场景使用带明确确认的构造录包验证。深度物理尺度、RGB/Depth 注册精度和曝光同步仍需独立验收。
 
-**下一步**是在离线构建入口复用 `loadPreparedPair`，按用途筛选多对数据，保留来源和 pending 原因。基于有效底盘位姿与显式采样规则选择关键帧并组成批次，再随构建流程落实正式观测及其地图、版本和证据引用。验收顺序见 [系统规划第 10 节](docx/project/system_plan.md#102-后续任务与依赖)。
+**下一步**先实现 SQLite 工作库，使已定位和待定位实体都能按原 ID 写入、重启并回读，随后补实体修订与关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
 
 ## 目录结构
 
 ```text
-include/vln_memory/bag/  # 公共头文件
-src/bag/                 # common、rgb、depth、camera_info、tf、builder 实现
-src/apps/                # bag_builder 命令行入口
-config/                  # 录包配置及采集示例
-test/bag/                # 核心、ROS 适配和录包回归
-test/install_consumer/   # 安装后接口验证
-docx/                    # 系统规划、接口文档和验收记录
+include/vln_memory/{bag,memory,engine}/  # 按层公开的 C++ 接口
+src/bag/                                # 传感器、几何和 preparation
+src/memory/                             # Observation 与 Entity 记录
+src/engine/                             # 选帧、观测发布、回读投影和实体创建
+src/apps/                               # 命令行入口
+test/{bag,memory,engine}/                # 模块与链路验证
+test/install_consumer/                  # 安装包下游验证
+config/                                 # 录包配置及采集示例
+docx/                                   # 架构、模块说明、规划及验收记录
 ```
 
-更多资料见 [文档导航](docx/README.md)、[源码架构](docx/project/architecture.md) 和 [设计范围与验收](docx/project/sections_1_2_scope.md)。
+从 [文档导航](docx/README.md) 查看各模块，依赖和数据边界见 [当前架构](docx/project/architecture.md)。
 
 ## 贡献指南
 

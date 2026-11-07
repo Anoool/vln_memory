@@ -22,7 +22,7 @@ ros2 run vln_memory preparation_compact \
 
 目标的每个配对通过完整 PreparationReader 读取后，使用与 BagBuilder 共用的 Linux renameat2 不覆盖发布逻辑生成最终目录。既有目标和源/目标包含关系均被拒绝。失败保留 work_directory，源文件由读取操作访问。
 
-转换时按源文件的大小、修改时间及规范路径核对常规变化，输入应为稳定的已发布数据。消息来源校验暂存 O(N) 元数据，后续验证前释放；像素按当前配对加载。
+转换时按源文件的大小、修改时间及规范路径核对常规变化。对已有媒体摘要的源，逐个核对复制内容并保留基线类型；历史无摘要数据以此次转换读到的内容生成 `legacy_conversion` 基线。两种输出都写入 `media_sha256.jsonl` 和 manifest 绑定。历史基线不能证明转换前的字节内容。输入应为稳定的已发布数据，像素按当前配对加载。
 
 新导出使用 `bag.save_raw_cdr`，API 和 YAML 默认 false。true 模式仍保存原始消息，并与历史数据一样核对 CDR 路径和长度。v7 的保存策略字段必须是 JSON 布尔值，缺项或类型错误明确返回元数据错误。
 

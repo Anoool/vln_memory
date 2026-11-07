@@ -49,6 +49,7 @@ endif()
 # 模型库独立于 ROS，内部复用已安装的 OpenCV 几何运算。
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgcodecs)
 find_package(nlohmann_json REQUIRED)
+find_package(OpenSSL REQUIRED)
 add_library(vln_memory_camera_model SHARED src/bag/camera_info/camera_model.cpp)
 add_library(vln_memory::vln_memory_camera_model ALIAS vln_memory_camera_model)
 target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE opencv_core opencv_calib3d)
@@ -56,7 +57,8 @@ target_include_directories(vln_memory_camera_model SYSTEM PRIVATE ${OpenCV_INCLU
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_camera_model PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-add_library(vln_memory_depth_projection SHARED src/bag/depth/depth_projection.cpp)
+add_library(vln_memory_depth_projection SHARED
+  src/bag/depth/depth_projection.cpp src/bag/depth/depth_region_projection.cpp)
 add_library(vln_memory::vln_memory_depth_projection ALIAS vln_memory_depth_projection)
 target_link_libraries(vln_memory_depth_projection PUBLIC
   vln_memory_depth vln_memory_camera_model vln_memory_tf)
@@ -65,12 +67,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_library(vln_memory_preparation_reader SHARED
   src/bag/builder/preparation_reader.cpp
+  src/bag/builder/preparation_metadata.cpp
   src/bag/builder/preparation_storage.cpp
   src/bag/builder/preparation_compactor.cpp)
 add_library(vln_memory::vln_memory_preparation_reader ALIAS vln_memory_preparation_reader)
 target_link_libraries(vln_memory_preparation_reader PUBLIC
   vln_memory_depth vln_memory_camera_model vln_memory_tf
-  PRIVATE nlohmann_json::nlohmann_json opencv_core opencv_imgcodecs)
+  PRIVATE nlohmann_json::nlohmann_json OpenSSL::Crypto opencv_core opencv_imgcodecs)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_preparation_reader PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -78,7 +81,69 @@ add_executable(preparation_compact src/apps/preparation_compact_main.cpp)
 target_link_libraries(preparation_compact PRIVATE vln_memory_preparation_reader nlohmann_json::nlohmann_json)
 install(TARGETS preparation_compact DESTINATION lib/${PROJECT_NAME})
 
-set(memory_export_targets vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
+# 正式观测记录复用传感器原语，不依赖 builder、ROS 或模型服务。
+add_library(vln_memory_observation SHARED src/memory/observation.cpp src/memory/observation_json.cpp)
+add_library(vln_memory::vln_memory_observation ALIAS vln_memory_observation)
+target_link_libraries(vln_memory_observation PUBLIC vln_memory_camera_model vln_memory_tf vln_memory_depth
+  PRIVATE nlohmann_json::nlohmann_json)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_observation PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# 组装层单向消费 Reader 与正式 Observation。
+add_library(vln_memory_observation_builder SHARED src/engine/observation_builder.cpp)
+add_library(vln_memory::vln_memory_observation_builder ALIAS vln_memory_observation_builder)
+target_link_libraries(vln_memory_observation_builder PUBLIC vln_memory_preparation_reader vln_memory_observation)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_observation_builder PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# 离线输入消费现有 preparation，保持无 ROS/模型服务依赖。
+add_library(vln_memory_build_input SHARED src/engine/build_input.cpp)
+add_library(vln_memory::vln_memory_build_input ALIAS vln_memory_build_input)
+target_link_libraries(vln_memory_build_input PUBLIC vln_memory_preparation_reader
+  PRIVATE nlohmann_json::nlohmann_json)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_build_input PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_executable(memory_build_input src/apps/memory_build_input_main.cpp)
+target_link_libraries(memory_build_input PRIVATE vln_memory_build_input nlohmann_json::nlohmann_json)
+install(TARGETS memory_build_input DESTINATION lib/${PROJECT_NAME})
+
+# 正式观测数据集在已核验的 preparation 上完成选择、组装和目录发布。
+add_library(vln_memory_observation_dataset SHARED src/engine/observation_dataset.cpp)
+add_library(vln_memory::vln_memory_observation_dataset ALIAS vln_memory_observation_dataset)
+target_link_libraries(vln_memory_observation_dataset PUBLIC
+  vln_memory_build_input vln_memory_observation_builder PRIVATE nlohmann_json::nlohmann_json)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_observation_dataset PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_executable(memory_observation_dataset src/apps/memory_observation_dataset_main.cpp)
+target_link_libraries(memory_observation_dataset PRIVATE vln_memory_observation_dataset nlohmann_json::nlohmann_json)
+install(TARGETS memory_observation_dataset DESTINATION lib/${PROJECT_NAME})
+
+# 正式观测回读和区域投影入口，几何核心独立于 preparation。
+add_library(vln_memory_observation_depth_region SHARED src/engine/observation_depth_region.cpp)
+add_library(vln_memory::vln_memory_observation_depth_region ALIAS vln_memory_observation_depth_region)
+target_link_libraries(vln_memory_observation_depth_region PUBLIC
+  vln_memory_observation vln_memory_preparation_reader vln_memory_depth_projection)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_observation_depth_region PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# 实体数据及身份分配独立于 Reader；创建流程在 engine 中复用观测区域投影。
+add_library(vln_memory_entity SHARED src/memory/entity.cpp)
+add_library(vln_memory::vln_memory_entity ALIAS vln_memory_entity)
+target_link_libraries(vln_memory_entity PRIVATE OpenSSL::Crypto)
+add_library(vln_memory_entity_builder SHARED src/engine/entity_builder.cpp)
+add_library(vln_memory::vln_memory_entity_builder ALIAS vln_memory_entity_builder)
+target_link_libraries(vln_memory_entity_builder PUBLIC vln_memory_entity vln_memory_observation_depth_region)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_entity PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(vln_memory_entity_builder PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+set(memory_export_targets vln_memory_entity vln_memory_entity_builder vln_memory_observation_depth_region vln_memory_observation_dataset vln_memory_observation_builder vln_memory_observation vln_memory_build_input vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
@@ -120,7 +185,6 @@ if(VLN_MEMORY_ENABLE_ROS)
   find_package(rclcpp REQUIRED)
   find_package(rcutils REQUIRED)
   find_package(yaml-cpp REQUIRED)
-  find_package(OpenSSL REQUIRED)
   find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
   find_package(cv_bridge REQUIRED)
   find_package(compressed_depth_image_transport REQUIRED)
@@ -170,12 +234,32 @@ endforeach()
 # 两种构建模式执行同一份核心测试；真实消息适配测试只在 ROS 模式启用。
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(test_entity test/memory/test_entity.cpp)
+  target_link_libraries(test_entity PRIVATE vln_memory_entity_builder vln_memory_observation_builder)
+  add_test(NAME entity_core COMMAND test_entity)
+  add_executable(test_observation test/memory/test_observation.cpp)
+  target_link_libraries(test_observation PRIVATE vln_memory_observation nlohmann_json::nlohmann_json)
+  add_test(NAME observation_core COMMAND test_observation)
+  add_executable(test_observation_builder test/engine/test_observation_builder.cpp)
+  target_link_libraries(test_observation_builder PRIVATE vln_memory_observation_builder)
+  add_test(NAME observation_builder_core COMMAND test_observation_builder)
+  add_executable(test_observation_preparation test/memory/test_observation_preparation.cpp)
+  target_link_libraries(test_observation_preparation PRIVATE vln_memory_observation_builder vln_memory_build_input)
+  add_executable(test_build_input test/engine/test_build_input.cpp)
+  target_link_libraries(test_build_input PRIVATE vln_memory_build_input nlohmann_json::nlohmann_json)
+  add_test(NAME build_input_core COMMAND test_build_input)
   add_executable(test_preparation_reader test/bag/builder/test_preparation_reader.cpp)
   target_link_libraries(test_preparation_reader PRIVATE vln_memory_preparation_reader
     vln_memory_depth_projection nlohmann_json::nlohmann_json)
   add_executable(test_depth_projection test/bag/depth/test_depth_projection.cpp)
   target_link_libraries(test_depth_projection PRIVATE vln_memory_depth_projection)
   add_test(NAME depth_projection_core COMMAND test_depth_projection)
+  add_executable(test_depth_region_projection test/bag/depth/test_depth_region_projection.cpp)
+  target_link_libraries(test_depth_region_projection PRIVATE vln_memory_depth_projection)
+  add_test(NAME depth_region_projection_core COMMAND test_depth_region_projection)
+  add_executable(test_observation_depth_region test/engine/test_observation_depth_region.cpp)
+  target_link_libraries(test_observation_depth_region PRIVATE
+    vln_memory_observation_depth_region vln_memory_observation_builder)
   add_executable(test_camera_model test/bag/camera_info/test_camera_model.cpp)
   target_link_libraries(test_camera_model PRIVATE vln_memory_camera_model)
   add_test(NAME camera_model_core COMMAND test_camera_model)
@@ -217,9 +301,29 @@ if(BUILD_TESTING)
     target_include_directories(test_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
     add_test(NAME bag_builder_ros COMMAND test_bag_builder ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
     set_tests_properties(bag_builder_ros PROPERTIES FIXTURES_SETUP bag_builder_dataset)
+    add_test(NAME build_input_dataset COMMAND test_build_input --bag-fixture ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(build_input_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     add_test(NAME preparation_reader COMMAND test_preparation_reader ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
     set_tests_properties(preparation_reader PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
+    add_test(NAME observation_depth_region COMMAND test_observation_depth_region
+      --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(observation_depth_region PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
+    add_test(NAME entity_preparation COMMAND test_entity
+      --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
+    set_tests_properties(entity_preparation PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME observation_dataset COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/engine/check_observation_dataset.py
+      --binary $<TARGET_FILE:memory_observation_dataset>
+      --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
+      --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_dataset_checks)
+    set_tests_properties(observation_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
+    add_test(NAME observation_preparation COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/memory/check_preparation_observations.py
+      --binary $<TARGET_FILE:test_observation_preparation>
+      --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
+      --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_checks)
+    set_tests_properties(observation_preparation PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     add_test(NAME bag_output_numpy COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/bag/builder/test_bag_output.py ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts)
     set_tests_properties(bag_output_numpy PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
@@ -242,6 +346,11 @@ endif()
 # Linux 安装后共享库按自身目录寻找兄弟依赖，包外消费者无需为本包手动补 LD_LIBRARY_PATH。
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set_target_properties(${memory_export_targets} PROPERTIES INSTALL_RPATH "$ORIGIN")
+  set_target_properties(preparation_compact memory_build_input memory_observation_dataset
+    PROPERTIES INSTALL_RPATH "$ORIGIN/..")
+  if(TARGET bag_builder)
+    set_target_properties(bag_builder PROPERTIES INSTALL_RPATH "$ORIGIN/..")
+  endif()
 endif()
 
 install(TARGETS ${memory_export_targets}
@@ -250,6 +359,12 @@ install(TARGETS ${memory_export_targets}
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
 # 安装时保留层/模块路径，下游 include 与源码中的公开路径保持一致。
+install(FILES include/vln_memory/memory/observation.hpp include/vln_memory/memory/entity.hpp
+  DESTINATION include/vln_memory/memory)
+install(FILES include/vln_memory/engine/build_input.hpp include/vln_memory/engine/observation_builder.hpp
+  include/vln_memory/engine/observation_dataset.hpp include/vln_memory/engine/observation_depth_region.hpp
+  include/vln_memory/engine/entity_builder.hpp
+  DESTINATION include/vln_memory/engine)
 install(FILES include/vln_memory/bag/common/sensor_types.hpp
   include/vln_memory/bag/common/sensor_time.hpp
   include/vln_memory/bag/common/sensor_names.hpp
@@ -263,7 +378,7 @@ install(FILES include/vln_memory/bag/builder/rgbd_sync.hpp
 install(FILES include/vln_memory/bag/rgb/rgb.hpp
   DESTINATION include/vln_memory/bag/rgb)
 install(FILES include/vln_memory/bag/depth/depth.hpp
-  include/vln_memory/bag/depth/depth_projection.hpp
+  include/vln_memory/bag/depth/depth_projection.hpp include/vln_memory/bag/depth/depth_region_projection.hpp
   DESTINATION include/vln_memory/bag/depth)
 install(FILES include/vln_memory/bag/camera_info/camera_info.hpp
   include/vln_memory/bag/camera_info/camera_model.hpp

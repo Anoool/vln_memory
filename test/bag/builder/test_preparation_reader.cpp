@@ -51,6 +51,15 @@ void writeLines(const fs::path & path, const std::vector<Json> & rows)
   expect(static_cast<bool>(file), "Cannot update fixture records");
 }
 
+/** @brief 将独立测试副本改为发布摘要前的历史契约。 */
+void removeMediaSeal(const fs::path & root, Json & manifest)
+{
+  manifest.erase("media_integrity");
+  auto & files = manifest.at("files");
+  files.erase(std::remove(files.begin(), files.end(), Json("media_sha256.jsonl")), files.end());
+  fs::remove(root / "media_sha256.jsonl");
+}
+
 /** @brief 调用公开入口并要求拿到该 ID 关联的两帧与其各自位姿。 */
 PreparedPair readPair(const fs::path & root, const std::string & id)
 {
@@ -121,6 +130,75 @@ void comparePose(const std::optional<TfPoseResult> & first, const std::optional<
     first->pose->rotation_xyzw == second->pose->rotation_xyzw, "Indexed pose differs");
 }
 
+/** @brief 比较两入口返回的原始数据，包含 ROI/binning/时刻，不能只比较有效 K。 */
+void compareOriginal(const std::optional<CameraInfoData> & a, const std::optional<CameraInfoData> & b)
+{
+  expect(a.has_value() == b.has_value(), "Original calibration presence differs");
+  if (!a) {return;}
+  expect(a->stamp.sec == b->stamp.sec && a->stamp.nanosec == b->stamp.nanosec &&
+    a->topic == b->topic && a->frame_id == b->frame_id && a->width == b->width && a->height == b->height &&
+    a->distortion_model == b->distortion_model && a->k == b->k && a->d == b->d && a->r == b->r && a->p == b->p &&
+    a->binning_x == b->binning_x && a->binning_y == b->binning_y &&
+    a->roi.x_offset == b->roi.x_offset && a->roi.y_offset == b->roi.y_offset &&
+    a->roi.width == b->roi.width && a->roi.height == b->roi.height && a->roi.do_rectify == b->roi.do_rectify,
+    "Original calibration data differs");
+}
+
+/** @brief 新旧入口的选择配置与实际选择/规范化状态须完整一致。 */
+void compareCalibration(const PreparedCalibration & a, const PreparedCalibration & b)
+{
+  const auto & x = a.selection;
+  const auto & y = b.selection;
+  expect(x.camera_info_topic == y.camera_info_topic && x.image_topic == y.image_topic &&
+    x.optical_frame == y.optical_frame && x.binding_basis == y.binding_basis &&
+    x.image_domain == y.image_domain && x.time_policy == y.time_policy && x.clock_relation == y.clock_relation &&
+    x.max_delta_ns == y.max_delta_ns && x.compatibility == y.compatibility &&
+    a.calibration_id == b.calibration_id && a.source_message_id == b.source_message_id &&
+    a.selection_code == b.selection_code && a.selection_message == b.selection_message &&
+    a.calibration_code == b.calibration_code && a.used_static_calibration == b.used_static_calibration &&
+    a.timing.has_value() == b.timing.has_value() && a.source_validation_code == b.source_validation_code &&
+    a.source_validation_message == b.source_validation_message &&
+    a.normalized_validation_code == b.normalized_validation_code &&
+    a.source_compatibility == b.source_compatibility && a.normalization_applied == b.normalization_applied &&
+    a.source_nonfinite == b.source_nonfinite && a.original_unavailable_reason == b.original_unavailable_reason,
+    "Calibration selection/state differs");
+  if (a.timing) {expect(a.timing->code == b.timing->code && a.timing->delta_ns == b.timing->delta_ns, "Calibration timing differs");}
+  compareOriginal(a.original, b.original);
+}
+
+/** @brief 比较新增存储、摘要及上下文，确保所有返回值独立拥有且两入口等价。 */
+void compareAssemblyMetadata(const PreparedPair & a, const PreparedPair & b)
+{
+  expect(a.builder_version == b.builder_version && a.source_manifest_sha256 == b.source_manifest_sha256 &&
+    a.body_frame == b.body_frame && a.sync_tolerance_ns == b.sync_tolerance_ns && a.tf_max_gap_ns == b.tf_max_gap_ns &&
+    a.tf_jump_limits.translation_m == b.tf_jump_limits.translation_m &&
+    a.tf_jump_limits.rotation_rad == b.tf_jump_limits.rotation_rad &&
+    a.capture_sync_basis == b.capture_sync_basis && a.rgb_media_relative == b.rgb_media_relative &&
+    a.depth_media_relative == b.depth_media_relative && a.depth_alignment == b.depth_alignment &&
+    a.depth_alignment_check == b.depth_alignment_check && a.alignment_basis == b.alignment_basis &&
+    a.depth_storage.has_value() == b.depth_storage.has_value(), "Assembly context differs");
+  compareCalibration(a.rgb_calibration, b.rgb_calibration);
+  compareCalibration(a.depth_calibration, b.depth_calibration);
+  if (a.depth_storage) {
+    const auto & x = *a.depth_storage;
+    const auto & y = *b.depth_storage;
+    expect(x.format == y.format && x.dtype == y.dtype && x.unit == y.unit && x.scale_to_m == y.scale_to_m &&
+      x.invalid_rule == y.invalid_rule && x.source_encoding == y.source_encoding && x.source_unit == y.source_unit &&
+      x.source_scale_to_m == y.source_scale_to_m && x.min_depth_m == y.min_depth_m && x.max_depth_m == y.max_depth_m &&
+      x.valid_pixels == y.valid_pixels && x.invalid_pixels == y.invalid_pixels &&
+      x.legacy_metric_npy == y.legacy_metric_npy, "Storage interpretation differs");
+  }
+  expect(a.message_summaries.size() == b.message_summaries.size(), "Message closure size differs");
+  for (std::size_t i = 0; i < a.message_summaries.size(); ++i) {
+    const auto & x = a.message_summaries[i];
+    const auto & y = b.message_summaries[i];
+    expect(x.message_id == y.message_id && x.topic == y.topic && x.file_index == y.file_index &&
+      x.topic_ordinal == y.topic_ordinal && x.message_order == y.message_order &&
+      x.bag_record_time_ns == y.bag_record_time_ns && x.serialized_bytes == y.serialized_bytes &&
+      x.payload_sha256 == y.payload_sha256 && x.raw_path == y.raw_path, "Message summary differs");
+  }
+}
+
 /** @brief 对比新旧入口的配对上下文、路径、可选几何及所有深度像素。 */
 void comparePair(const PreparedPair & indexed, const PreparedPair & legacy)
 {
@@ -142,6 +220,7 @@ void comparePair(const PreparedPair & indexed, const PreparedPair & legacy)
     indexed.depth_raw_evidence == legacy.depth_raw_evidence &&
     indexed.rgb_media == legacy.rgb_media && indexed.depth_media == legacy.depth_media &&
     indexed.depth.has_value() == legacy.depth.has_value(), "Indexed pair context differs");
+  compareAssemblyMetadata(indexed, legacy);
   compareModel(indexed.rgb_model, legacy.rgb_model);
   compareModel(indexed.depth_model, legacy.depth_model);
   comparePose(indexed.rgb_pose, legacy.rgb_pose);
@@ -174,6 +253,13 @@ void indexedDatasetCase(const fs::path & root)
     const auto expected = loadPreparedPair(root, info.pair_id);
     expect(actual.ok() && expected.ok(), actual.message + expected.message);
     comparePair(*actual.pair, *expected.pair);
+    const auto metadata = opened.reader->loadPairMetadata(info.pair_id);
+    expect(metadata.ok() && !metadata.pair->depth &&
+      metadata.pair->rgb_media == actual.pair->rgb_media && metadata.pair->depth_media == actual.pair->depth_media,
+      "Metadata-only read changed paths or decoded depth");
+    compareAssemblyMetadata(*metadata.pair, *actual.pair);
+    comparePose(metadata.pair->depth_pose, actual.pair->depth_pose);
+    expect(opened.reader->verifyUnchanged(actual.pair->file_snapshots).ok(), "Snapshot did not validate");
   }
   const auto missing = opened.reader->loadPair("absent_pair");
   expect(!missing.ok() && !missing.pair && missing.code == PreparationReadCode::pair_not_found,
@@ -186,6 +272,160 @@ void expectOpenFailure(const fs::path & root, PreparationReadCode code)
   const auto opened = openPreparation(root);
   expect(!opened.ok() && !opened.reader && opened.code == code,
     "Unexpected open result: " + opened.message);
+}
+
+/** @brief 拒绝重复 JSON 字段、深嵌套和超限行。 */
+void metadataBoundsCase(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("metadata_bounds_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  const auto path = root / "frames.jsonl";
+  const auto original = readLines(path);
+  expect(!original.empty(), "Missing fixture frame");
+  const auto original_line = original.front().dump();
+  {
+    std::ofstream file(path);
+    file << "{\"schema_version\":\"bag_preparation/1\"," << original_line.substr(1) << '\n';
+  }
+  const auto duplicate = openPreparation(root);
+  expect(duplicate.code == PreparationReadCode::invalid_metadata &&
+    duplicate.message.find("Duplicate") != std::string::npos, "Duplicate JSON key was accepted");
+  {
+    std::ofstream file(path);
+    file << "{\"schema_version\":\"bag_preparation/1\",\"nested\":"
+         << std::string(70, '[') << '0' << std::string(70, ']') << "}\n";
+  }
+  const auto deep = openPreparation(root);
+  expect(deep.code == PreparationReadCode::invalid_metadata &&
+    deep.message.find("nesting") != std::string::npos, "Deep JSON exceeded parser budget");
+  {
+    std::ofstream file(path);
+    file << '{';
+  }
+  fs::resize_file(path, 16U * 1024U * 1024U + 1);
+  const auto oversized = openPreparation(root);
+  expect(oversized.code == PreparationReadCode::invalid_metadata &&
+    oversized.message.find("size limit") != std::string::npos, "Oversized JSONL row was accepted");
+}
+
+/** @brief 完整读取拒绝长度不变但内容变化的 CDR，元数据读取仍只核对文件状态。 */
+void rawDigestCase(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("raw_digest_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  auto opened = openPreparation(root);
+  expect(opened.ok() && !opened.reader->pairs().empty(), "Cannot open raw digest fixture");
+  const auto & id = opened.reader->pairs().front().pair_id;
+  const auto before = opened.reader->loadPair(id);
+  expect(before.ok() && before.pair->rgb_raw_evidence, "Missing saved CDR evidence");
+  {
+    std::fstream file(*before.pair->rgb_raw_evidence, std::ios::in | std::ios::out | std::ios::binary);
+    char byte{};
+    expect(static_cast<bool>(file.get(byte)), "Cannot read CDR fixture byte");
+    file.seekp(0);
+    file.put(static_cast<char>(static_cast<unsigned char>(byte) ^ 0x01U));
+    expect(static_cast<bool>(file), "Cannot replace CDR fixture byte");
+  }
+  const auto metadata = opened.reader->loadPairMetadata(id);
+  expect(metadata.ok(), "Metadata read should not hash CDR payloads");
+  const auto full = opened.reader->loadPair(id);
+  expect(full.code == PreparationReadCode::invalid_reference && full.message.find("digest") != std::string::npos,
+    "Full read accepted equal-size corrupted CDR");
+}
+
+/** @brief 同尺寸、同 mtime 的合法 NPY 替换和帧媒体错绑必须被发现。 */
+void mediaIntegrityCase(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("media_digest_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  auto opened = openPreparation(root);
+  expect(opened.ok() && !opened.reader->pairs().empty(), "Cannot open sealed fixture");
+  const auto id = opened.reader->pairs().front().pair_id;
+  const auto full = opened.reader->loadPair(id);
+  expect(full.ok() && full.pair->depth && full.pair->depth_media, "Missing metric depth fixture");
+  const auto path = *full.pair->depth_media;
+  const auto length = fs::file_size(path);
+  const auto time = fs::last_write_time(path);
+  {
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    const auto offset = static_cast<std::streamoff>(length - 4 * full.pair->depth->depth_m.size());
+    file.seekg(offset);
+    char byte{};
+    expect(static_cast<bool>(file.get(byte)), "Cannot read NPY sample");
+    file.seekp(offset);
+    file.put(static_cast<char>(static_cast<unsigned char>(byte) ^ 0x01U));
+    expect(static_cast<bool>(file), "Cannot replace NPY sample");
+  }
+  fs::last_write_time(path, time);
+  expect(fs::file_size(path) == length && fs::last_write_time(path) == time, "Fixture changed size or mtime");
+  const auto light = opened.reader->loadPairMetadata(id);
+  expect(light.ok() && !light.pair->depth, "Metadata read should defer payload checking");
+  const auto changed = opened.reader->verifyUnchanged(full.pair->file_snapshots);
+  expect(changed.code == PreparationReadCode::source_changed, "Same-size same-mtime replacement was accepted");
+  for (const auto & read : {opened.reader->loadPair(id), loadPreparedPair(root, id)}) {
+    expect(read.code == PreparationReadCode::invalid_media && read.message.find("SHA-256") != std::string::npos,
+      "Full read accepted replaced NPY");
+  }
+  const auto refused_path = root.parent_path() / ("invalid_compact_" + std::to_string(tick));
+  const auto refused = compactPreparation(root, refused_path);
+  expect(!refused.ok() && refused.code == "invalid_media" && !fs::exists(refused_path),
+    "Conversion published replaced sealed media");
+
+  // 同一改动在旧契约下仍是有效的 NPY，表明摘要是发现问题的依据。
+  auto manifest = readJson(root / "bag_manifest.json");
+  removeMediaSeal(root, manifest);
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  const auto legacy = loadPreparedPair(root, id);
+  expect(legacy.ok(), "Modified NPY should remain structurally valid: " + legacy.message);
+
+  const auto bindings = root.parent_path() / ("media_bindings_" + std::to_string(tick));
+  fs::copy(source, bindings, fs::copy_options::recursive);
+  auto frames = readLines(bindings / "frames.jsonl");
+  const auto old_frames = frames;
+  const auto original = std::find_if(frames.begin(), frames.end(), [&](const Json & row) {
+      return row.at("source").at("message_id") == full.pair->rgb_message_id;
+    });
+  const auto other = std::find_if(frames.begin(), frames.end(), [&](const Json & row) {
+      return row.at("kind") == "rgb" && row.at("source").at("message_id") != full.pair->rgb_message_id &&
+        !row.at("media_path").is_null();
+    });
+  expect(original != frames.end() && other != frames.end(), "Fixture needs two RGB media files");
+  original->at("media_path") = other->at("media_path");
+  writeLines(bindings / "frames.jsonl", frames);
+  const auto swapped = loadPreparedPair(bindings, id);
+  expect(swapped.code == PreparationReadCode::invalid_reference, "Frame accepted another frame's valid media");
+  writeLines(bindings / "frames.jsonl", old_frames);
+  const auto index_path = bindings / "media_sha256.jsonl";
+  auto index = readLines(index_path);
+  index.front()["sha256"] = std::string(64, '0');
+  writeLines(index_path, index);
+  const auto index_check = openPreparation(bindings);
+  expect(index_check.code == PreparationReadCode::invalid_metadata &&
+    index_check.message.find("index digest") != std::string::npos, "Tampered media index was accepted");
+}
+
+/** @brief 文件替换破坏完整读取快照；PNG 头部与像素是两个校验层。 */
+void metadataSnapshotCase(const fs::path & source)
+{
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("metadata_snapshot_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  auto opened = openPreparation(root);
+  expect(opened.ok(), opened.message);
+  const auto & id = opened.reader->pairs().front().pair_id;
+  const auto full = opened.reader->loadPair(id);
+  expect(full.ok() && full.pair->depth_media && full.pair->depth, "Missing full PNG fixture");
+  fs::resize_file(*full.pair->depth_media, 26);
+  const auto changed = opened.reader->verifyUnchanged(full.pair->file_snapshots);
+  expect(changed.code == PreparationReadCode::source_changed, "Media change was accepted");
+  const auto header_only = opened.reader->loadPairMetadata(id);
+  expect(header_only.ok() && !header_only.pair->depth, "Metadata-only mode decoded a valid PNG header");
+  const auto corrupted = opened.reader->loadPair(id);
+  expect(corrupted.code == PreparationReadCode::invalid_media && !corrupted.pair,
+    "Full read accepted truncated PNG payload");
 }
 
 /** @brief 用独立夹具核查索引变更、错误隔离、空目录及未选中记录兼容。 */
@@ -387,6 +627,198 @@ void compactionCases(const fs::path & source)
     "Failed compaction published a partial dataset or changed the source");
 }
 
+/** @brief 组装元数据的正常返回、失败状态、精度、隔离与生命周期回归。 */
+void assemblyMetadataCases(const fs::path & source)
+{
+  const auto base = readLines(source / "rgbd_pairs.jsonl");
+  const auto id = base.front().at("pair_id").get<std::string>();
+  const auto expected = loadPreparedPair(source, id);
+  expect(expected.ok(), expected.message);
+  const auto & p = *expected.pair;
+  const auto manifest = readJson(source / "bag_manifest.json");
+  const auto & options = manifest.at("effective_options");
+  expect(p.sync_tolerance_ns == std::stoll(options.at("sync_tolerance_ns").get<std::string>()) &&
+    p.body_frame == options.at("body_frame") && p.tf_max_gap_ns == std::stoll(options.at("tf_max_gap_ns").get<std::string>()) &&
+    p.source_manifest_sha256.size() == 64 && p.rgb_calibration.original && p.depth_calibration.original &&
+    p.rgb_calibration.selection.image_topic == p.rgb_image.topic && p.depth_calibration.selection.image_topic == p.depth_image.topic &&
+    p.rgb_calibration.calibration_id == p.rgb_calibration_id && p.depth_calibration.calibration_id == p.depth_calibration_id &&
+    p.depth_storage && p.rgb_media_relative && p.depth_media_relative,
+    "Incomplete assembly metadata");
+  expect(fs::canonical(source / *p.rgb_media_relative) == *p.rgb_media &&
+    fs::canonical(source / *p.depth_media_relative) == *p.depth_media, "Relative media differs");
+  const auto messages = readLines(source / "messages.jsonl");
+  std::set<std::string> references{p.rgb_message_id, p.depth_message_id, p.rgb_calibration.source_message_id,
+    p.depth_calibration.source_message_id};
+  for (const auto * pose : {&p.rgb_pose, &p.depth_pose, &p.body_pose}) {
+    if (!*pose) {continue;}
+    for (const auto & edge : (*pose)->time.edges) {
+      references.insert(edge.before.source_message_id);
+      if (edge.after) {references.insert(edge.after->source_message_id);}
+    }
+  }
+  expect(references.size() == p.message_summaries.size(), "Message closure lost/doubled references");
+  std::uint64_t previous = 0;
+  for (const auto & summary : p.message_summaries) {
+    const auto row = std::find_if(messages.begin(), messages.end(), [&summary](const Json & value) {
+        return value.at("message_id") == summary.message_id;
+      });
+    expect(row != messages.end() && references.count(summary.message_id) &&
+      summary.topic == row->at("topic") && summary.file_index == row->at("file_index") &&
+      summary.topic_ordinal == std::stoull(row->at("topic_ordinal").get<std::string>()) &&
+      summary.message_order == std::stoull(row->at("message_order").get<std::string>()) &&
+      summary.bag_record_time_ns == std::stoll(row->at("bag_record_time_ns").get<std::string>()) &&
+      summary.serialized_bytes == row->at("serialized_bytes") && summary.payload_sha256 == row->at("payload_sha256") &&
+      summary.raw_path.has_value() == row->at("raw_path").is_string() && summary.message_order >= previous,
+      "Message summary changed or is not source ordered");
+    previous = summary.message_order;
+  }
+  auto opened = openPreparation(source);
+  auto survivor = opened.reader->loadPair(id);
+  opened.reader.reset();
+  expect(survivor.ok(), survivor.message);
+  comparePair(*survivor.pair, p);
+
+  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto root = source.parent_path() / ("assembly_metadata_" + std::to_string(tick));
+  fs::copy(source, root, fs::copy_options::recursive);
+  const auto pairs_path = root / "rgbd_pairs.jsonl";
+  const auto frames_path = root / "frames.jsonl";
+  const auto cal_path = root / "camera_info.jsonl";
+  const auto original_frames = readLines(frames_path);
+  const auto original_cal = readLines(cal_path);
+
+  auto sync_manifest = manifest;
+  sync_manifest["effective_options"]["rgb_camera"]["time_policy"] = "synchronized";
+  sync_manifest["effective_options"]["rgb_camera"]["max_delta_ns"] = "0";
+  auto sync_calibrations = original_cal;
+  for (auto & row : sync_calibrations) {
+    if (row.at("calibration_id") == p.rgb_calibration_id) {
+      row["stamp"] = base.front().at("rgb_stamp");
+    }
+  }
+  auto sync_frames = original_frames;
+  for (auto & row : sync_frames) {
+    if (row.at("source").at("message_id") == p.rgb_message_id) {
+      row["calibration"]["used_static_calibration"] = false;
+      row["calibration"]["timing"] = {{"code", "matched"}, {"delta_ns", "0"}};
+    }
+  }
+  {std::ofstream file(root / "bag_manifest.json"); file << sync_manifest.dump();}
+  writeLines(cal_path, sync_calibrations);
+  writeLines(frames_path, sync_frames);
+  const auto synchronized = loadPreparedPair(root, id);
+  expect(synchronized.ok() && synchronized.pair->rgb_calibration.timing &&
+    synchronized.pair->rgb_calibration.timing->delta_ns == 0 &&
+    !synchronized.pair->rgb_calibration.used_static_calibration, "Synchronized selection metadata changed");
+  for (auto & row : sync_frames) {
+    if (row.at("source").at("message_id") == p.rgb_message_id) {row["calibration"]["timing"]["delta_ns"] = "1";}
+  }
+  writeLines(frames_path, sync_frames);
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+  {std::ofstream file(root / "bag_manifest.json"); file << manifest.dump();}
+  writeLines(cal_path, original_cal);
+  writeLines(frames_path, original_frames);
+
+  auto pairs = base;
+  pairs.front()["sync_tolerance_ns"] = "1";
+  writeLines(pairs_path, pairs);
+  opened = openPreparation(root);
+  expect(opened.ok(), "A single contradictory pair must not invalidate global index: " + opened.message);
+  const auto bad_tolerance = opened.reader->loadPair(id);
+  expect(!bad_tolerance.pair && bad_tolerance.code == PreparationReadCode::invalid_reference, "Pair tolerance mismatch accepted");
+  expect(opened.reader->loadPair(base.back().at("pair_id").get<std::string>()).ok(), "Pair timing error was not isolated");
+  writeLines(pairs_path, base);
+
+  auto frames = original_frames;
+  auto rgb = std::find_if(frames.begin(), frames.end(), [&p](const Json & row) {
+      return row.at("source").at("message_id") == p.rgb_message_id;
+    });
+  rgb->at("camera_model")["k"][0] = rgb->at("camera_model").at("k").at(0).get<double>() + 1;
+  writeLines(frames_path, frames);
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+  writeLines(frames_path, original_frames);
+
+  frames = original_frames;
+  rgb = std::find_if(frames.begin(), frames.end(), [&p](const Json & row) {
+      return row.at("source").at("message_id") == p.rgb_message_id;
+    });
+  (*rgb)["camera_model"]["k"].push_back(0.0);
+  writeLines(frames_path, frames);
+  expectFailure(root, id, PreparationReadCode::invalid_metadata);
+  writeLines(frames_path, original_frames);
+
+  auto calibrations = original_cal;
+  auto selected = std::find_if(calibrations.begin(), calibrations.end(), [&p](const Json & row) {
+      return row.at("calibration_id") == p.rgb_calibration_id;
+    });
+  (*selected)["normalized_code"] = "invalid_distortion";
+  writeLines(cal_path, calibrations);
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+  writeLines(cal_path, original_cal);
+
+  calibrations = original_cal;
+  selected = std::find_if(calibrations.begin(), calibrations.end(), [&p](const Json & row) {
+      return row.at("calibration_id") == p.rgb_calibration_id;
+    });
+  (*selected)["k"][0] = nullptr;
+  (*selected)["source_nonfinite"] = true;
+  (*selected)["validation_code"] = "nonfinite_parameters";
+  (*selected)["normalized_code"] = "nonfinite_parameters";
+  (*selected)["normalization_applied"] = false;
+  frames = original_frames;
+  rgb = std::find_if(frames.begin(), frames.end(), [&p](const Json & row) {
+      return row.at("source").at("message_id") == p.rgb_message_id;
+    });
+  (*rgb)["camera_model"]["code"] = "invalid_model";
+  (*rgb)["calibration"]["code"] = "invalid_camera_info";
+  (*rgb)["calibration"]["calibration_code"] = "nonfinite_parameters";
+  (*rgb)["calibration"]["used_static_calibration"] = false;
+  (*rgb)["calibration"].erase("timing");
+  pairs = base;
+  pairs.front()["status"] = "pending";
+  pairs.front()["reasons"] = Json::array({"rgb_camera_info_unavailable"});
+  writeLines(cal_path, calibrations);
+  writeLines(frames_path, frames);
+  writeLines(pairs_path, pairs);
+  const auto unavailable = loadPreparedPair(root, id);
+  expect(unavailable.ok() && !unavailable.pair->rgb_model && !unavailable.pair->rgb_calibration.original &&
+    unavailable.pair->rgb_calibration.source_nonfinite &&
+    unavailable.pair->rgb_calibration.original_unavailable_reason == "nonfinite_source_parameters_not_representable" &&
+    unavailable.pair->rgb_calibration.source_message_id == p.rgb_calibration.source_message_id,
+    "Nonfinite original calibration was invented or discarded with source");
+  auto malformed = calibrations;
+  auto malformed_selected = std::find_if(malformed.begin(), malformed.end(), [&p](const Json & row) {
+      return row.at("calibration_id") == p.rgb_calibration_id;
+    });
+  malformed_selected->erase("stamp");
+  writeLines(cal_path, malformed);
+  expectFailure(root, id, PreparationReadCode::invalid_metadata);
+  writeLines(cal_path, original_cal);
+
+  (*rgb)["calibration"]["calibration_id"] = "";
+  (*rgb)["calibration"]["code"] = "missing_calibration";
+  (*rgb)["calibration"]["calibration_code"] = "none";
+  pairs.front()["rgb_calibration_id"] = "";
+  writeLines(frames_path, frames);
+  writeLines(pairs_path, pairs);
+  const auto missing = loadPreparedPair(root, id);
+  expect(missing.ok() && !missing.pair->rgb_calibration.original &&
+    missing.pair->rgb_calibration.selection_code == "missing_calibration" &&
+    missing.pair->rgb_calibration.selection.camera_info_topic == p.rgb_calibration.selection.camera_info_topic &&
+    missing.pair->rgb_calibration.selection.binding_basis == p.rgb_calibration.selection.binding_basis,
+    "Missing candidate lost selection configuration");
+  writeLines(frames_path, original_frames);
+  writeLines(pairs_path, base);
+
+  frames = original_frames;
+  rgb = std::find_if(frames.begin(), frames.end(), [&p](const Json & row) {
+      return row.at("source").at("message_id") == p.rgb_message_id;
+    });
+  (*rgb)["media_path"] = rgb->at("media_path").get<std::string>() + std::string(1, '\0') + "suffix";
+  writeLines(frames_path, frames);
+  expectFailure(root, id, PreparationReadCode::invalid_reference);
+}
+
 /** @brief 从 ROS 构造 bag 导出物验证历史格式、坏引用、错时刻和坏媒体。 */
 void fixtureCases(const fs::path & parent)
 {
@@ -397,12 +829,17 @@ void fixtureCases(const fs::path & parent)
   const auto normal = root / "normal_out";
   const auto id = readJson(normal / "rgbd_pairs.jsonl").at("pair_id").get<std::string>();
   const auto npy = readPair(normal, id);
+  assemblyMetadataCases(normal);
   const auto png = readPair(root / "normal_png_out", id);
   indexedDatasetCase(normal);
   indexedDatasetCase(root / "normal_no_cdr_out");
   compareMedia(npy, readPair(root / "normal_no_cdr_out", id));
   indexedDatasetCase(root / "normal_png_out");
+  metadataSnapshotCase(root / "normal_png_out");
   indexedFailureCases(normal);
+  metadataBoundsCase(normal);
+  rawDigestCase(normal);
+  mediaIntegrityCase(normal);
   cdrPolicyCases(normal);
   compactionCases(normal);
   compareMedia(npy, png);
@@ -416,6 +853,7 @@ void fixtureCases(const fs::path & parent)
   fs::copy(normal, copy, fs::copy_options::recursive);
   auto manifest = readJson(copy / "bag_manifest.json");
   manifest["builder_version"] = 5;
+  removeMediaSeal(copy, manifest);
   manifest["effective_options"].erase("depth_storage");
   {std::ofstream file(copy / "bag_manifest.json"); file << manifest.dump();}
   const auto frames_path = copy / "frames.jsonl";

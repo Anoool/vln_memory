@@ -68,7 +68,9 @@ OutputFiles::OutputFiles(std::filesystem::path root, std::uint64_t max_bytes)
 std::filesystem::path OutputFiles::targetPath(const std::string & relative_path) const
 {
   const std::filesystem::path relative(relative_path);
-  if (relative.empty() || relative.is_absolute()) {throw BagBuildError("invalid_output", "Relative path required");}
+  if (relative.empty() || relative.is_absolute() || relative_path.find('\0') != std::string::npos) {
+    throw BagBuildError("invalid_output", "Relative path required");
+  }
   for (const auto & component : relative) {
     if (component == "..") {throw BagBuildError("invalid_output", "Parent path is forbidden");}
   }

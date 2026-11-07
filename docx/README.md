@@ -1,127 +1,40 @@
 # vln_memory 文档导航
 
-更新：2026-11-04。BagBuilder 已支持可选的源 16UC1 PNG，见 [深度媒体存储](interfaces/bag_builder_api.md#深度媒体存储)。当前已有 S1 读取/配对/preparation 及 D8 兼容、raw/rectified 有效模型。TF 数值位姿、单点 Depth→map 和 Depth→RGB 已实现，下一步核实深度几何依据并用真实短 bag 验收；preparation 的读取/引用/筛选在后续 API 输入组织时处理。S3–S6 尚未实现。
+当前处于 **S3 几何与工作库阶段**。已实现 preparation 导出与回读、正式观测发布、深度原图区域投影，以及物品和空间的 C++ 创建入口。下一项是实体事务工作库。
 
-最新入口：[相机模型验收](reviews/camera_model_verification.md)、[CameraModel 接口](modules/camera_info/camera_model.md)、[系统规划第 10 节](project/system_plan.md#10-当前最近行动)。历史报告保留当时结论。文档中指向源码、测试和仓库配置的相对链接适用于源码检出目录。安装后的文档可在对应的源码检出版本中查看这些引用。
-
-## 从哪里开始
-
-| 内容 | 入口 |
+| 从哪里开始 | 入口 |
 | --- | --- |
-| 当前只交付原设计第 1、2 部分：逐条完成情况与验收 | [范围与进度对照](project/sections_1_2_scope.md) |
-| 零容差实际修复、旧数据清理与新版真实 bag 重跑 | [零容差验收](reviews/rgbd_zero_tolerance_verification.md) |
-| 最近时间配对：实际效果、原时间核查和剩余问题 | [最近配对验收](reviews/rgbd_nearest_pairing_verification.md) |
-| 时间戳尽可能接近：采集改善与可选离线配对的修复边界 | [时间戳对齐规划](project/rgbd_timestamp_alignment_plan.md) |
-| 历史零容差阶段的问题与方案；当前策略及优先顺序以上述最新入口为准 | [严格同步方案](project/rgbd_strict_sync_plan.md) |
-| D435i 真实录制：全量提取、问题原因与分步修复方案 | [camera_record 审计](reviews/camera_record_extraction_audit.md) |
-| BagBuilder 第一版实际验收、样例及 Git 版本 | [验收记录](reviews/bag_builder_v1_verification.md) |
-| BagBuilder 第一版实际接口、参数与文件格式 | [BagBuilder 接口](interfaces/bag_builder_api.md) |
-| BagBuilder 第一版实施与验证记录 | [实施记录](project/bag_builder_v1_implementation.md) |
-| 单深度像素到 map 和 RGB 的公开接口 | [depth_projection](modules/depth/depth_projection.md) |
-| CLI 入口与运行 | [bag_builder_main](modules/bag/bag_builder_main.md) |
-| 实际 YAML 配置/单位/独立时间阈值 | [vln_memory](config/vln_memory.md) |
-| RGB-D 时间配对核心与真实接口 | [rgbd_sync](modules/bag/rgbd_sync.md) |
-| BagBuilder：rosbag 读取、五模块整合的设计依据 | [整合方案](project/rosbag_integration_plan.md) |
-| RGB-D 自动时间配对的分步方案与实施依据 | [配对方案](project/rgbd_sync_plan.md) |
-| 当前问题修复、注释改进与验证 | [修复实施记录](project/sensor_validation_comments_plan.md) |
-| 统一的已解析话题名称规则 | [sensor_names](common/sensor_names.md) |
-| 传感器基础历史核查及后续修复；当前进度见系统规划 | [源码核查报告](reviews/observation_preparation_audit.md) |
-| 公开接口、提供文件、参数格式、返回值与作用 | [观测准备层接口手册](interfaces/observation_preparation_api.md) |
-| 原设计第 1、2 部分的当前进度与下一轮任务/验收 | [系统整体规划](project/system_plan.md) |
-| 当前观测准备层、源码分类与开发/Git 约定 | [当前架构](project/architecture.md) |
-| 构建目标、安装与导出 | [CMakeLists 说明](project/CMakeLists.md) |
-| 公共头实际位置、include 搜索根及独立编译验证 | [头文件路径说明](project/header_include_paths.md) |
-| 采样时间与图像网格 | [共享数据类型](common/sensor_types.md) |
-| RGB 输入输出、错误码、分步审阅、示例与验证 | [RGB 核心](modules/rgb/rgb.md) |
-| ROS Image 怎样接入 RGB | [RGB ROS 适配](modules/rgb/rgb_ros.md) |
-| Depth 扁平字段、单位、质量、对齐检查与可读性重构 | [Depth 核心](modules/depth/depth.md) |
-| ROS Image 怎样接入 Depth | [Depth ROS 适配](modules/depth/depth_ros.md) |
-| CameraInfo 扁平字段、标定检查、图像关联与迁移 | [CameraInfo 核心](modules/camera_info/camera_info.md) |
-| CameraInfo 可读性重构的计划、边界与验证 | [重构记录](project/camera_info_readability_plan.md) |
-| ROS CameraInfo 怎样接入 | [CameraInfo ROS 适配](modules/camera_info/camera_info_ros.md) |
-| TF 可读性重构、扁平字段与验证 | [实施记录](project/tf_readability_plan.md) |
-| TF 坐标链、静态/动态覆盖与历史样本 | [TF 核心](modules/tf/tf.md) |
-| TF 历史样本到父/目标坐标系数值变换 | [TF 数值位姿](modules/tf/tf_pose.md) |
-| /tf、/tf_static 与逐条来源报告 | [TF ROS 适配](modules/tf/tf_ros.md) |
-| 各模块时间、TF/入库/在线控制使用哪个时刻 | [sensor_time](common/sensor_time.md) |
-| 构建和运行命令 | [项目 README](../README.md) |
+| 安装并从录包发布正式观测 | [项目 README](../README.md) |
+| 理解层次、调用链与产物边界 | [当前架构](project/architecture.md) |
+| 查看后续任务与原设计验收范围 | [系统规划](project/system_plan.md#102-后续任务与依赖)、[第 1、2 部分对照](project/sections_1_2_scope.md) |
+| 使用安装包和公开目标 | [CMake 构建与导出](project/CMakeLists.md)、[头文件路径](project/header_include_paths.md) |
 
-## 当前目录
+## 从录包到实体
 
-```text
-docx/
-├── README.md
-├── project/       # 系统规划、范围/进度、架构及分步实施计划
-├── interfaces/    # 已实现的传感器基础与 BagBuilder 接口
-├── reviews/       # 按日期/阶段保留的核查与验收证据
-├── config/        # 当前实际支持的配置
-├── common/        # 名称、时间、共享类型及对应测试说明
-└── modules/
-    ├── rgb/
-    ├── depth/
-    ├── camera_info/
-    ├── tf/
-    └── bag/       # builder、读取、配对、解码、标定索引和导出
-```
-
-## 测试说明
-
-| 模块 | 核心 | ROS 适配 | 安装后接口 |
-| --- | --- | --- | --- |
-| RGB | [行为测试](modules/rgb/tests/test_rgb.md) | [消息适配](modules/rgb/tests/test_rgb_ros.md) | [消费者](modules/rgb/tests/rgb_consumer.md) |
-| Depth | [行为测试](modules/depth/tests/test_depth.md) | [消息适配](modules/depth/tests/test_depth_ros.md) | [RGB/Depth 协作](modules/depth/tests/depth_consumer.md)、[ROS 消费者](modules/depth/tests/depth_ros_consumer.md) |
-| CameraInfo | [行为测试](modules/camera_info/tests/test_camera_info.md) | [消息适配及 ROS 安装](modules/camera_info/tests/test_camera_info_ros.md) | [三模块协作](modules/camera_info/tests/camera_info_consumer.md) |
-| TF | [行为测试](modules/tf/tests/test_tf.md) | [消息/tf2 对照](modules/tf/tests/test_tf_ros.md) | [核心](modules/tf/tests/tf_consumer.md)、[ROS](modules/tf/tests/tf_ros_consumer.md) |
-| 公共时间 | [边界测试](common/tests/test_sensor_time.md) | 随核心运行 | 由 CameraInfo 消费者验证传递依赖 |
-
-## 后续模块位置
-
-| 模块 | 文档目录 | 状态 |
-| --- | --- | --- |
-| RGB | modules/rgb/ | 已实现 |
-| Depth | modules/depth/ | 已实现 |
-| CameraInfo | modules/camera_info/ | 校验/匹配、D8 兼容、实际模型及单点射线已实现 |
-| TF | modules/tf/ | 链/覆盖已实现；位姿求解后续 |
-| bag | modules/bag/ | 读取/指定压缩图像解码/严格或最近配对/准备导出已实现；关键帧和正式 Observation 待实现 |
-
-源码说明保留源文件名，模块测试放各自 tests/。共享约定进入 common/，项目约定进入 project/；模块的详细验证记录随模块保存。
-
-## 当前开发位置
-
-当前实现的是系统整体规划中的观测准备层 bag；这里的 RGB、Depth、CameraInfo、TF 和 builder 均属于该层。源码采用层/模块目录，同名文档按 modules/rgb、modules/depth、modules/camera_info、modules/tf、modules/bag 及 common 分类。下一步补深度几何，API 输入组织时复用 preparation，不为尚未实现的其他层建立空说明。
-
-## BagBuilder 文件导航
-
-| 文件 | 说明 |
+| 层 | 模块与接口 |
 | --- | --- |
-| 共享身份与运行结果 | [bag_types](modules/bag/bag_types.md) |
-| 配置加载和校验 | [bag_config](modules/bag/bag_config.md) |
-| 压缩头预算、JPEG/compressedDepth 解码及原 header 保留 | [image_decoder_ros](modules/bag/image_decoder_ros.md) |
-| 官方 reader、分卷及跨遍来源 | [bag_reader_ros](modules/bag/bag_reader_ros.md) |
-| 标定检索/版本歧义 | [camera_info_index](modules/bag/camera_info_index.md) |
-| 单对读取与持有索引的多对 PreparationReader | [preparation_reader](modules/bag/preparation_reader.md) |
-| 将历史 preparation 转换成省略 CDR 的新目录 | [preparation_compactor](modules/bag/preparation_compactor.md) |
-| 共用 partial 目录与不覆盖原子发布 | [preparation_storage](modules/bag/preparation_storage.md) |
-| CDR 保存策略、真实短包与容量验收 | [CDR 存储验收](reviews/cdr_storage_verification.md) |
-| 默认省略 CDR、v7 来源契约和已有数据转换的实施方案 | [CDR 存储方案](project/preparation_cdr_retention_plan.md) |
-| 多对读取分步方案，索引阶段已实现，按需深度模式待推进 | [多对读取方案](project/preparation_multi_pair_reading_plan.md) |
-| 媒体与字节预算 | [media_writer](modules/bag/media_writer.md) |
-| JSONL 数值/引用契约 | [jsonl_writer](modules/bag/jsonl_writer.md) |
-| 完整调度与发布 | [bag_builder](modules/bag/bag_builder.md) |
-| 磁盘集成/特殊场景回归 | [test_bag_builder](modules/bag/tests/test_bag_builder.md) |
-| 独立 NumPy/JSON/摘要验证 | [test_bag_output](modules/bag/tests/test_bag_output.md) |
-| 标定索引核心测试 | [test_camera_info_index](modules/bag/tests/test_camera_info_index.md) |
-| 安装后接口调用 | [bag_builder_consumer](modules/bag/tests/bag_builder_consumer.md) |
+| 录包配置与准备 | [配置](config/vln_memory.md)、[BagBuilder API](interfaces/bag_builder_api.md)、[bag_builder CLI](modules/bag/bag_builder_main.md)、[录包读取](modules/bag/bag_reader_ros.md)、[压缩图像解码](modules/bag/image_decoder_ros.md) |
+| 配对与标定来源 | [RGB-D 配对](modules/bag/rgbd_sync.md)、[标定索引](modules/bag/camera_info_index.md)、[准备层接口总览](interfaces/observation_preparation_api.md) |
+| preparation 回读与存储 | [PreparationReader](modules/bag/preparation_reader.md)、[共享元数据校验](modules/bag/preparation_metadata.md)、[精简转换](modules/bag/preparation_compactor.md)、[媒体写入](modules/bag/media_writer.md)、[JSONL 契约](modules/bag/jsonl_writer.md)、[目录发布](modules/bag/preparation_storage.md) |
+| 选帧与观测 | [离线输入、关键帧及分批](modules/engine/build_input.md)、[观测组装](modules/engine/observation_builder.md)、[正式 Observation](modules/memory/observation.md)、[参考时刻](project/observation_time_contract.md)、[数据集发布](modules/engine/observation_dataset.md) |
+| 几何投影 | [单点](modules/depth/depth_projection.md)、[深度原图区域](modules/depth/depth_region_projection.md)、[正式观测回读与投影](modules/engine/observation_depth_region.md) |
+| 实体 | [Entity 数据契约](modules/memory/entity.md)、[物品与空间创建](modules/engine/entity_builder.md) |
 
-本轮验收后的媒体/临时输入及旧构建清理见 [2026-11-03 清理记录](reviews/build_cleanup_20261103.md)，完整数据集需要从原始 ZIP 重建。
+## 传感器基础
 
-## 当前相机模型导航
-
-| 内容 | 入口 |
+| 模块 | 核心与适配 |
 | --- | --- |
-| 真实 bag 支持范围、模型契约与分步实现 | [实施说明](project/camera_model_implementation.md) |
-| raw/rectified 有效模型、ROI/binning、像素射线 | [camera_model](modules/camera_info/camera_model.md) |
-| 独立已知答案和安装模型消费者 | [test_camera_model](modules/camera_info/tests/test_camera_model.md) |
-| 完整 DB/CDR/原始与派生标定/所有媒体像素审计 | [audit_camera_dataset](modules/bag/tests/audit_camera_dataset.md) |
-| 本轮完整真实 bag、最终安装版本复验和剩余问题 | [验收](reviews/camera_model_verification.md) |
-| 当前实际录包的显式配置，路径需替换 | [camera_record.yaml](../config/camera_record.yaml) |
+| 共用类型 | [采样时间和图像网格](common/sensor_types.md)、[时间比较](common/sensor_time.md)、[话题名称](common/sensor_names.md) |
+| RGB | [核心](modules/rgb/rgb.md)、[ROS Image 适配](modules/rgb/rgb_ros.md) |
+| Depth | [核心](modules/depth/depth.md)、[ROS Image 适配](modules/depth/depth_ros.md) |
+| CameraInfo | [原始标定](modules/camera_info/camera_info.md)、[ROS 适配](modules/camera_info/camera_info_ros.md)、[有效相机模型](modules/camera_info/camera_model.md) |
+| TF | [历史索引和链](modules/tf/tf.md)、[数值位姿](modules/tf/tf_pose.md)、[ROS 适配](modules/tf/tf_ros.md) |
+
+## 验收与历史记录
+
+- 现有测试入口和安装后验证方法见 [构建说明](project/CMakeLists.md#验证)。实体正向与失败场景见 [实体创建说明](modules/engine/entity_builder.md)。
+- 观测链路的阶段验收见 [输入组织](reviews/build_input_verification.md)、[Reader 组装元数据](reviews/preparation_reader_assembly_metadata_verification.md)、[正式观测](reviews/observation_verification.md)。
+- 录包和几何的阶段验收见 [BagBuilder 磁盘回归](reviews/bag_builder_v1_verification.md)、[时间配对](reviews/rgbd_nearest_pairing_verification.md)、[相机模型](reviews/camera_model_verification.md)、[CDR 存储](reviews/cdr_storage_verification.md)。
+- 原始录包审计和空间占用记录见 [camera_record 提取审计](reviews/camera_record_extraction_audit.md)、[产物清理](reviews/build_cleanup_20261103.md)。
+
+`project/` 保存当前架构、范围和规划，`interfaces/` 汇总公开接口，`modules/` 与源码模块对应，`reviews/` 保留各阶段的验收结论。指向源码、配置及测试的相对链接以源码检出目录为准。
