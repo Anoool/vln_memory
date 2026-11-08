@@ -82,6 +82,11 @@ add_executable(observation_dataset_reader_consumer ../engine/test_observation_da
 target_link_libraries(observation_dataset_reader_consumer PRIVATE
   vln_memory::vln_memory_observation_dataset vln_memory::vln_memory_entity_builder)
 
+find_package(SQLite3 REQUIRED)
+add_executable(entity_store_consumer ../memory/test_entity_store.cpp)
+target_link_libraries(entity_store_consumer PRIVATE vln_memory::vln_memory_observed_entity_store
+  vln_memory::vln_memory_entity_builder SQLite::SQLite3)
+
 add_executable(observation_builder_consumer ../engine/test_observation_builder.cpp)
 target_link_libraries(observation_builder_consumer PRIVATE vln_memory::vln_memory_observation_builder)
 

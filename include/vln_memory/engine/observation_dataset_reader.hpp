@@ -35,6 +35,8 @@ struct ObservationDatasetInfo
   std::size_t pending_count{0};
   bool file_integrity_verified{false};
   bool preparation_bundled{false};
+  std::string schema_version;
+  std::string dataset_manifest_sha256;
 };
 
 /** @brief 一组按发布顺序排列的正式观测 ID，批次从 0 开始。 */

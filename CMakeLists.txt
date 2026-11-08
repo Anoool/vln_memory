@@ -50,6 +50,7 @@ endif()
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgcodecs)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(SQLite3 REQUIRED)
 add_library(vln_memory_camera_model SHARED src/bag/camera_info/camera_model.cpp)
 add_library(vln_memory::vln_memory_camera_model ALIAS vln_memory_camera_model)
 target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE opencv_core opencv_calib3d)
@@ -144,7 +145,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_entity_builder PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-set(memory_export_targets vln_memory_entity vln_memory_entity_builder vln_memory_observation_depth_region vln_memory_observation_dataset vln_memory_observation_builder vln_memory_observation vln_memory_build_input vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
+add_library(vln_memory_entity_store SHARED src/memory/entity_store.cpp src/memory/entity_store_evidence.cpp)
+add_library(vln_memory::vln_memory_entity_store ALIAS vln_memory_entity_store)
+target_link_libraries(vln_memory_entity_store PUBLIC vln_memory_entity
+  PRIVATE vln_memory_depth_projection SQLite::SQLite3 nlohmann_json::nlohmann_json)
+add_library(vln_memory_observed_entity_store SHARED src/engine/observed_entity_store.cpp)
+add_library(vln_memory::vln_memory_observed_entity_store ALIAS vln_memory_observed_entity_store)
+target_link_libraries(vln_memory_observed_entity_store PUBLIC vln_memory_entity_store vln_memory_observation_dataset)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(vln_memory_entity_store PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(vln_memory_observed_entity_store PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+set(memory_export_targets vln_memory_entity_store vln_memory_observed_entity_store vln_memory_entity vln_memory_entity_builder vln_memory_observation_depth_region vln_memory_observation_dataset vln_memory_observation_builder vln_memory_observation vln_memory_build_input vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
 if(VLN_MEMORY_ENABLE_ROS)
@@ -238,6 +251,9 @@ if(BUILD_TESTING)
   add_executable(test_entity test/memory/test_entity.cpp)
   target_link_libraries(test_entity PRIVATE vln_memory_entity_builder vln_memory_observation_builder)
   add_test(NAME entity_core COMMAND test_entity)
+  add_executable(test_entity_store test/memory/test_entity_store.cpp)
+  target_link_libraries(test_entity_store PRIVATE vln_memory_observed_entity_store vln_memory_entity_builder SQLite::SQLite3)
+  add_test(NAME entity_store_core COMMAND test_entity_store ${CMAKE_CURRENT_BINARY_DIR})
   add_executable(test_observation test/memory/test_observation.cpp)
   target_link_libraries(test_observation PRIVATE vln_memory_observation nlohmann_json::nlohmann_json)
   add_test(NAME observation_core COMMAND test_observation)
@@ -319,6 +335,7 @@ if(BUILD_TESTING)
       ${CMAKE_CURRENT_SOURCE_DIR}/test/engine/check_observation_dataset.py
       --binary $<TARGET_FILE:memory_observation_dataset>
       --reader $<TARGET_FILE:test_observation_dataset_reader>
+      --store $<TARGET_FILE:test_entity_store>
       --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
       --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_dataset_checks)
     set_tests_properties(observation_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
@@ -364,11 +381,12 @@ install(TARGETS ${memory_export_targets}
   RUNTIME DESTINATION bin)
 # 安装时保留层/模块路径，下游 include 与源码中的公开路径保持一致。
 install(FILES include/vln_memory/memory/observation.hpp include/vln_memory/memory/entity.hpp
+  include/vln_memory/memory/entity_store.hpp
   DESTINATION include/vln_memory/memory)
 install(FILES include/vln_memory/engine/build_input.hpp include/vln_memory/engine/observation_builder.hpp
   include/vln_memory/engine/observation_dataset.hpp include/vln_memory/engine/observation_dataset_reader.hpp
   include/vln_memory/engine/observation_depth_region.hpp
-  include/vln_memory/engine/entity_builder.hpp
+  include/vln_memory/engine/entity_builder.hpp include/vln_memory/engine/observed_entity_store.hpp
   DESTINATION include/vln_memory/engine)
 install(FILES include/vln_memory/bag/common/sensor_types.hpp
   include/vln_memory/bag/common/sensor_time.hpp

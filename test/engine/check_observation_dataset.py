@@ -154,7 +154,7 @@ def check_reader(binary, root, source, good, expected, empty_output):
   check("--changed-manifest", changed_manifest)
 
 
-def check_bundle(binary, reader, root, source, expected):
+def check_bundle(binary, reader, store, root, source, expected):
   """Move a portable release after removing its old source path and exercise normal consumers."""
   private_source = root / "bundle_input"
   shutil.copytree(source, private_source)
@@ -173,6 +173,8 @@ def check_bundle(binary, reader, root, source, expected):
   check_published(relocated / "preparation", relocated, expected)
   subprocess.run([str(reader.resolve()), "--verify", str(relocated), str(expected), "v2"], check=True)
   subprocess.run([str(reader.resolve()), "--project", str(relocated), "0", "0"], check=True)
+  subprocess.run([str(store.resolve()), "--published", str(relocated), "0", "0", str(root),
+                  "--fixture-confirmation"], check=True)
 
 
 def main():
@@ -180,6 +182,7 @@ def main():
   parser = argparse.ArgumentParser()
   parser.add_argument("--binary", type=Path, required=True)
   parser.add_argument("--reader", type=Path, required=True)
+  parser.add_argument("--store", type=Path, required=True)
   parser.add_argument("--fixture-pointer", type=Path, required=True)
   parser.add_argument("--output-parent", type=Path, required=True)
   args = parser.parse_args()
@@ -251,7 +254,7 @@ def main():
   assert code == 0 and result["candidates"] == result["observations"] == 0, result
   check_published(empty, empty_output, 0)
   check_reader(args.reader, root, source, good, expected, empty_output)
-  check_bundle(args.binary, args.reader, root, source, expected)
+  check_bundle(args.binary, args.reader, args.store, root, source, expected)
   failed_bundle = root / "failed_bundle"
   code, result = call(args.binary, damaged, failed_bundle, mode="bundle")
   assert code == 1 and result["code"] == "invalid_media" and not failed_bundle.exists(), result

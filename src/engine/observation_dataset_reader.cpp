@@ -161,6 +161,8 @@ DatasetManifest readManifest(const fs::path & path)
   DatasetManifest out;
   out.sha256 = detail::preparationSha256(bytes);
   auto & info = out.info;
+  info.schema_version = version.get<std::string>();
+  info.dataset_manifest_sha256 = out.sha256;
   const auto preparation = row.at("preparation_root").get<std::string>();
   info.preparation_root = preparation;
   if (row.contains("preparation_mode")) {

@@ -1,6 +1,6 @@
 # vln_memory 当前架构
 
-当前交付范围为原设计第 1、2 部分，项目推进到 **S3 几何与工作库**。已实现录包准备、正式观测发布、地图几何投影以及物品与空间创建。实体创建的结果由调用方持有，后续由工作库接管存储、修订与索引。当前进度和验收条件见 [范围对照](sections_1_2_scope.md) 与 [系统规划](system_plan.md#102-后续任务与依赖)。
+当前交付范围为原设计第 1、2 部分，项目推进到 **S3 几何与工作库**。已实现录包准备、正式观测发布、地图几何投影以及物品与空间创建。已定位和待定位实体可写入 SQLite 工作库并按原 ID 回读。当前进度和验收条件见 [范围对照](sections_1_2_scope.md) 与 [系统规划](system_plan.md#102-后续任务与依赖)。
 
 ## 数据流与边界
 
@@ -19,6 +19,9 @@ flowchart LR
     DatasetReader --> Region["createRegionEntity<br/>历史底盘锚点"]
     Reader --> Region
     Confirmation["上游空间内部确认"] --> Region
+    Object --> Store["SQLite 工作库"]
+    Region --> Store
+    DatasetReader --> Store
 ```
 
 `memory_build_input` 可单独输出选帧与分批清单。`memory_observation_dataset` 内部复用同一选帧逻辑，直接接收 preparation。图中的实体创建为 C++ 调用，由调用方选择观测和证据。
@@ -37,7 +40,7 @@ flowchart LR
 | --- | --- |
 | preparation | `bag_preparation/1`。保存媒体、源消息摘要、配对、相机模型、历史 TF 和待处理报告。新导出的 v7 manifest 绑定媒体 SHA-256 索引。 |
 | 正式观测数据集 | `observation_dataset/2` 的 manifest、`observation/1` 的逐条记录、批次映射及选择和问题报告。读取器兼容旧 v1，按 ID 或批次回读，并通过来源指纹回查 preparation。便携发布可在同一目录内附带精简 preparation。 |
-| 实体记录 | 拥有型 C++ `Entity`，状态为 `located` 或 `pending_location`。物品保存深度选区和表面代表点，空间保存内部确认与底盘锚点。实体持久化和完整记忆版本待实现。 |
+| 实体记录 | 拥有型 C++ `Entity`，状态为 `located` 或 `pending_location`。物品保存深度选区和表面代表点，空间保存内部确认与底盘锚点。SQLite 工作库绑定正式观测集，提供事务写入和按 ID 回读。完整记忆版本待实现。 |
 
 ## 时间、几何与证据
 

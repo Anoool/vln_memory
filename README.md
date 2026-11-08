@@ -1,6 +1,6 @@
 # vln_memory
 
-`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前已跑通 **ROS bag → preparation → 正式观测 → 物品与空间实体创建**，处于 S3 几何与工作库阶段。已发布的 preparation 和正式观测可在无 ROS 环境中使用。
+`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前已跑通 **ROS bag → preparation → 正式观测 → 物品与空间实体创建 → SQLite 工作库**，处于 S3 几何与工作库阶段。已发布的 preparation 和正式观测可在无 ROS 环境中使用。
 
 | 入口 | 作用 |
 | --- | --- |
@@ -8,6 +8,7 @@
 | `memory_build_input` | 单独生成用途筛选、关键帧和分批清单，适合检查选帧结果。 |
 | `memory_observation_dataset` | 直接从 preparation 筛选并发布正式观测、批次及文件摘要。 |
 | `createObjectEntity` / `createRegionEntity` | C++ 接口。用观测和深度选区或空间内部确认创建拥有型实体记录。 |
+| `createObservedEntityStore` / `insertObservedEntity` | C++ 接口。绑定正式观测集并事务写入实体，重开后可按 ID 回读。 |
 
 ## 安装
 
@@ -18,7 +19,7 @@
 ```bash
 sudo apt update
 sudo apt install git build-essential cmake python3-colcon-common-extensions python3-numpy \
-  libopencv-dev nlohmann-json3-dev libyaml-cpp-dev libssl-dev \
+  libopencv-dev nlohmann-json3-dev libyaml-cpp-dev libssl-dev libsqlite3-dev \
   ros-humble-ament-cmake ros-humble-sensor-msgs ros-humble-geometry-msgs \
   ros-humble-tf2-msgs ros-humble-tf2 ros-humble-rmw ros-humble-rclcpp ros-humble-rcutils \
   ros-humble-rosbag2-cpp ros-humble-rosbag2-storage ros-humble-rosbag2-storage-default-plugins \
@@ -44,7 +45,7 @@ colcon test-result --verbose
 已经有 preparation 数据时，可用无 ROS 构建完成回读、观测发布、投影和实体创建。首次从 ROS bag 提取数据使用上面的 ROS 构建。
 
 ```bash
-sudo apt install build-essential cmake libopencv-dev nlohmann-json3-dev libssl-dev
+sudo apt install build-essential cmake libopencv-dev nlohmann-json3-dev libssl-dev libsqlite3-dev
 cmake -S . -B build/standalone -DVLN_MEMORY_ENABLE_ROS=OFF -DBUILD_TESTING=ON
 cmake --build build/standalone --parallel 2
 ctest --test-dir build/standalone --output-on-failure
@@ -90,9 +91,9 @@ C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::
 
 - `createObjectEntity` 接收深度原图的 `bbox` 或 `polygon`，用该深度帧的历史位姿取得实测表面代表点。
 - `createRegionEntity` 接收上游给出的区域内部确认，在 RGB 参考时刻从历史底盘位姿取代表点。
-- 缺定位条件时保留 `pending_location`、观测引用和原因。有效记录由调用方持有，实体工作库待接入。
+- 缺定位条件时保留 `pending_location`、观测引用和原因。调用方可将记录写入与观测集绑定的 SQLite 工作库。
 
-详见 [实体契约](docx/modules/memory/entity.md)、[创建接口](docx/modules/engine/entity_builder.md) 和 [安装导出](docx/project/CMakeLists.md)。
+详见 [实体契约](docx/modules/memory/entity.md)、[创建接口](docx/modules/engine/entity_builder.md) 、[SQLite 写入与回读](docx/modules/engine/observed_entity_store.md)和[安装导出](docx/project/CMakeLists.md)。
 
 ## 项目进度
 
@@ -100,12 +101,12 @@ C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::
 | --- | --- |
 | S0–S1 数据契约、读取与配对 | 传感器时间、来源、录包配置、读取配对及 preparation 导出已实现。完整构建系统配置随业务模块补齐。 |
 | S2 离线观测 | 相机模型、历史 TF、索引回读、用途筛选、关键帧、正式观测发布和按 ID/批次回读已实现。 |
-| S3 几何与工作库 | 单点和深度原图区域投影、物品及空间创建已实现。事务工作库、实体更新、关系和索引待实现。 |
+| S3 几何与工作库 | 已实现单点和深度原图区域投影、物品及空间创建、SQLite 事务写入和按 ID 回读。实体更新、关系和查询索引待实现。 |
 | S4–S6 构建、发布与查看 | 八项构建工具、模型批次、纠错标注、完整记忆版本和 MemoryViewer 待实现。 |
 
 真实短包已验证媒体回读、历史位姿、数值投影和物品创建。空间定位与异常场景使用带明确确认的构造录包验证。深度物理尺度、RGB/Depth 注册精度和曝光同步仍需独立验收。
 
-**下一步**先实现 SQLite 工作库，使已定位和待定位实体都能按原 ID 写入、重启并回读，随后补实体修订与关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
+**下一步**实现实体修订，按 `expected_revision` 追加证据或补定位，随后接入关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
 
 ## 目录结构
 

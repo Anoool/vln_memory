@@ -9,7 +9,7 @@
 
 ## 1. 当前实际完成到哪里
 
-当前推进到 S3。准备层已能生成带模型、历史位姿及媒体来源的 preparation。构建层已能从中选择关键帧、分批并发布正式观测。物品和空间已可创建为已定位或待定位的内存记录。下一项是事务工作库与实体修订，随后接入关系、模型工具及完整版本。见 [当前架构](architecture.md) 与 [系统规划](system_plan.md#102-后续任务与依赖)。
+当前推进到 S3。准备层已能生成带模型、历史位姿及媒体来源的 preparation。构建层已能从中选择关键帧、分批并发布正式观测。物品和空间可按已定位或待定位状态写入 SQLite 工作库，重开后能按 ID 回读。下一项是实体修订，随后接入关系、模型工具及完整版本。见 [当前架构](architecture.md) 与 [系统规划](system_plan.md#102-后续任务与依赖)。
 
 “基础部分”表示已有对应能力，完整条款仍需后续验收。“未实现”表示尚无对应的业务入口。历史实现与测试记录在本文末尾。
 
@@ -18,7 +18,7 @@
 | 原文条款 | 当前状态 | 已有代码/证据 | 尚缺的实际能力 |
 | --- | --- | --- | --- |
 | 1.1 坐标、单位与信息保留 | 基础部分 | 正式观测保留 map_id、geometry_revision、整数原始时刻、米制 optical-z、原标定与 TF 端点。 | 实测尺度、配准、物理同步和跨数据集几何版本管理。 |
-| 1.2 Entity（含 1.2.1 空间） | 基础部分 | [实体契约](../modules/memory/entity.md)、永久 ID、物品表面证据、空间内部确认与底盘锚点、观测引用与待定位状态 | 空间边界/朝向、实体持久化 |
+| 1.2 Entity（含 1.2.1 空间） | 基础部分 | [实体契约](../modules/memory/entity.md)、永久 ID、物品表面证据、空间内部确认与底盘锚点、观测引用、待定位状态及 SQLite 持久化 | 空间边界/朝向、实体修订 |
 | 1.3 Observation | 基础部分 | [正式观测](../modules/memory/observation.md) 已实现模型、位姿和证据契约及 JSON 校验，支持 [筛选与批量发布](../modules/engine/observation_dataset.md) 和 [按 ID/批次回读](../modules/engine/observation_dataset_reader.md)。 | 回读的构建工具封装，以及与完整记忆版本的归档和索引。 |
 | 1.4 SemanticRelation | 未实现 | 无语义关系业务 | near/on/hanging_on/inside、门的多端点 connects_regions、证据/状态、去重、inside 与 region_id 同步 |
 | 1.5 版本、证据与工具规范 | 基础部分 | 已保留来源指纹、观测/实体修订及几何版本；vln_agent 提供通用会话与工具外壳。 | 业务工具注册与分发、事务执行记录、幂等恢复和完整版本。 |
@@ -31,7 +31,7 @@
 | 2.1 输入与总体流程 | 基础部分 | 已跑通录包读取、配对、筛选、关键帧、观测发布与 C++ 实体创建。 | 模型批次、事务进度、标注与回读闭环。 |
 | 2.2 构建工具 | 未实现 | 通用 ToolManager 不是这八个工具 | search_entities/get_observation/project_depth/spatial_query/create_entity/update_entity/correct_memory/memory_annotate |
 | 2.3 深度定位 | 基础部分 | 已实现单点 Depth→map、Depth→RGB 候选像素及深度原图 bbox/polygon 的投影、分簇和歧义判断。 | 封装完整 project_depth 工具，按用途验证物理尺度和跨图对应。 |
-| 2.4 创建/更新协议 | 基础部分 | [物品及空间创建](../modules/engine/entity_builder.md) 校验观测来源与证据，分配永久 ID 和初始 revision。 | 事务持久化、乐观 revision、证据追加、字段合并和关系更新。 |
+| 2.4 创建/更新协议 | 基础部分 | [物品及空间创建](../modules/engine/entity_builder.md) 校验观测来源与证据，分配永久 ID 和初始 revision，事务写入实体与观测证据。 | 乐观 revision、证据追加、字段合并和关系更新。 |
 | 2.5 空间加入记忆 | 基础部分 | [空间创建](../modules/engine/entity_builder.md) 从经确认在区域内的历史底盘位姿取代表点，保留确认引用 | 空间证据积累、持久化、inside/region_id 一致性 |
 | 2.6 同一实体/几何更新 | 未实现 | 通用 ToolManager 只对活动调用去重，不具备所需持久幂等 | 同观测区域去重、构建 call_id 执行结果复用、身份/位置冲突状态、静态融合/移动状态、轨迹更新后重算 |
 | 2.7 关系刷新 | 未实现 | 无关系状态与几何缓存 | 更新/撤回/needs_review、几何版本与距离缓存失效、原始证据保留 |

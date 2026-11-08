@@ -36,4 +36,4 @@ if (result.ok()) {
 | 确认字段不完整或跨目标、观测修订、来源、地图和几何版本 | `invalid_region_confirmation`，无实体记录 |
 | 观测校验失败、来源不匹配或读回失败 | 返回对应错误，无实体记录 |
 
-返回值拥有实体数据。持久化、重复调用幂等和更新修订由后续工作库及业务流程处理。CTest 使用构造录包覆盖物品表面、空间锚点、缺确认或位姿、跨版本及改写位姿。测试程序还可用 `--published PREPARATION OBSERVATIONS` 对已有短包复验物品 bbox/polygon 和空间缺确认状态。
+返回值拥有实体数据。可通过[观测集写入接入](observed_entity_store.md)事务保存。重复调用幂等和更新修订由后续业务流程处理。CTest 使用构造录包覆盖物品表面、空间锚点、缺确认或位姿、跨版本及改写位姿。测试程序还可用 `--published PREPARATION OBSERVATIONS` 对已有短包复验物品 bbox/polygon 和空间缺确认状态。

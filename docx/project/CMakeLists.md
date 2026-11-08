@@ -10,7 +10,7 @@
 | `VLN_MEMORY_ENABLE_ROS=OFF` | 使用普通 CMake 生成核心包。可使用 preparation 回读与精简转换、选帧、观测数据集发布、点和区域投影、物品与空间创建。 |
 | `BUILD_TESTING=ON` | 启用核心测试。ROS 构建额外执行消息适配及从构造录包到正式观测、实体的链路回归。 |
 
-两种模式均使用 OpenCV、nlohmann/json 与 OpenSSL Crypto。ROS 录包读取另依赖 rosbag2、YAML 和压缩图像相关组件。安装命令和系统包列表见 [根 README](../../README.md)。
+两种模式均使用 OpenCV、nlohmann/json、OpenSSL Crypto 和 SQLite3。ROS 录包读取另依赖 rosbag2、YAML 和压缩图像相关组件。安装命令和系统包列表见 [根 README](../../README.md)。
 
 ## 主要公开目标
 
@@ -24,6 +24,7 @@
 | `vln_memory_observation`、`vln_memory_entity` | 正式观测与实体的数据接口。 |
 | `vln_memory_build_input`、`vln_memory_observation_builder`、`vln_memory_observation_dataset` | 输入选择、正式观测组装、数据集发布及索引回读。 |
 | `vln_memory_observation_depth_region`、`vln_memory_entity_builder` | 观测区域回读投影及实体创建。 |
+| `vln_memory_entity_store`、`vln_memory_observed_entity_store` | SQLite 工作库及正式观测集写入接入。 |
 
 ROS 模式还导出 `vln_memory_rgb_ros`、`vln_memory_depth_ros`、`vln_memory_camera_info_ros`、`vln_memory_tf_ros` 及 `vln_memory_bag_builder`。两种模式都安装 `preparation_compact`、`memory_build_input` 和 `memory_observation_dataset` 至 `lib/vln_memory/`。ROS 模式还在该目录安装 `bag_builder`，并将录包配置安装到 `share/vln_memory/config/`。文档随两种模式安装。
 
@@ -38,7 +39,7 @@ target_link_libraries(your_target PRIVATE vln_memory::vln_memory_entity_builder)
 
 ## 验证
 
-当前空间创建基线的 CTest 记录为无 ROS **15/15**、ROS **28/28**。核心测试覆盖数据契约和数值行为，ROS 录包夹具覆盖磁盘格式、正式观测发布、区域投影、实体创建和异常路径。已用两种安装包编译并运行独立的实体消费者。
+工作库基线的 CTest 记录为无 ROS **16/16**、ROS **29/29**。核心测试覆盖数据契约、数值行为和 SQLite 回滚，ROS 录包夹具额外覆盖正式观测发布、区域投影、实体创建与 SQLite 回读。可用 `entity_store_consumer` 验证安装后的工作库入口。
 
 完成 [无 ROS 安装](../../README.md#无-ros-构建) 后，可从源码根目录验证安装目标：
 
