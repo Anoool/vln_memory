@@ -22,7 +22,7 @@
 | `vln_memory_rgbd_sync`、`vln_memory_camera_info_index`、`vln_memory_camera_model` | 时间配对、标定索引及有效模型。 |
 | `vln_memory_depth_projection`、`vln_memory_preparation_reader` | 深度单点和区域几何；preparation 索引回读及精简转换。 |
 | `vln_memory_observation`、`vln_memory_entity` | 正式观测与实体的数据接口。 |
-| `vln_memory_build_input`、`vln_memory_observation_builder`、`vln_memory_observation_dataset` | 输入选择、正式观测组装与数据集发布。 |
+| `vln_memory_build_input`、`vln_memory_observation_builder`、`vln_memory_observation_dataset` | 输入选择、正式观测组装、数据集发布及索引回读。 |
 | `vln_memory_observation_depth_region`、`vln_memory_entity_builder` | 观测区域回读投影及实体创建。 |
 
 ROS 模式还导出 `vln_memory_rgb_ros`、`vln_memory_depth_ros`、`vln_memory_camera_info_ros`、`vln_memory_tf_ros` 及 `vln_memory_bag_builder`。两种模式都安装 `preparation_compact`、`memory_build_input` 和 `memory_observation_dataset` 至 `lib/vln_memory/`。ROS 模式还在该目录安装 `bag_builder`，并将录包配置安装到 `share/vln_memory/config/`。文档随两种模式安装。

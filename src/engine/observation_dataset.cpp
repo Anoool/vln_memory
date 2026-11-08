@@ -7,8 +7,11 @@
 #include <string_view>
 
 #include <vln_memory/bag/builder/bag_types.hpp>
+#include <vln_memory/bag/builder/preparation_compactor.hpp>
+#include "../bag/builder/preparation_metadata.hpp"
 #include "../bag/builder/preparation_storage.hpp"
 #include "build_input_internal.hpp"
+#include "observation_dataset_format.hpp"
 
 namespace vln_memory
 {
@@ -116,45 +119,74 @@ Json writeObservations(
 /** @brief 写批次引用与来源绑定清单，引用路径均相对观测数据集根。 */
 void writeDatasetIndex(
   const PreparationReader & reader, const BuildInputOptions & selection, const ObservationBuildContext & context,
-  const Json & batches, const ObservationDatasetResult & result)
+  const Json & batches, const ObservationDatasetResult & result, const fs::path & preparation_hint,
+  ObservationPreparationMode mode)
 {
   const auto & work = result.work_directory;
   std::ofstream batch_file(work / "batches.jsonl");
   for (const auto & row : batches) {batch_file << row.dump() << '\n';}
   finish(batch_file, "batches.jsonl");
 
+  auto files = Json::object();
+  auto file_sha256 = Json::object();
+  for (const auto & [name, relative] : detail::kObservationDatasetFiles) {
+    files[name] = relative;
+    file_sha256[name] = detail::preparationFileSha256(work / relative);
+  }
   const Json manifest{
-    {"schema_version", "observation_dataset/1"}, {"observation_schema_version", kObservationSchemaVersion},
+    {"schema_version", detail::kObservationDatasetVersion}, {"observation_schema_version", kObservationSchemaVersion},
     {"artifact_kind", "observation_dataset"}, {"status", result.issues == 0 ? "completed" : "completed_with_issues"},
-    {"preparation_root", reader.root().string()}, {"source_manifest_sha256", reader.manifestSha256()},
+    {"preparation_root", preparation_hint.generic_string()},
+    {"preparation_mode", mode == ObservationPreparationMode::bundle ? "bundle" : "reference"},
+    {"source_manifest_sha256", reader.manifestSha256()},
     {"map_id", context.map_id}, {"geometry_revision", context.geometry_revision}, {"map_frame", context.map_frame},
     {"map_basis", context.map_basis}, {"revision", std::to_string(context.revision)},
     {"additional_pending_reasons", context.additional_pending_reasons},
     {"selection_options", detail::buildInputOptionsJson(selection)}, {"candidates", result.candidates},
     {"observations", result.observations}, {"batches", result.batches}, {"pending", result.pending},
     {"issues", result.issues}, {"verified_depth_payloads", result.verified_depth_payloads},
-    {"files", {{"observations", "observations.jsonl"}, {"batches", "batches.jsonl"},
-      {"selection", "build_input_manifest.json"}, {"issues", "reports/issues.jsonl"}}}};
-  std::ofstream file(work / "observation_manifest.json");
+    {"files", std::move(files)}, {"file_sha256", std::move(file_sha256)}};
+  std::ofstream file(work / detail::kObservationDatasetManifest);
   file << manifest.dump(2) << '\n';
   finish(file, "observation_manifest.json");
 }
 }  // namespace
 
-/** @brief 完整核验候选，组装并原子发布；源变化和入选项失败中止发布。 */
+/** @brief 保留原有引用模式入口和链接符号。 */
 ObservationDatasetResult buildObservationDataset(
   const fs::path & preparation, const fs::path & output,
   const BuildInputOptions & options, const ObservationBuildContext & context)
+{
+  return buildObservationDataset(preparation, output, options, context, ObservationPreparationMode::reference);
+}
+
+/** @brief 核验候选，从最终绑定的 preparation 组装观测并原子发布。 */
+ObservationDatasetResult buildObservationDataset(
+  const fs::path & preparation, const fs::path & output,
+  const BuildInputOptions & options, const ObservationBuildContext & context, ObservationPreparationMode mode)
 {
   ObservationDatasetResult result;
   try {
     auto opened = openPreparation(preparation);
     if (!opened.ok()) {throw BagBuildError(detail::preparationReadCodeName(opened.code), opened.message);}
-    const auto & reader = *opened.reader;
-    validateContext(reader, context);
+    validateContext(*opened.reader, context);
+    if (mode != ObservationPreparationMode::reference && mode != ObservationPreparationMode::bundle) {
+      throw BagBuildError("invalid_options", "Unknown preparation delivery mode");
+    }
     const auto final_path = detail::resolveOutputDirectory(output);
-    result.work_directory = detail::createWorkDirectory(reader.root(), final_path);
-
+    result.work_directory = detail::createWorkDirectory(opened.reader->root(), final_path);
+    auto preparation_hint = opened.reader->root();
+    if (mode == ObservationPreparationMode::bundle) {
+      preparation_hint = detail::kBundledPreparation;
+      const auto bundled = compactPreparation(opened.reader->root(), result.work_directory / preparation_hint);
+      if (!bundled.ok()) {
+        throw BagBuildError(bundled.code, "Cannot bundle preparation: " + bundled.message);
+      }
+      opened = openPreparation(bundled.output_directory);
+      if (!opened.ok()) {throw BagBuildError(detail::preparationReadCodeName(opened.code), opened.message);}
+      validateContext(*opened.reader, context);
+    }
+    const auto & reader = *opened.reader;
     const auto scanned = detail::scanBuildInput(reader, options, true);
     result.candidates = scanned.selection.frames.size();
     result.verified_depth_payloads = scanned.verified_depth_payloads;
@@ -164,8 +196,8 @@ ObservationDatasetResult buildObservationDataset(
       throw BagBuildError("selection_mismatch", "Observation batches do not match the selection");
     }
     detail::writeBuildInputSelection(
-      result.work_directory / "build_input_manifest.json", reader.root(), scanned.selection, options);
-    writeDatasetIndex(reader, options, context, batches, result);
+      result.work_directory / "build_input_manifest.json", preparation_hint, scanned.selection, options);
+    writeDatasetIndex(reader, options, context, batches, result, preparation_hint, mode);
     const auto source = reader.verifyUnchanged(scanned.verified_files);
     if (!source.ok()) {throw BagBuildError(detail::preparationReadCodeName(source.code), source.message);}
     detail::publishDirectory(result.work_directory, final_path);

@@ -111,7 +111,8 @@ target_link_libraries(memory_build_input PRIVATE vln_memory_build_input nlohmann
 install(TARGETS memory_build_input DESTINATION lib/${PROJECT_NAME})
 
 # 正式观测数据集在已核验的 preparation 上完成选择、组装和目录发布。
-add_library(vln_memory_observation_dataset SHARED src/engine/observation_dataset.cpp)
+add_library(vln_memory_observation_dataset SHARED
+  src/engine/observation_dataset.cpp src/engine/observation_dataset_reader.cpp)
 add_library(vln_memory::vln_memory_observation_dataset ALIAS vln_memory_observation_dataset)
 target_link_libraries(vln_memory_observation_dataset PUBLIC
   vln_memory_build_input vln_memory_observation_builder PRIVATE nlohmann_json::nlohmann_json)
@@ -240,6 +241,8 @@ if(BUILD_TESTING)
   add_executable(test_observation test/memory/test_observation.cpp)
   target_link_libraries(test_observation PRIVATE vln_memory_observation nlohmann_json::nlohmann_json)
   add_test(NAME observation_core COMMAND test_observation)
+  add_executable(test_observation_dataset_reader test/engine/test_observation_dataset_reader.cpp)
+  target_link_libraries(test_observation_dataset_reader PRIVATE vln_memory_observation_dataset vln_memory_entity_builder)
   add_executable(test_observation_builder test/engine/test_observation_builder.cpp)
   target_link_libraries(test_observation_builder PRIVATE vln_memory_observation_builder)
   add_test(NAME observation_builder_core COMMAND test_observation_builder)
@@ -315,6 +318,7 @@ if(BUILD_TESTING)
     add_test(NAME observation_dataset COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/engine/check_observation_dataset.py
       --binary $<TARGET_FILE:memory_observation_dataset>
+      --reader $<TARGET_FILE:test_observation_dataset_reader>
       --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
       --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_dataset_checks)
     set_tests_properties(observation_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
@@ -362,7 +366,8 @@ install(TARGETS ${memory_export_targets}
 install(FILES include/vln_memory/memory/observation.hpp include/vln_memory/memory/entity.hpp
   DESTINATION include/vln_memory/memory)
 install(FILES include/vln_memory/engine/build_input.hpp include/vln_memory/engine/observation_builder.hpp
-  include/vln_memory/engine/observation_dataset.hpp include/vln_memory/engine/observation_depth_region.hpp
+  include/vln_memory/engine/observation_dataset.hpp include/vln_memory/engine/observation_dataset_reader.hpp
+  include/vln_memory/engine/observation_depth_region.hpp
   include/vln_memory/engine/entity_builder.hpp
   DESTINATION include/vln_memory/engine)
 install(FILES include/vln_memory/bag/common/sensor_types.hpp

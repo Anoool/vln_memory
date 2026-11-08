@@ -11,11 +11,12 @@ flowchart LR
     Preparation --> Reader["PreparationReader"]
     Reader --> Select["build_input<br/>用途筛选、关键帧与批次"]
     Select --> Dataset["observation_dataset<br/>正式观测与批次"]
+    Dataset --> DatasetReader["observation_dataset_reader<br/>按 ID 或批次回读"]
     Reader --> Dataset
-    Dataset --> Geometry["observation_depth_region<br/>深度原图投影"]
+    DatasetReader --> Geometry["observation_depth_region<br/>深度原图投影"]
     Reader --> Geometry
     Geometry --> Object["createObjectEntity<br/>实测表面代表点"]
-    Dataset --> Region["createRegionEntity<br/>历史底盘锚点"]
+    DatasetReader --> Region["createRegionEntity<br/>历史底盘锚点"]
     Reader --> Region
     Confirmation["上游空间内部确认"] --> Region
 ```
@@ -35,7 +36,7 @@ flowchart LR
 | 产物 | 入口与作用 |
 | --- | --- |
 | preparation | `bag_preparation/1`。保存媒体、源消息摘要、配对、相机模型、历史 TF 和待处理报告。新导出的 v7 manifest 绑定媒体 SHA-256 索引。 |
-| 正式观测数据集 | `observation_dataset/1` 的 manifest、`observation/1` 的逐条记录、批次映射及选择和问题报告。观测通过来源指纹与相对路径回查 preparation。 |
+| 正式观测数据集 | `observation_dataset/2` 的 manifest、`observation/1` 的逐条记录、批次映射及选择和问题报告。读取器兼容旧 v1，按 ID 或批次回读，并通过来源指纹回查 preparation。便携发布可在同一目录内附带精简 preparation。 |
 | 实体记录 | 拥有型 C++ `Entity`，状态为 `located` 或 `pending_location`。物品保存深度选区和表面代表点，空间保存内部确认与底盘锚点。实体持久化和完整记忆版本待实现。 |
 
 ## 时间、几何与证据

@@ -30,7 +30,7 @@ ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
 | --- | --- |
 | RGB / Depth / CameraInfo / TF | 图像解码、米制 optical-z、显式时钟和数据段、相机模型与原始标定、带来源的历史数值位姿。 |
 | BagBuilder / PreparationReader | 从 SQLite 录包配对和导出，按保存的配对 ID 索引回读，支持完整像素与元数据两种模式，新导出绑定媒体摘要。 |
-| BuildInput / Observation | 按用途选择配对、按位姿选关键帧并分批；已实现正式观测、JSON 校验、组装与数据集发布。 |
+| BuildInput / Observation | 按用途选择配对、按位姿选关键帧并分批；已实现正式观测、JSON 校验、组装、带文件摘要的数据集发布及按 ID/批次回读。 |
 | 深度几何 / Entity | 单点 Depth→map、Depth→RGB 候选像素及深度原图 bbox/polygon；物品保存表面代表点，空间使用经确认的历史底盘锚点。 |
 
 实体目前为拥有型记录。事务工作库、关系、原文八个构建工具、完整版本发布和 Viewer 待实现。vln_agent 的 SessionManager/ToolManager 可作为未来的会话与工具适配基础，实际复用边界见 [范围对照第 6 节](sections_1_2_scope.md)。当前层次、命令和产物见 [架构](architecture.md)。
@@ -169,7 +169,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 | --- | --- | --- |
 | 1 | SQLite 工作库 | 单写入者事务、实体按 ID 写入和回读、精确观测引用。已定位及待定位物品和空间在重启后保持原 ID；无效引用或写入错误整笔回滚。 |
 | 2 | 实体更新与关系 | 按 expected_revision 追加证据或补定位，保持 ID。先支持有证据的 inside/near；空间归属与关系在同一事务更新，数值结果绑定 geometry_revision。 |
-| 3 | MemoryEngine | 接入正式观测回读和原文八项构建工具。先用固定调用验证多视图复用和 call_id 幂等，再用真实模型完成小批次。 |
+| 3 | MemoryEngine | 复用正式观测数据集读取器，接入原文八项构建工具。先用固定调用验证多视图复用和 call_id 幂等，再用真实模型完成小批次。 |
 | 4 | 纠错、标注与版本发布 | 实现修改、合并、拆分、撤回和人工标注历史，校验实体/观测/关系引用与索引后原子发布完整版本。 |
 | 5 | MemoryViewer | 地图、实体、关系、图像选区及轨迹联动；通过共用标注入口修改名称等字段，重开后可回读。 |
 

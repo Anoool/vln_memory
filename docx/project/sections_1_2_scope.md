@@ -19,7 +19,7 @@
 | --- | --- | --- | --- |
 | 1.1 坐标、单位与信息保留 | 基础部分 | 正式观测保留 map_id、geometry_revision、整数原始时刻、米制 optical-z、原标定与 TF 端点。 | 实测尺度、配准、物理同步和跨数据集几何版本管理。 |
 | 1.2 Entity（含 1.2.1 空间） | 基础部分 | [实体契约](../modules/memory/entity.md)、永久 ID、物品表面证据、空间内部确认与底盘锚点、观测引用与待定位状态 | 空间边界/朝向、实体持久化 |
-| 1.3 Observation | 基础部分 | [正式观测](../modules/memory/observation.md) 已实现模型、位姿和证据契约及 JSON 校验，支持 [筛选与批量发布](../modules/engine/observation_dataset.md)。 | 按 ID 回读的构建工具，及与完整记忆版本的归档和索引。 |
+| 1.3 Observation | 基础部分 | [正式观测](../modules/memory/observation.md) 已实现模型、位姿和证据契约及 JSON 校验，支持 [筛选与批量发布](../modules/engine/observation_dataset.md) 和 [按 ID/批次回读](../modules/engine/observation_dataset_reader.md)。 | 回读的构建工具封装，以及与完整记忆版本的归档和索引。 |
 | 1.4 SemanticRelation | 未实现 | 无语义关系业务 | near/on/hanging_on/inside、门的多端点 connects_regions、证据/状态、去重、inside 与 region_id 同步 |
 | 1.5 版本、证据与工具规范 | 基础部分 | 已保留来源指纹、观测/实体修订及几何版本；vln_agent 提供通用会话与工具外壳。 | 业务工具注册与分发、事务执行记录、幂等恢复和完整版本。 |
 | 1.6 文件组织与索引 | 基础部分 | 已发布 preparation 及正式观测数据集，含 manifest、观测、批次和问题报告。 | 完整记忆 manifest、实体/关系/标注 JSONL 及 ID、名称、空间和关系索引。 |

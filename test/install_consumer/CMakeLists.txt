@@ -78,6 +78,10 @@ target_link_libraries(entity_consumer PRIVATE
 add_executable(observation_consumer ../memory/test_observation.cpp)
 target_link_libraries(observation_consumer PRIVATE vln_memory::vln_memory_observation nlohmann_json::nlohmann_json)
 
+add_executable(observation_dataset_reader_consumer ../engine/test_observation_dataset_reader.cpp)
+target_link_libraries(observation_dataset_reader_consumer PRIVATE
+  vln_memory::vln_memory_observation_dataset vln_memory::vln_memory_entity_builder)
+
 add_executable(observation_builder_consumer ../engine/test_observation_builder.cpp)
 target_link_libraries(observation_builder_consumer PRIVATE vln_memory::vln_memory_observation_builder)
 

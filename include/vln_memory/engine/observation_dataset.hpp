@@ -34,4 +34,16 @@ ObservationDatasetResult buildObservationDataset(
   const std::filesystem::path & preparation, const std::filesystem::path & output,
   const BuildInputOptions & selection, const ObservationBuildContext & context);
 
+/** @brief 引用现有 preparation，或将精简副本随观测一起发布。 */
+enum class ObservationPreparationMode {reference, bundle};
+
+/**
+ * @brief 选择 preparation 的交付方式；bundle 下从工作目录内的精简副本组装观测。
+ * @note 整个输出目录一起原子发布，绑定随包副本的 manifest 指纹。
+ */
+ObservationDatasetResult buildObservationDataset(
+  const std::filesystem::path & preparation, const std::filesystem::path & output,
+  const BuildInputOptions & selection, const ObservationBuildContext & context,
+  ObservationPreparationMode mode);
+
 }  // namespace vln_memory

@@ -331,6 +331,26 @@ std::string preparationFileSha256(const std::filesystem::path & path)
   return finishSha256(context.get());
 }
 
+/** @brief 按字节扫描 JSONL；包含实际存在的行尾，访客只借用当前行。 */
+std::string scanPreparationJsonl(
+  const std::filesystem::path & path,
+  const std::function<void(std::streamoff, const std::string &)> & visit)
+{
+  std::ifstream file(path, std::ios::binary);
+  require(file.is_open(), Code::io_error, "Cannot open JSONL: " + path.string());
+  auto hash = beginSha256();
+  for (std::string line;;) {
+    const auto offset = file.tellg();
+    if (!readPreparationLine(file, line)) {break;}
+    require(offset >= std::streampos(0) && EVP_DigestUpdate(hash.get(), line.data(), line.size()) == 1 &&
+      (file.eof() || EVP_DigestUpdate(hash.get(), "\n", 1) == 1),
+      Code::io_error, "Cannot hash JSONL: " + path.string());
+    visit(static_cast<std::streamoff>(offset), line);
+    if (file.eof()) {break;}
+  }
+  return finishSha256(hash.get());
+}
+
 /** @brief 校验规范小写 SHA-256，避免同一摘要有多种编码。 */
 bool validSha256(std::string_view value)
 {
@@ -368,24 +388,18 @@ std::optional<PreparationMediaIndex> readPreparationMediaIndex(
     Code::invalid_metadata, "Invalid preparation media integrity declaration");
   require(!std::filesystem::is_symlink(path) && std::filesystem::is_regular_file(path),
     Code::invalid_metadata, "Missing or invalid preparation media index");
-  std::ifstream file(path, std::ios::binary);
-  require(file.is_open(), Code::io_error, "Cannot open preparation media index");
-  auto hash = beginSha256();
   PreparationMediaIndex result;
-  for (std::string line; readPreparationLine(file, line);) {
-    require(EVP_DigestUpdate(hash.get(), line.data(), line.size()) == 1 &&
-      (file.eof() || EVP_DigestUpdate(hash.get(), "\n", 1) == 1),
-      Code::io_error, "Cannot hash preparation media index");
-    const auto row = parsePreparationJson(line);
-    const auto id = row.at("message_id").get<std::string>();
-    PreparationMediaDigest media{row.at("media_path").get<std::string>(), row.at("sha256").get<std::string>()};
-    require(row.size() == 4 && row.at("schema_version") == kPreparationMediaIndexSchema &&
-      !id.empty() && validMediaPath(media.path) && validSha256(media.sha256) &&
-      result.emplace(id, std::move(media)).second,
-      Code::invalid_metadata, "Invalid or duplicate preparation media entry");
-    if (file.eof()) {break;}
-  }
-  require(finishSha256(hash.get()) == digest, Code::invalid_metadata,
+  /** @brief 校验并索引单条媒体绑定。 */
+  const auto index_row = [&result](std::streamoff, const std::string & line) {
+      const auto row = parsePreparationJson(line);
+      const auto id = row.at("message_id").get<std::string>();
+      PreparationMediaDigest media{row.at("media_path").get<std::string>(), row.at("sha256").get<std::string>()};
+      require(row.size() == 4 && row.at("schema_version") == kPreparationMediaIndexSchema &&
+        !id.empty() && validMediaPath(media.path) && validSha256(media.sha256) &&
+        result.emplace(id, std::move(media)).second,
+        Code::invalid_metadata, "Invalid or duplicate preparation media entry");
+    };
+  require(scanPreparationJsonl(path, index_row) == digest, Code::invalid_metadata,
     "Preparation media index digest differs from manifest");
   return result;
 }

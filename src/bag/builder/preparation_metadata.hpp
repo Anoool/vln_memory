@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <istream>
 #include <map>
 #include <stdexcept>
@@ -20,6 +21,10 @@ inline constexpr std::size_t kMaxPreparationJsonBytes = 16U * 1024U * 1024U;
 
 /** @brief 有界读取一条 JSONL，遇到 EOF 返回 false。 */
 bool readPreparationLine(std::istream & input, std::string & line);
+/** @brief 逐条访问有界 JSONL 原始行及偏移，返回同一遍所读文件的字节摘要。 */
+std::string scanPreparationJsonl(
+  const std::filesystem::path & path,
+  const std::function<void(std::streamoff, const std::string &)> & visit);
 /** @brief 有界读取 manifest 原始字节，供解析和指纹核对。 */
 std::string readPreparationDocument(const std::filesystem::path & path);
 /** @brief 按重复键和嵌套限制解析一条 preparation JSON。 */

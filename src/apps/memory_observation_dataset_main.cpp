@@ -12,7 +12,8 @@ namespace cli = vln_memory::cli;
 void usage(std::ostream & out)
 {
   out << "Usage: memory_observation_dataset " << cli::selectionArguments
-      << " --map-id ID --geometry-revision REV --map-frame FRAME --map-basis TEXT\n";
+      << " --map-id ID --geometry-revision REV --map-frame FRAME --map-basis TEXT"
+      << " [--preparation-mode reference|bundle]\n";
 }
 }
 
@@ -24,12 +25,18 @@ int main(int argc, char ** argv)
     return 0;
   }
   try {
-    const auto args = cli::parseArguments(argc, argv, {"--map-id", "--geometry-revision", "--map-frame", "--map-basis"});
+    const auto args = cli::parseArguments(argc, argv,
+      {"--map-id", "--geometry-revision", "--map-frame", "--map-basis", "--preparation-mode"});
+    auto mode = vln_memory::ObservationPreparationMode::reference;
+    if (const auto option = args.find("--preparation-mode"); option != args.end()) {
+      if (option->second == "bundle") {mode = vln_memory::ObservationPreparationMode::bundle;}
+      else if (option->second != "reference") {throw std::invalid_argument("Unknown preparation delivery mode");}
+    }
     const vln_memory::ObservationBuildContext context{
       cli::required(args, "--map-id"), cli::required(args, "--geometry-revision"),
       cli::required(args, "--map-frame"), cli::required(args, "--map-basis"), 1, {}};
     const auto result = vln_memory::buildObservationDataset(
-      cli::required(args, "--input"), cli::required(args, "--output"), cli::selectionOptions(args), context);
+      cli::required(args, "--input"), cli::required(args, "--output"), cli::selectionOptions(args), context, mode);
     const nlohmann::json report{{"completed", result.completed}, {"code", result.code}, {"message", result.message},
       {"output_directory", result.output_directory.string()}, {"work_directory", result.work_directory.string()},
       {"candidates", result.candidates}, {"observations", result.observations}, {"batches", result.batches},

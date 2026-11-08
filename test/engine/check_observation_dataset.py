@@ -19,12 +19,12 @@ def rows(path):
     return [json.loads(line) for line in stream]
 
 
-def call(binary, source, output, purpose="rgb", map_frame="map", cwd=None):
+def call(binary, source, output, purpose="rgb", map_frame="map", cwd=None, mode="reference"):
   """Run the public CLI and keep return code and structured outcome."""
   completed = subprocess.run([
     str(binary.resolve()), "--input", str(source.resolve()), "--output", str(output), "--purpose", purpose,
     "--batch-size", "1", "--map-id", "fixture", "--geometry-revision", "v1",
-    "--map-frame", map_frame, "--map-basis", "Fixture recorded TF"],
+    "--map-frame", map_frame, "--map-basis", "Fixture recorded TF", "--preparation-mode", mode],
     cwd=cwd, capture_output=True, text=True, check=False)
   assert completed.stdout, completed.stderr
   return completed.returncode, json.loads(completed.stdout)
@@ -33,10 +33,13 @@ def call(binary, source, output, purpose="rgb", map_frame="map", cwd=None):
 def check_published(source, output, expected):
   """Verify batch order, identity, time preservation, source binding and file layout."""
   manifest = read_json(output / "observation_manifest.json")
-  assert manifest["schema_version"] == "observation_dataset/1"
+  assert manifest["schema_version"] == "observation_dataset/2"
+  assert manifest["file_sha256"] == {
+    name: hashlib.sha256((output / relative).read_bytes()).hexdigest()
+    for name, relative in manifest["files"].items()}
   fingerprint = hashlib.sha256((source / "bag_manifest.json").read_bytes()).hexdigest()
   assert manifest["source_manifest_sha256"] == fingerprint
-  assert Path(manifest["preparation_root"]) == source.resolve()
+  assert (output / manifest["preparation_root"]).resolve() == source.resolve()
   records = rows(output / manifest["files"]["observations"])
   batches = rows(output / manifest["files"]["batches"])
   selection = read_json(output / manifest["files"]["selection"])
@@ -46,6 +49,7 @@ def check_published(source, output, expected):
   assert [b["batch_index"] for b in batches] == list(range(expected))
   assert [b["observation_ids"] for b in batches] == [[o["id"]] for o in records]
   assert len({o["id"] for o in records}) == expected
+  assert selection["preparation_root"] == manifest["preparation_root"]
   assert selection["batches"] == [[o["pair_id"]] for o in records]
   pairs = {p["pair_id"]: p for p in rows(source / "rgbd_pairs.jsonl")}
   for record in records:
@@ -59,10 +63,123 @@ def check_published(source, output, expected):
     assert record["source_pending_reasons"] == saved["reasons"]
 
 
+def check_reader(binary, root, source, good, expected, empty_output):
+  """Cover indexed retrieval, old schema, relocation, damaged data, and changes after open."""
+  def check(mode, output, *args):
+    """Run the normal C++ consumer and preserve failure output."""
+    subprocess.run([str(binary.resolve()), mode, str(output), *map(str, args)], check=True)
+
+  def legacy_copy(name):
+    """Construct the old manifest over unchanged v1 observation rows."""
+    output = root / name
+    shutil.copytree(good, output)
+    manifest_file = output / "observation_manifest.json"
+    data = read_json(manifest_file)
+    del data["file_sha256"]
+    data["schema_version"] = "observation_dataset/1"
+    manifest_file.write_text(json.dumps(data))
+    return output
+
+  check("--verify", good, expected, "v2")
+  check("--verify", empty_output, 0, "v2")
+  check("--verify", legacy_copy("legacy"), expected, "v1")
+  check("--wrong-source", good, source.parent / "normal_out")
+  for mode in ("missing_pair", "changed_pair_stamp"):
+    modified_source = root / mode
+    shutil.copytree(source, modified_source)
+    pair_file = modified_source / "rgbd_pairs.jsonl"
+    pairs = rows(pair_file)
+    first_pair_id = rows(good / "observations.jsonl")[0]["pair_id"]
+    first_pair = next(pair for pair in pairs if pair["pair_id"] == first_pair_id)
+    if mode == "missing_pair":
+      pairs.remove(first_pair)
+      message = "Missing referenced preparation pair"
+    else:
+      stamp = first_pair["depth_stamp"]
+      stamp["nanosec"] = (stamp["nanosec"] + 1) % 1000000000
+      message = "Preparation pair identity or timing differs"
+    pair_file.write_text("".join(json.dumps(pair) + "\n" for pair in pairs))
+    assert (modified_source / "bag_manifest.json").read_bytes() == (source / "bag_manifest.json").read_bytes()
+    check("--wrong-source", good, modified_source, message)
+
+  relocated = root / "relocated"
+  shutil.copytree(good, relocated)
+  migrated_source = root / "migrated_preparation"
+  shutil.copytree(source, migrated_source)
+  manifest_file = relocated / "observation_manifest.json"
+  data = read_json(manifest_file)
+  data["preparation_root"] = str(root / "old_missing_preparation")
+  manifest_file.write_text(json.dumps(data))
+  check("--verify", relocated, expected, "v2", migrated_source)
+
+  lost = legacy_copy("lost_file")
+  (lost / "reports/issues.jsonl").unlink()
+  check("--reject", lost, "manifest")
+  escaped = legacy_copy("escaped_file")
+  (escaped / "reports/issues.jsonl").unlink()
+  (escaped / "reports/issues.jsonl").symlink_to(good / "reports/issues.jsonl")
+  check("--reject", escaped, "manifest")
+  truncated = legacy_copy("truncated_observations")
+  with (truncated / "observations.jsonl").open() as stream:
+    first = next(stream)
+  (truncated / "observations.jsonl").write_text(first)
+  check("--reject", truncated, "record")
+
+  misordered = legacy_copy("misordered_batch")
+  batch_file = misordered / "batches.jsonl"
+  batches = rows(batch_file)
+  batches[0]["observation_ids"], batches[1]["observation_ids"] = (
+    batches[1]["observation_ids"], batches[0]["observation_ids"])
+  batch_file.write_text("".join(json.dumps(batch) + "\n" for batch in batches))
+  check("--reject", misordered, "batch")
+
+  malformed = legacy_copy("invalid_record")
+  records_file = malformed / "observations.jsonl"
+  records = rows(records_file)
+  records[0]["length_unit"] = "cm"
+  records_file.write_text("".join(json.dumps(row) + "\n" for row in records))
+  check("--reject-on-read", malformed)
+
+  damaged = root / "changed_digest"
+  shutil.copytree(good, damaged)
+  selection = damaged / "build_input_manifest.json"
+  selection.write_bytes(selection.read_bytes() + b" ")
+  check("--reject", damaged, "digest")
+
+  changed = root / "changed_after_open"
+  shutil.copytree(good, changed)
+  check("--changed", changed)
+  changed_manifest = root / "changed_manifest_after_open"
+  shutil.copytree(good, changed_manifest)
+  check("--changed-manifest", changed_manifest)
+
+
+def check_bundle(binary, reader, root, source, expected):
+  """Move a portable release after removing its old source path and exercise normal consumers."""
+  private_source = root / "bundle_input"
+  shutil.copytree(source, private_source)
+  output = root / "bundle_output"
+  code, result = call(binary, private_source, output, "prepared_rgbd", mode="bundle")
+  assert code == 0 and result["observations"] == expected, result
+  manifest = read_json(output / "observation_manifest.json")
+  assert manifest["preparation_mode"] == "bundle" and manifest["preparation_root"] == "preparation"
+  preparation = output / "preparation"
+  p_manifest = read_json(preparation / "bag_manifest.json")
+  assert p_manifest["effective_options"]["save_raw_cdr"] is False
+  assert not any(preparation.rglob("*.cdr"))
+  private_source.rename(root / "former_bundle_input")
+  relocated = root / "bundle_relocated"
+  output.rename(relocated)
+  check_published(relocated / "preparation", relocated, expected)
+  subprocess.run([str(reader.resolve()), "--verify", str(relocated), str(expected), "v2"], check=True)
+  subprocess.run([str(reader.resolve()), "--project", str(relocated), "0", "0"], check=True)
+
+
 def main():
   """Check happy path, bad depth, empty selection, atomic failure, and overwrite refusal."""
   parser = argparse.ArgumentParser()
   parser.add_argument("--binary", type=Path, required=True)
+  parser.add_argument("--reader", type=Path, required=True)
   parser.add_argument("--fixture-pointer", type=Path, required=True)
   parser.add_argument("--output-parent", type=Path, required=True)
   args = parser.parse_args()
@@ -133,6 +250,11 @@ def main():
   code, result = call(args.binary, empty, empty_output)
   assert code == 0 and result["candidates"] == result["observations"] == 0, result
   check_published(empty, empty_output, 0)
+  check_reader(args.reader, root, source, good, expected, empty_output)
+  check_bundle(args.binary, args.reader, root, source, expected)
+  failed_bundle = root / "failed_bundle"
+  code, result = call(args.binary, damaged, failed_bundle, mode="bundle")
+  assert code == 1 and result["code"] == "invalid_media" and not failed_bundle.exists(), result
   code, result = call(args.binary, empty, root / "wrong-map", map_frame="wrong_map")
   assert code == 1 and result["code"] == "invalid_context", result
 

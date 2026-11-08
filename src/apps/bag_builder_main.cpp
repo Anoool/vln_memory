@@ -1,16 +1,35 @@
 #include <vln_memory/bag/builder/bag_builder.hpp>
 #include <vln_memory/bag/builder/rgbd_sync.hpp>
 
+#include <charconv>
 #include <iostream>
+#include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <nlohmann/json.hpp>
 
 namespace
 {
-/** @brief 命令只加载配置和路径覆盖，不在 CLI 中复制算法。 */
+/** @brief 说明配置及本次运行的路径和配对门限覆盖。 */
 void usage()
 {
-  std::cout << "Usage: ros2 run vln_memory bag_builder --config FILE [--bag INPUT] [--output DIRECTORY]\n";
+  std::cout << "Usage: ros2 run vln_memory bag_builder --config FILE [--bag INPUT] [--output DIRECTORY]"
+    << " [--sync-tolerance-ms NONNEGATIVE_INTEGER]\n";
+}
+
+/** @brief 将显式整数毫秒转换为纳秒，拒绝负值、尾随字符和乘法溢出。 */
+std::int64_t toleranceNs(const std::string & value)
+{
+  constexpr std::int64_t ns_per_ms = 1000000;
+  std::int64_t milliseconds{0};
+  const auto end = value.data() + value.size();
+  const auto parsed = std::from_chars(value.data(), end, milliseconds);
+  if (parsed.ec != std::errc{} || parsed.ptr != end || value.front() == '-' ||
+    milliseconds > std::numeric_limits<std::int64_t>::max() / ns_per_ms) {
+    throw std::invalid_argument("--sync-tolerance-ms requires nonnegative integer milliseconds within nanosecond range");
+  }
+  return milliseconds * ns_per_ms;
 }
 }
 
@@ -21,19 +40,25 @@ int main(int argc, char ** argv)
     std::string config;
     std::string input;
     std::string output;
+    std::optional<std::int64_t> tolerance;
     for (int index = 1; index < argc; ++index) {
       const std::string flag(argv[index]);
       if (flag == "--help" || flag == "-h") {usage(); return 0;}
-      if ((flag != "--config" && flag != "--bag" && flag != "--output") || index + 1 >= argc) {
+      if ((flag != "--config" && flag != "--bag" && flag != "--output" && flag != "--sync-tolerance-ms") ||
+        index + 1 >= argc) {
         usage(); return 2;
       }
       const std::string value(argv[++index]);
-      if (flag == "--config") {config = value;} else if (flag == "--bag") {input = value;} else {output = value;}
+      if (flag == "--config") {config = value;}
+      else if (flag == "--bag") {input = value;}
+      else if (flag == "--output") {output = value;}
+      else {tolerance = toleranceNs(value);}
     }
     if (config.empty()) {usage(); return 2;}
     auto options = vln_memory::loadBagBuildOptions(config);
     if (!input.empty()) {options.bag_uri = input;}
     if (!output.empty()) {options.output_directory = output;}
+    if (tolerance) {options.sync_tolerance_ns = *tolerance;}
     const auto result = vln_memory::buildBag(options);
     const nlohmann::json report{{"status", vln_memory::bagBuildStatusName(result.status)},
       {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
