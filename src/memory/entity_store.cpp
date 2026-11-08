@@ -20,11 +20,11 @@ using Code = EntityStoreCode;
 using Db = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
 
 constexpr int kApplicationId = 0x564c4e45;
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 
 constexpr char kSchema[] = R"sql(
   PRAGMA application_id = 0x564c4e45;
-  PRAGMA user_version = 2;
+  PRAGMA user_version = 3;
   CREATE TABLE store_meta(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     dataset_manifest_sha256 TEXT NOT NULL, source_manifest_sha256 TEXT NOT NULL,
@@ -36,6 +36,7 @@ constexpr char kSchema[] = R"sql(
     label TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0),
     status TEXT NOT NULL CHECK(status IN ('located','pending_location')),
     pending_reason TEXT,
+    location_linked_at_revision INTEGER CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision),
     CHECK((status = 'located') = (pending_reason IS NULL))
   );
   CREATE TABLE entity_observations(
@@ -141,6 +142,13 @@ public:
     return sqlite3_column_int64(stmt_.get(), column);
   }
 
+  /** @brief 读出可空的关联修订序号，NULL 对应尚无定位依据。 */
+  std::optional<std::int64_t> optionalInteger(int column) const
+  {
+    if (sqlite3_column_type(stmt_.get(), column) == SQLITE_NULL) {return std::nullopt;}
+    return integer(column);
+  }
+
 private:
   sqlite3 * db_;
   std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)> stmt_{nullptr, sqlite3_finalize};
@@ -210,7 +218,7 @@ bool matchesDataset(const EntityStoreContext & dataset, const EntityStoreContext
     dataset.source_manifest_sha256 == bound.source_manifest_sha256 && sameMap(dataset, bound);
 }
 
-/** @brief 校验实体自身字段，初始定位状态由首条证据单独核对。 */
+/** @brief 校验实体自身字段，定位状态与具体证据单独核对。 */
 bool validEntity(const Entity & entity)
 {
   const auto & id = entity.entity_id;
@@ -223,10 +231,14 @@ bool validEntity(const Entity & entity)
   return entity.status == EntityStatus::located && !entity.location_pending_reason;
 }
 
-/** @brief 将实体当前定位状态与首条观测证据对应，新增证据可有独立几何。 */
-bool matchesInitialLocation(const Entity & entity)
+/** @brief 创建时核对唯一观测和定位状态，旧调用方可省略显式引用。 */
+bool validInitialLocation(const Entity & entity, const EntityObservationRef & evidence)
 {
-  return detail::hasEntityLocation(entity.observations.front()) == (entity.status == EntityStatus::located);
+  const bool located = entity.status == EntityStatus::located;
+  if (detail::hasEntityLocation(evidence) != located) {return false;}
+  const auto & selected = entity.location_observation;
+  return !selected || (located && selected->observation_id == evidence.observation_id &&
+    selected->observation_revision == evidence.observation_revision);
 }
 
 /** @brief 解码工作库中的实体类型，遇到损坏记录返回错误。 */
@@ -312,17 +324,23 @@ EntityStoreContext readContext(sqlite3 * db)
   return context;
 }
 
-/** @brief 在事务中给 v1 首条证据补修订序号，保留原有数据。 */
+/** @brief 在一个事务内升级 v1/v2，并保留历史首条定位证据。 */
 void upgradeSchema(sqlite3 * db)
 {
   Transaction transaction(db);
   const auto version = pragma(db, "PRAGMA user_version");
+  if (version < 1 || version > kSchemaVersion) {
+    throw std::invalid_argument("Unsupported entity store format");
+  }
   if (version == 1) {
     execute(db, "ALTER TABLE entity_observations ADD COLUMN linked_at_revision "
       "INTEGER NOT NULL DEFAULT 1 CHECK(linked_at_revision > 0)");
-    execute(db, "PRAGMA user_version = 2");
-  } else if (version != kSchemaVersion) {
-    throw std::invalid_argument("Unsupported entity store format");
+  }
+  if (version < 3) {
+    execute(db, "ALTER TABLE entities ADD COLUMN location_linked_at_revision INTEGER "
+      "CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision)");
+    execute(db, "UPDATE entities SET location_linked_at_revision=1 WHERE status='located'");
+    execute(db, "PRAGMA user_version = 3");
   }
   transaction.commit();
 }
@@ -388,11 +406,11 @@ EntityStoreOpenResult openEntityStore(const std::filesystem::path & path)
     state->db = connect(path, SQLITE_OPEN_READWRITE);
     auto * db = state->db.get();
     const auto version = pragma(db, "PRAGMA user_version");
-    if (pragma(db, "PRAGMA application_id") != kApplicationId || (version != 1 && version != kSchemaVersion)) {
+    if (pragma(db, "PRAGMA application_id") != kApplicationId || version < 1 || version > kSchemaVersion) {
       return {{Code::invalid_store, "Unsupported entity store format"}, nullptr};
     }
     state->context = readContext(db);
-    if (version == 1) {upgradeSchema(db);}
+    if (version < kSchemaVersion) {upgradeSchema(db);}
     return {{Code::ready, ""}, std::unique_ptr<EntityStore>(new EntityStore(std::move(state)))};
   } catch (const std::invalid_argument & error) {
     return {{Code::invalid_store, error.what()}, nullptr};
@@ -414,7 +432,7 @@ EntityStoreResult EntityStore::insertEntity(
   }
   const auto & ref = entity.observations.front();
   if (!detail::validEntityEvidence(entity.kind, ref, observation.depth_image.width, observation.depth_image.height) ||
-    !matchesInitialLocation(entity)) {
+    !validInitialLocation(entity, ref)) {
     return {Code::invalid_entity, "Invalid new entity location evidence"};
   }
   if (!sameMap(entity, bound) || !matchesObservation(ref, observation, bound)) {
@@ -425,7 +443,9 @@ EntityStoreResult EntityStore::insertEntity(
     const auto evidence = detail::encodeEntityEvidence(ref);
     auto * db = state_->db.get();
     Transaction transaction(db);
-    Statement row(db, "INSERT INTO entities VALUES(?1,?2,?3,1,?4,?5)");
+    Statement row(db, "INSERT INTO entities"
+      "(entity_id,kind,label,revision,status,pending_reason,location_linked_at_revision) "
+      "VALUES(?1,?2,?3,1,?4,?5,CASE WHEN ?4='located' THEN 1 END)");
     row.bind(1, entity.entity_id);
     row.bind(2, entity.kind == EntityKind::object ? "object" : "region");
     row.bind(3, entity.semantic_label);
@@ -520,7 +540,8 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
 {
   try {
     Statement query(state_->db.get(), "SELECT e.kind,e.label,e.revision,e.status,e.pending_reason,"
-      "o.observation_id,o.observation_revision,o.source_manifest_sha256,o.evidence_json,o.linked_at_revision "
+      "o.observation_id,o.observation_revision,o.source_manifest_sha256,o.evidence_json,o.linked_at_revision,"
+      "e.location_linked_at_revision "
       "FROM entities e LEFT JOIN entity_observations o USING(entity_id) WHERE e.entity_id=?1 "
       "ORDER BY o.linked_at_revision");
     query.bind(1, entity_id);
@@ -537,24 +558,35 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
       static_cast<std::uint64_t>(revision), binding.map_id, binding.map_frame, binding.geometry_revision,
       {}, query.optionalText(4)};
     if (!validEntity(entity)) {return {{Code::invalid_store, "Invalid stored entity"}, std::nullopt};}
+    const auto selected_revision = query.optionalInteger(10);
+    if ((entity.status == EntityStatus::located) != selected_revision.has_value()) {
+      return {{Code::invalid_store, "Entity status differs from its location reference"}, std::nullopt};
+    }
+    std::int64_t last_linked_at = 0;
     // 回读不打开图像，使用像素类型范围检查形状和数值。
     constexpr auto max_image_side = std::numeric_limits<std::uint32_t>::max();
     do {
       const auto linked_at = query.integer(9);
-      if (linked_at <= 0 || linked_at > revision ||
-        static_cast<std::uint64_t>(linked_at) != entity.observations.size() + 1) {
+      if (linked_at <= last_linked_at || linked_at > revision || (last_linked_at == 0 && linked_at != 1)) {
         return {{Code::invalid_store, "Invalid observation association order"}, std::nullopt};
       }
+      last_linked_at = linked_at;
       EntityObservationRef ref{query.text(5), readRevision(query.text(6)), query.text(7), std::nullopt, std::nullopt};
       detail::decodeEntityEvidence(query.text(8), entity.kind, ref);
       if (ref.observation_id.empty() || ref.source_manifest_sha256 != binding.source_manifest_sha256 ||
         !detail::validEntityEvidence(entity.kind, ref, max_image_side, max_image_side)) {
         return {{Code::invalid_store, "Invalid stored observation evidence"}, std::nullopt};
       }
+      if (selected_revision && *selected_revision == linked_at) {
+        if (!detail::hasEntityLocation(ref)) {
+          return {{Code::invalid_store, "Selected observation lacks location evidence"}, std::nullopt};
+        }
+        entity.location_observation = EntityLocationRef{ref.observation_id, ref.observation_revision};
+      }
       entity.observations.push_back(std::move(ref));
     } while (query.step());
-    if (entity.observations.size() != entity.revision || !matchesInitialLocation(entity)) {
-      return {{Code::invalid_store, "Entity revision or initial location differs from its evidence"}, std::nullopt};
+    if (selected_revision && !entity.location_observation) {
+      return {{Code::invalid_store, "Selected location observation is not linked to the entity"}, std::nullopt};
     }
     return {{Code::ready, ""}, std::move(entity)};
   } catch (const SqlError & error) {

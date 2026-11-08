@@ -15,7 +15,7 @@ auto appended = vln_memory::appendObservedEvidence(
   *opened.store, *dataset.reader, current.entity->entity_id, current.entity->revision, evidence);
 ```
 
-追加成功后，`loadEntity` 按加入顺序返回全部证据。若返回 `revision_conflict`，先重新读取实体再决定是否追加。
+追加成功后，`loadEntity` 按加入顺序返回全部证据。读取实体当前位置时，用 `location_observation` 的观测 ID 和修订定位对应证据。若返回 `revision_conflict`，先重新读取实体再决定是否追加。
 
 保持清单字节原样时，可移动整个观测目录。引用模式下可给 `openSourcePreparation` 传入新的 preparation 路径。重写或重新发布观测清单会改变绑定身份。
 

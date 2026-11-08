@@ -52,6 +52,13 @@ struct EntityObservationRef
   std::optional<RegionInteriorEvidence> region_interior{};
 };
 
+/** @brief 选中作为定位依据的观测键，指向当前实体自己的证据列表。 */
+struct EntityLocationRef
+{
+  std::string observation_id;
+  std::uint64_t observation_revision{0};
+};
+
 /**
  * @brief 业务实体记录，ID 独立于语义、观测和地图版本，创建时 revision 为 1。
  * @note object 代表点来自深度选区；region 代表点来自确认在区域内部的历史底盘位姿。
@@ -66,9 +73,10 @@ struct Entity
   std::string map_id;
   std::string map_frame;
   std::string geometry_revision;
-  // 工作库按加入顺序返回，首条为初始观测和当前定位依据。
+  // 工作库按加入顺序返回，首条为创建时的观测。
   std::vector<EntityObservationRef> observations;
   std::optional<std::string> location_pending_reason;
+  std::optional<EntityLocationRef> location_observation{};
 };
 
 /** @brief 分配独立的 128 位随机实体键；随机源失败时返回空，不生成替代键。 */

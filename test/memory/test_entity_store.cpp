@@ -39,6 +39,28 @@ void execute(const fs::path & file, const char * sql)
   expect(written == SQLITE_OK, sqlite3_errmsg(db.get()));
 }
 
+/** @brief 恢复无定位引用的旧实体表，保留关联、修订和原始证据。 */
+void restoreLegacyEntityTable(const fs::path & file)
+{
+  execute(file, R"sql(
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE legacy_entities(
+      entity_id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('object','region')),
+      label TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0),
+      status TEXT NOT NULL CHECK(status IN ('located','pending_location')),
+      pending_reason TEXT,
+      CHECK((status = 'located') = (pending_reason IS NULL))
+    );
+    INSERT INTO legacy_entities SELECT entity_id,kind,label,revision,status,pending_reason FROM entities;
+    DROP TABLE entities;
+    ALTER TABLE legacy_entities RENAME TO entities;
+    PRAGMA user_version = 2;
+    COMMIT;
+  )sql");
+}
+
 /** @brief 用首版关联表格式构造含实际证据的 v1 库。 */
 void restoreLegacyAssociationTable(const fs::path & file)
 {
@@ -57,6 +79,42 @@ void restoreLegacyAssociationTable(const fs::path & file)
     PRAGMA user_version = 1;
     COMMIT;
   )sql");
+}
+
+/** @brief 验证已定位实体的回读引用包含准确的观测 ID 与观测修订。 */
+void expectLocationReference(const Entity & entity, const Observation & observation)
+{
+  const auto & location = entity.location_observation;
+  expect(entity.status == EntityStatus::located && location &&
+    location->observation_id == observation.id && location->observation_revision == observation.revision,
+    "Location does not reference the expected observation revision");
+}
+
+/** @brief 构造 schema 3 定位引用记录，验证非首条定位依据与修订空档的回读。 */
+void locationReadCases(
+  const fs::path & file, EntityStore & store, const Entity & original, const Observation & selected)
+{
+  // 补定位写入接口在下一部分实现。这里直接构造只供回读验证的数据库记录。
+  execute(file, "UPDATE entities SET status='located', pending_reason=NULL, revision=3, location_linked_at_revision=3");
+  expect(store.loadEntity(original.entity_id).code == Code::invalid_store, "Dangling location reference accepted");
+  execute(file, "UPDATE entities SET location_linked_at_revision=1");
+  expect(store.loadEntity(original.entity_id).code == Code::invalid_store, "Location without geometry accepted");
+  execute(file, "UPDATE entities SET location_linked_at_revision=2");
+  const auto located = store.loadEntity(original.entity_id);
+  expect(located.ok() && located.entity && located.entity->revision == 3 &&
+    located.entity->observations.size() == 2 && !located.entity->location_pending_reason, located.message);
+  expectLocationReference(*located.entity, selected);
+
+  auto third = selected;
+  third.id = "third-view";
+  const EntityObservationRef next_ref{
+    third.id, third.revision, third.source_manifest_sha256, std::nullopt, std::nullopt};
+  const auto appended = store.appendEntityObservation(original.entity_id, 3, next_ref, store.context(), third);
+  expect(appended.code == Code::ready, appended.message);
+  const auto after = store.loadEntity(original.entity_id);
+  expect(after.ok() && after.entity && after.entity->revision == 4 && after.entity->observations.size() == 3 &&
+    after.entity->observations.back().observation_id == third.id, "Append after revision gap did not round-trip");
+  expectLocationReference(*after.entity, selected);
 }
 
 /** @brief 验证迁移后的库可以追加证据，版本冲突和后半段写入失败不会留下部分结果。 */
@@ -107,13 +165,14 @@ void appendCases(
   const auto & entity = *loaded.entity;
   const auto & appended_ref = entity.observations[1];
   expect(entity.entity_id == original.entity_id && entity.status == original.status &&
-    entity.location_pending_reason == original.location_pending_reason &&
+    entity.location_pending_reason == original.location_pending_reason && !entity.location_observation &&
     entity.observations.front().observation_id == first.id && appended_ref.observation_id == second.id &&
     appended_ref.observation_revision == ref.observation_revision &&
     appended_ref.source_manifest_sha256 == ref.source_manifest_sha256 && appended_ref.object_selection &&
     appended_ref.object_selection->representative &&
     appended_ref.object_selection->representative->point_map_m == ref.object_selection->representative->point_map_m,
     "Association order, original entity state or new evidence was lost");
+  locationReadCases(file, *reopened.store, entity, second);
 }
 
 /** @brief 验证写入、回滚、重复 ID 和 v1 升级后仍完整的原始引用。 */
@@ -169,6 +228,7 @@ void storeCases(const fs::path & parent)
   expect(store.insertEntity(entity, binding, observation).code == Code::already_exists, "Duplicate ID was accepted");
 
   created.store.reset();
+  restoreLegacyEntityTable(file);
   restoreLegacyAssociationTable(file);
   auto reopened = openEntityStore(file);
   expect(reopened.ok(), reopened.message);
@@ -177,7 +237,7 @@ void storeCases(const fs::path & parent)
   const auto & restored = *loaded.entity;
   expect(restored.entity_id == entity.entity_id && restored.semantic_label == entity.semantic_label &&
     restored.revision == 1 && restored.status == EntityStatus::pending_location &&
-    restored.location_pending_reason == entity.location_pending_reason &&
+    restored.location_pending_reason == entity.location_pending_reason && !restored.location_observation &&
     restored.geometry_revision == binding.geometry_revision && restored.observations.size() == 1,
     "Pending entity fields changed after reopening");
   const auto & ref = restored.observations.front();
@@ -212,7 +272,7 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   options.min_cluster_points = 1;
   const auto object = createObjectEntity(*preparation.reader, observation, "箱子", DepthBoundingBox{u, v, u + 1, v + 1}, options);
   expect(object.ok(), object.message);
-  expect(object.entity->status == EntityStatus::located, "Selection did not produce a measured point");
+  expectLocationReference(*object.entity, observation);
   std::optional<RegionInteriorConfirmation> confirmation;
   if (confirm) {
     confirmation = RegionInteriorConfirmation{"房间", observation.id, observation.revision,
@@ -221,6 +281,8 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   }
   const auto region = createRegionEntity(*preparation.reader, observation, "房间", confirmation);
   expect(region.ok(), region.message);
+  if (confirm) {expectLocationReference(*region.entity, observation);}
+  else {expect(!region.entity->location_observation, "Unconfirmed region gained a location reference");}
 
   const auto file = databasePath(parent);
   auto created = createObservedEntityStore(file, *dataset.reader);
@@ -236,7 +298,11 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
       *created.store, *dataset.reader, entity->entity_id, entity->revision, next_view);
     expect(appended.code == Code::ready, appended.message);
   }
+  const auto fresh_object = created.store->loadEntity(object.entity->entity_id);
+  expect(fresh_object.ok() && fresh_object.entity, fresh_object.message);
+  expectLocationReference(*fresh_object.entity, observation);
   created.store.reset();
+  restoreLegacyEntityTable(file);
 
   const auto reopened = openEntityStore(file);
   expect(reopened.ok(), reopened.message);
@@ -244,6 +310,7 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   const auto restored_region = reopened.store->loadEntity(region.entity->entity_id);
   expect(restored_object.ok() && restored_object.entity, restored_object.message);
   expect(restored_region.ok() && restored_region.entity, restored_region.message);
+  expectLocationReference(*restored_object.entity, observation);
   for (const auto * entity : {&*restored_object.entity, &*restored_region.entity}) {
     expect(entity->revision == 2 && entity->observations.size() == 2 &&
       entity->observations[0].observation_id == observation.id &&
@@ -264,7 +331,8 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
     stored_selection.representative->optical_z_m == expected.optical_z_m, "Stored object lost measured evidence");
   const auto & interior = restored_region.entity->observations.front().region_interior;
   if (confirm) {
-    expect(restored_region.entity->status == EntityStatus::located && interior && interior->body_anchor &&
+    expectLocationReference(*restored_region.entity, observation);
+    expect(interior && interior->body_anchor &&
       interior->confirmation_ref == confirmation->evidence_ref &&
       interior->body_anchor->body_frame == observation.body_frame &&
       interior->body_anchor->stamp.sec == observation.stamp.sec &&
@@ -273,10 +341,11 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
       "Stored region lost its confirmed anchor");
   } else {
     expect(restored_region.entity->status == EntityStatus::pending_location && !interior &&
+      !restored_region.entity->location_observation &&
       restored_region.entity->location_pending_reason == "missing_region_confirmation",
       "Stored region lost its pending reason");
   }
-  std::cout << "Entity store round-trip passed for two published observations per entity" << '\n';
+  std::cout << "Entity location reference and two published observations survived v2 migration" << '\n';
 }
 
 }  // namespace

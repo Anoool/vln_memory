@@ -7,10 +7,11 @@
 | entity_id | `ent_` 加 32 个小写十六进制字符。创建时分配 128 位随机 ID，后续修订沿用该值。同标签、同观测内的两个物品可以使用不同 ID。 |
 | kind | `object` 或 `region`。物品保留深度选区，空间保留内部确认及底盘锚点。 |
 | semantic_label | 物品语义标签，原样保留。 |
-| status / location_pending_reason | `located` 有该类实体对应的代表点；`pending_location` 记录未定位原因，代表点为空。 |
+| status / location_pending_reason | `located` 的当前代表点由定位引用指定。`pending_location` 保留未定位原因。 |
 | revision | 实体自身修订号，初始为 1。 |
 | map_id / map_frame / geometry_revision | 创建时取自正式观测，规定代表点使用的地图和几何版本。 |
-| observations | 正式观测 ID、观测修订号和 preparation manifest 指纹，选区归属对应的观测。 |
+| observations | 按关联顺序保存正式观测 ID、观测修订号和 preparation manifest 指纹，选区归属对应的观测。 |
+| location_observation | 定位所用证据的观测 ID 和观测修订，指向本实体 `observations` 中的一条记录。待定位实体此字段为空。 |
 
 物品选区证据保存深度原图 bbox 或 polygon、计算选项、可空投影状态、像素数和首簇点数。实测代表点保留像素坐标、optical-z 米值和 map 米制坐标；它表示可见表面的位置。缺几何时保留已验证选区，投影状态和代表点均为空。
 

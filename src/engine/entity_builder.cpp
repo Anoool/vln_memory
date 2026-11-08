@@ -74,6 +74,7 @@ EntityBuildResult finishEntity(
     entity.location_pending_reason = pending_reason;
   } else {
     entity.status = EntityStatus::located;
+    entity.location_observation = EntityLocationRef{observation.id, observation.revision};
   }
   return {Code::created, "", std::move(entity)};
 }

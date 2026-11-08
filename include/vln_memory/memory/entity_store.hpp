@@ -71,7 +71,7 @@ public:
    * @param evidence 上游基于已校验观测构造的类型证据。
    * @param context 已校验的观测集绑定。
    * @param observation 从该观测集回读的正式观测。
-   * @note 实体的当前定位依据仍为首条观测。常规入口为 appendObservedEvidence。
+   * @note 追加时保留已选定位依据。常规入口为 appendObservedEvidence。
    */
   EntityStoreResult appendEntityObservation(
     std::string_view entity_id, std::uint64_t expected_revision, const EntityObservationRef & evidence,
@@ -96,7 +96,7 @@ struct EntityStoreOpenResult : EntityStoreResult
 /** @brief 在新路径创建并绑定工作库，不覆盖已有文件。 */
 EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, const EntityStoreContext & context);
 
-/** @brief 打开既有工作库，验证绑定并事务升级 v1，缺失路径不创建文件。 */
+/** @brief 打开既有工作库，验证绑定并事务升级 v1/v2，缺失路径不创建文件。 */
 EntityStoreOpenResult openEntityStore(const std::filesystem::path & path);
 
 }  // namespace vln_memory
