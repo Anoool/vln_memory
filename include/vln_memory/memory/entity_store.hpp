@@ -38,6 +38,12 @@ struct EntityStoreResult
   bool ok() const noexcept {return code == EntityStoreCode::ready || code == EntityStoreCode::already_linked;}
 };
 
+struct NearRelationResult : EntityStoreResult
+{
+  double distance_m{0.0};
+  bool related{false};
+};
+
 struct EntityStoreLoadResult : EntityStoreResult
 {
   std::optional<Entity> entity;
@@ -87,6 +93,14 @@ public:
   EntityStoreResult resolveEntityLocation(
     std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
     const EntityStoreContext & context, const Observation & observation);
+
+  /** @brief 保存有确切观测证据的物品归属。重复归属可重试，已有不同归属返回冲突。 */
+  EntityStoreResult recordInside(
+    std::string_view object_id, std::string_view region_id,
+    const EntityLocationRef & observation, std::string_view evidence_ref);
+
+  /** @brief 用双方已选的地图点测量三维欧氏距离，按阈值更新一条对称关系。 */
+  NearRelationResult recordNear(std::string_view first_id, std::string_view second_id, double threshold_m);
 
   /** @brief 按原 ID 读取拥有型实体，证据按关联顺序排列，无需访问观测目录。 */
   EntityStoreLoadResult loadEntity(std::string_view entity_id) const;

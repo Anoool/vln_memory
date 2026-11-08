@@ -37,7 +37,7 @@ struct BagBuildOptions
   std::string map_frame{"map"};
   std::string body_frame{"base_link"};
   // 非负整数纳秒；0 为严格匹配，正值为最近候选的最大允许时差，不改写原始时间。
-  std::int64_t sync_tolerance_ns{0};
+  std::int64_t sync_tolerance_ns{30000000};
   // 省略时从本段所需 TF 链估计；显式 0 只允许精确动态样本。
   std::optional<std::int64_t> tf_max_gap_ns;
   TfJumpLimits tf_jump_limits;

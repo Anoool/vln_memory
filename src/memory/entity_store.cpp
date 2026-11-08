@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -20,11 +21,11 @@ using Code = EntityStoreCode;
 using Db = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
 
 constexpr int kApplicationId = 0x564c4e45;
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 constexpr char kSchema[] = R"sql(
   PRAGMA application_id = 0x564c4e45;
-  PRAGMA user_version = 3;
+  PRAGMA user_version = 4;
   CREATE TABLE store_meta(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     dataset_manifest_sha256 TEXT NOT NULL, source_manifest_sha256 TEXT NOT NULL,
@@ -46,6 +47,25 @@ constexpr char kSchema[] = R"sql(
     linked_at_revision INTEGER NOT NULL DEFAULT 1 CHECK(linked_at_revision > 0),
     PRIMARY KEY(entity_id, observation_id, observation_revision)
   );
+)sql";
+
+constexpr char kRelationSchema[] = R"sql(
+  CREATE TABLE entity_relations(
+    predicate TEXT NOT NULL CHECK(predicate IN ('inside','near')),
+    subject_id TEXT NOT NULL REFERENCES entities(entity_id),
+    target_id TEXT NOT NULL REFERENCES entities(entity_id),
+    geometry_revision TEXT NOT NULL,
+    observation_id TEXT, observation_revision TEXT, evidence_ref TEXT,
+    distance_m REAL, threshold_m REAL,
+    PRIMARY KEY(predicate,subject_id,target_id),
+    CHECK(subject_id <> target_id),
+    CHECK((predicate='inside' AND observation_id IS NOT NULL AND observation_revision IS NOT NULL
+          AND evidence_ref IS NOT NULL AND distance_m IS NULL AND threshold_m IS NULL)
+      OR (predicate='near' AND subject_id < target_id AND observation_id IS NULL AND observation_revision IS NULL
+          AND evidence_ref IS NULL AND distance_m IS NOT NULL AND threshold_m IS NOT NULL
+          AND distance_m >= 0 AND threshold_m > 0 AND distance_m <= threshold_m))
+  );
+  CREATE UNIQUE INDEX entity_inside_region ON entity_relations(subject_id) WHERE predicate='inside';
 )sql";
 
 struct SqlError : std::runtime_error
@@ -91,6 +111,12 @@ public:
   void bindInteger(int column, std::int64_t value)
   {
     check(db_, sqlite3_bind_int64(stmt_.get(), column, value));
+  }
+
+  /** @brief 保存已经校验的米制数值。 */
+  void bindReal(int column, double value)
+  {
+    check(db_, sqlite3_bind_double(stmt_.get(), column, value));
   }
 
   /** @brief 绑定可空字段，空指针含义由 SQL NULL 表达。 */
@@ -325,7 +351,7 @@ EntityStoreContext readContext(sqlite3 * db)
   return context;
 }
 
-/** @brief 在一个事务内升级 v1/v2，并保留历史首条定位证据。 */
+/** @brief 在一个事务内升级旧库，补齐定位引用和关系表。 */
 void upgradeSchema(sqlite3 * db)
 {
   Transaction transaction(db);
@@ -341,7 +367,10 @@ void upgradeSchema(sqlite3 * db)
     execute(db, "ALTER TABLE entities ADD COLUMN location_linked_at_revision INTEGER "
       "CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision)");
     execute(db, "UPDATE entities SET location_linked_at_revision=1 WHERE status='located'");
-    execute(db, "PRAGMA user_version = 3");
+  }
+  if (version < 4) {
+    execute(db, kRelationSchema);
+    execute(db, "PRAGMA user_version = 4");
   }
   transaction.commit();
 }
@@ -383,6 +412,7 @@ EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, cons
       return {{Code::already_exists, "Store path was initialized by another writer"}, nullptr};
     }
     execute(db, kSchema);
+    execute(db, kRelationSchema);
     Statement insert(db, "INSERT INTO store_meta VALUES(1,?1,?2,?3,?4,?5)");
     insert.bind(1, context.dataset_manifest_sha256);
     insert.bind(2, context.source_manifest_sha256);
@@ -628,13 +658,122 @@ EntityStoreResult EntityStore::resolveEntityLocation(
   }
 }
 
+/** @brief 保存显式归属，实体的 region_id 读取自该关系。 */
+EntityStoreResult EntityStore::recordInside(
+  std::string_view object_id, std::string_view region_id,
+  const EntityLocationRef & observation, std::string_view evidence_ref)
+{
+  if (object_id == region_id || !validText(evidence_ref)) {
+    return {Code::invalid_reference, "Inside requires distinct endpoints and an evidence reference"};
+  }
+  try {
+    auto * db = state_->db.get();
+    Transaction transaction(db);
+    const auto subject = loadEntity(object_id);
+    if (!subject.ok()) {return {subject.code, subject.message};}
+    const auto target = loadEntity(region_id);
+    if (!target.ok()) {return {target.code, target.message};}
+    if (subject.entity->kind != EntityKind::object || target.entity->kind != EntityKind::region) {
+      return {Code::invalid_entity, "Inside requires an object and a region"};
+    }
+    // 证据必须确切指向已经关联到物品的观测修订。
+    const auto & observations = subject.entity->observations;
+    const auto ref = std::find_if(observations.begin(), observations.end(), [&](const auto & candidate) {
+        return candidate.observation_id == observation.observation_id &&
+          candidate.observation_revision == observation.observation_revision;
+      });
+    if (ref == observations.end()) {return {Code::invalid_reference, "Inside evidence is not linked to the object"};}
+    if (subject.entity->region_id) {
+      if (*subject.entity->region_id == region_id) {return {Code::already_linked, "Object is already inside this region"};}
+      return {Code::evidence_conflict, "Object already belongs to a different region"};
+    }
+    Statement insert(db, "INSERT INTO entity_relations"
+      "(predicate,subject_id,target_id,geometry_revision,observation_id,observation_revision,evidence_ref) "
+      "VALUES('inside',?1,?2,?3,?4,?5,?6)");
+    insert.bind(1, object_id);
+    insert.bind(2, region_id);
+    insert.bind(3, context().geometry_revision);
+    insert.bind(4, ref->observation_id);
+    insert.bind(5, std::to_string(ref->observation_revision));
+    insert.bind(6, evidence_ref);
+    insert.writeOne();
+    transaction.commit();
+    return {Code::ready, ""};
+  } catch (const std::exception & error) {
+    return {Code::storage_error, error.what()};
+  }
+}
+
+/** @brief 从工作库回读的已校验定位引用取得地图代表点。 */
+static std::optional<std::array<double, 3>> selectedPoint(const Entity & entity)
+{
+  if (!entity.location_observation) {return std::nullopt;}
+  for (const auto & ref : entity.observations) {
+    if (ref.observation_id != entity.location_observation->observation_id ||
+      ref.observation_revision != entity.location_observation->observation_revision) {continue;}
+    if (ref.object_selection && ref.object_selection->representative) {
+      return ref.object_selection->representative->point_map_m;
+    }
+    if (ref.region_interior && ref.region_interior->body_anchor) {return ref.region_interior->body_anchor->point_map_m;}
+  }
+  return std::nullopt;
+}
+
+/** @brief 按无向端点顺序维护当前阈值对应的 near 结果。 */
+NearRelationResult EntityStore::recordNear(
+  std::string_view first_id, std::string_view second_id, double threshold_m)
+{
+  if (first_id == second_id || !std::isfinite(threshold_m) || threshold_m <= 0) {
+    return {{Code::invalid_reference, "Near requires distinct endpoints and a positive finite threshold"}};
+  }
+  try {
+    auto * db = state_->db.get();
+    Transaction transaction(db);
+    const auto first = loadEntity(first_id);
+    if (!first.ok()) {return {{first.code, first.message}};}
+    const auto second = loadEntity(second_id);
+    if (!second.ok()) {return {{second.code, second.message}};}
+    const auto first_point = selectedPoint(*first.entity);
+    const auto second_point = selectedPoint(*second.entity);
+    if (!first_point || !second_point) {return {{Code::location_unavailable, "Both entities need a selected location"}};}
+    const auto & a = *first_point;
+    const auto & b = *second_point;
+    const auto distance = std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    if (!std::isfinite(distance)) {return {{Code::invalid_entity, "Non-finite map distance"}};}
+    if (second_id < first_id) {std::swap(first_id, second_id);}
+    const bool related = distance <= threshold_m;
+    if (related) {
+      Statement upsert(db, "INSERT INTO entity_relations"
+        "(predicate,subject_id,target_id,geometry_revision,distance_m,threshold_m) VALUES('near',?1,?2,?3,?4,?5) "
+        "ON CONFLICT(predicate,subject_id,target_id) DO UPDATE SET geometry_revision=excluded.geometry_revision,"
+        "distance_m=excluded.distance_m,threshold_m=excluded.threshold_m");
+      upsert.bind(1, first_id);
+      upsert.bind(2, second_id);
+      upsert.bind(3, context().geometry_revision);
+      upsert.bindReal(4, distance);
+      upsert.bindReal(5, threshold_m);
+      upsert.writeOne();
+    } else {
+      Statement remove(db, "DELETE FROM entity_relations WHERE predicate='near' AND subject_id=?1 AND target_id=?2");
+      remove.bind(1, first_id);
+      remove.bind(2, second_id);
+      remove.step();
+    }
+    transaction.commit();
+    return {{Code::ready, ""}, distance, related};
+  } catch (const std::exception & error) {
+    return {{Code::storage_error, error.what()}};
+  }
+}
+
 /** @brief 一次主键查询恢复实体和证据，断引用或损坏证据返回错误。 */
 EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
 {
   try {
     Statement query(state_->db.get(), "SELECT e.kind,e.label,e.revision,e.status,e.pending_reason,"
       "o.observation_id,o.observation_revision,o.source_manifest_sha256,o.evidence_json,o.linked_at_revision,"
-      "e.location_linked_at_revision "
+      "e.location_linked_at_revision,(SELECT target_id FROM entity_relations "
+      "WHERE predicate='inside' AND subject_id=e.entity_id) "
       "FROM entities e LEFT JOIN entity_observations o USING(entity_id) WHERE e.entity_id=?1 "
       "ORDER BY o.linked_at_revision");
     query.bind(1, entity_id);
@@ -652,6 +791,7 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
       {}, query.optionalText(4)};
     if (!validEntity(entity)) {return {{Code::invalid_store, "Invalid stored entity"}, std::nullopt};}
     const auto selected_revision = query.optionalInteger(10);
+    entity.region_id = query.optionalText(11);
     if ((entity.status == EntityStatus::located) != selected_revision.has_value()) {
       return {{Code::invalid_store, "Entity status differs from its location reference"}, std::nullopt};
     }

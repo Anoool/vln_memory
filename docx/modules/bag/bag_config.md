@@ -24,7 +24,7 @@ max_messages/max_frames/max_calibrations/max_tf_entries/max_serialized_bytes/max
 
 ## 最近时间配对（builder_version=3）
 
-sync_tolerance_ns 为非负 int64 纳秒最大绝对时差。0 严格，正值显式开启最近候选；YAML 省略/C++ 默认仍为 0，负数/小数/溢出拒绝。示例显式 30000000（30 ms 试用值），不自动扩大门限。C++ 设置 options.sync_tolerance_ns = 30000000 后调用 buildBag(options)。
+sync_tolerance_ns 为非负 int64 纳秒最大绝对时差。0 表示严格匹配，正值启用最近候选。YAML 省略和 C++ 默认均为 30000000（30 ms），负数、小数和溢出拒绝。按 15 Hz 的一帧周期配对时可设为 66666667。
 
 输出保留原始时间和真实差值；标定与 TF 阈值独立。配置不能证明曝光同步。实际效果见 [最近配对验收](../../reviews/rgbd_nearest_pairing_verification.md)。
 

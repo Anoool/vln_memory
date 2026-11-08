@@ -395,9 +395,11 @@ void configCases(const fs::path & root, const fs::path & config)
   expect(options.depth_storage == BagDepthStorage::metric_npy, "Legacy config did not default to NPY");
   auto yaml = YAML::LoadFile(config.string());
   yaml["bag"].remove("save_raw_cdr");
-  {std::ofstream file(root / "default_cdr.yaml"); file << yaml;}
-  expect(!loadBagBuildOptions((root / "default_cdr.yaml").string()).save_raw_cdr,
-    "Missing save_raw_cdr did not default to false");
+  yaml["bag"].remove("sync_tolerance_ns");
+  {std::ofstream file(root / "defaults.yaml"); file << yaml;}
+  const auto defaults = loadBagBuildOptions((root / "defaults.yaml").string());
+  expect(!defaults.save_raw_cdr, "Missing save_raw_cdr did not default to false");
+  expect(defaults.sync_tolerance_ns == 30000000, "Missing RGB-D tolerance did not default to 30 ms");
   for (const auto * bad : {"1", "yes", "null", "'false'", "!!str false", "[false]"}) {
     auto invalid = YAML::LoadFile(config.string());
     invalid["bag"].remove("save_raw_cdr");

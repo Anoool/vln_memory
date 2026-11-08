@@ -77,6 +77,7 @@ struct Entity
   std::vector<EntityObservationRef> observations;
   std::optional<std::string> location_pending_reason;
   std::optional<EntityLocationRef> location_observation{};
+  std::optional<std::string> region_id{};  // 由已保存的 inside 关系读出。
 };
 
 /** @brief 分配独立的 128 位随机实体键；随机源失败时返回空，不生成替代键。 */

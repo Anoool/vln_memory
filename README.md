@@ -67,7 +67,7 @@ ros2 run vln_memory bag_builder --config /tmp/vln_memory-local.yaml \
   --bag /absolute/path/to/recording --output "$PWD/build/my_preparation" --sync-tolerance-ms 30
 ```
 
-`--sync-tolerance-ms 30` 仅覆盖本次运行的时间配对门限，等价于 `bag.sync_tolerance_ns=30000000`。门限为 0 时仅做精确配对，正值使用门限内一对一最近配对。`pairs` 是时间配对数，`prepared_pairs` 还需通过标定、位姿、深度质量和 RGB/Depth 注册检查。`bag.save_raw_cdr` 默认省略 CDR 副本并保留消息摘要，显式设为 `true` 可保留原始消息。新导出绑定 PNG/NPY 内容摘要，历史数据可用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 生成带摘要的新副本。
+`--sync-tolerance-ms 30` 仅覆盖本次运行的时间配对门限，等价于 `bag.sync_tolerance_ns=30000000`。离线默认门限为 30 ms。门限为 0 时仅做精确配对，正值使用门限内一对一最近配对。`pairs` 是时间配对数，`prepared_pairs` 还需通过标定、位姿、深度质量和 RGB/Depth 注册检查。`bag.save_raw_cdr` 默认省略 CDR 副本并保留消息摘要，显式设为 `true` 可保留原始消息。新导出绑定 PNG/NPY 内容摘要，历史数据可用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 生成带摘要的新副本。
 
 `bag_manifest.json` 描述来源与有效配置，`frames.jsonl`、`rgbd_pairs.jsonl` 记录帧和配对，媒体位于 `evidence/`。在 `reports/` 查看统计、错误及待处理原因。接口和回读方式见 [BagBuilder](docx/interfaces/bag_builder_api.md) 与 [PreparationReader](docx/modules/bag/preparation_reader.md)。
 
@@ -106,7 +106,7 @@ C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::
 
 真实短包已验证媒体回读、历史位姿、数值投影和物品创建。空间定位与异常场景使用带明确确认的构造录包验证。深度物理尺度、RGB/Depth 注册精度和曝光同步仍需独立验收。
 
-**下一步**接入 `inside` 空间归属和 `near` 距离关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
+结构化识别结果可通过 `memory_semantic_build` 创建实体、追加观测、补定位并保存 `inside` 与 `near`。 [语义构建入口与 Agent 接入](docx/modules/engine/semantic_build.md)。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
 
 ## 目录结构
 

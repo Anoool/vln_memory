@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 
@@ -154,7 +155,55 @@ def check_reader(binary, root, source, good, expected, empty_output):
   check("--changed-manifest", changed_manifest)
 
 
-def check_bundle(binary, reader, store, root, source, expected):
+def check_semantic(binary, dataset, database):
+  """Apply structured results to a portable dataset and verify saved relation semantics."""
+  first = rows(dataset / "observations.jsonl")[0]
+  raw = {key: first[key] for key in ("rgb_stamp", "depth_stamp", "source_manifest_sha256")}
+
+  def run(requests, code=0):
+    completed = subprocess.run([str(binary.resolve()), "--dataset", str(dataset), "--store", str(database)],
+                               input="".join(json.dumps(row) + "\n" for row in requests),
+                               capture_output=True, text=True, timeout=20)
+    assert completed.returncode == code, (completed.stdout, completed.stderr)
+    return [json.loads(line) for line in completed.stdout.splitlines()]
+
+  lookup, obj, region, other = run([
+    {"op": "lookup", **raw},
+    {"op": "create", "entity_key": "box-1", "kind": "object", "label": "box", **raw},
+    {"op": "create", "entity_key": "room-1", "kind": "region", "label": "room",
+     "observation_id": first["id"], "confirmation_ref": "fixture/inside-room"},
+    {"op": "create", "entity_key": "room-2", "kind": "region", "label": "room",
+     "observation_id": first["id"], "confirmation_ref": "fixture/inside-room"},
+  ])
+  assert lookup["observation_id"] == first["id"]
+  assert obj["status"] == "pending_location"
+  assert region["status"] == other["status"] == "located"
+  inside = {"op": "inside", "subject_id": obj["entity_id"], "target_id": region["entity_id"],
+            "observation_id": first["id"], "evidence_ref": "fixture/object-inside"}
+  near = {"op": "near", "subject_id": region["entity_id"], "target_id": other["entity_id"], "threshold_m": 0.1}
+  added, retried, measured, reverse, loaded = run([inside, inside, near,
+    {**near, "subject_id": near["target_id"], "target_id": near["subject_id"]},
+    {"op": "get", "entity_id": obj["entity_id"]}])
+  assert added["ok"] and retried["code"] == "already_linked"
+  assert measured == reverse and measured["related"] and measured["distance_m"] == 0.0
+  assert loaded["region_id"] == region["entity_id"]
+  wrong_time = {**raw, "depth_stamp": {**raw["depth_stamp"],
+      "nanosec": (raw["depth_stamp"]["nanosec"] + 1) % 1000000000}}
+  unmatched, conflict, duplicate, pending = run([
+    {"op": "lookup", **wrong_time}, {**inside, "target_id": other["entity_id"]},
+    {"op": "create", "entity_key": "box-1", "kind": "object", "label": "box", **raw},
+    {**near, "subject_id": obj["entity_id"]},
+  ], 1)
+  assert unmatched["code"] == "observation_not_found"
+  assert conflict["code"] == "evidence_conflict"
+  assert duplicate["code"] == "already_exists" and duplicate["entity_id"] == obj["entity_id"]
+  assert pending["code"] == "location_unavailable"
+  with sqlite3.connect(database) as store:
+    assert dict(store.execute("SELECT predicate,count(*) FROM entity_relations GROUP BY predicate")) == {
+        "inside": 1, "near": 1}
+
+
+def check_bundle(binary, reader, store, semantic, root, source, expected):
   """Move a portable release after removing its old source path and exercise normal consumers."""
   private_source = root / "bundle_input"
   shutil.copytree(source, private_source)
@@ -175,6 +224,7 @@ def check_bundle(binary, reader, store, root, source, expected):
   subprocess.run([str(reader.resolve()), "--project", str(relocated), "0", "0"], check=True)
   subprocess.run([str(store.resolve()), "--published", str(relocated), "0", "0", str(root),
                   "--fixture-confirmation"], check=True)
+  check_semantic(semantic, relocated, root / "semantic.sqlite3")
 
 
 def main():
@@ -183,6 +233,7 @@ def main():
   parser.add_argument("--binary", type=Path, required=True)
   parser.add_argument("--reader", type=Path, required=True)
   parser.add_argument("--store", type=Path, required=True)
+  parser.add_argument("--semantic", type=Path, required=True)
   parser.add_argument("--fixture-pointer", type=Path, required=True)
   parser.add_argument("--output-parent", type=Path, required=True)
   args = parser.parse_args()
@@ -254,7 +305,7 @@ def main():
   assert code == 0 and result["candidates"] == result["observations"] == 0, result
   check_published(empty, empty_output, 0)
   check_reader(args.reader, root, source, good, expected, empty_output)
-  check_bundle(args.binary, args.reader, args.store, root, source, expected)
+  check_bundle(args.binary, args.reader, args.store, args.semantic, root, source, expected)
   failed_bundle = root / "failed_bundle"
   code, result = call(args.binary, damaged, failed_bundle, mode="bundle")
   assert code == 1 and result["code"] == "invalid_media" and not failed_bundle.exists(), result

@@ -392,6 +392,21 @@ ObservationDatasetLoadResult ObservationDatasetReader::loadObservation(std::stri
     });
 }
 
+/** @brief 只匹配保存的配对，时间戳重复时让调用方提供确切 ID。 */
+ObservationDatasetLoadResult ObservationDatasetReader::loadObservationByStamps(SensorStamp rgb, SensorStamp depth) const
+{
+  const std::string * matched = nullptr;
+  for (const auto & [id, row] : state_->rows) {
+    const auto & pair = row.source_pair;
+    if (pair.rgb_stamp.sec != rgb.sec || pair.rgb_stamp.nanosec != rgb.nanosec ||
+      pair.depth_stamp.sec != depth.sec || pair.depth_stamp.nanosec != depth.nanosec) {continue;}
+    if (matched) {return {Code::ambiguous_observation, "Raw timestamps match multiple published observations", std::nullopt};}
+    matched = &id;
+  }
+  if (!matched) {return {Code::observation_not_found, "No published pair for these raw timestamps", std::nullopt};}
+  return loadObservation(*matched);
+}
+
 /** @brief 复用一个文件流读取整批，发生错误时不返回部分批次。 */
 ObservationDatasetBatchResult ObservationDatasetReader::loadBatch(std::size_t batch_index) const
 {

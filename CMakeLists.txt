@@ -152,6 +152,10 @@ target_link_libraries(vln_memory_entity_store PUBLIC vln_memory_entity
 add_library(vln_memory_observed_entity_store SHARED src/engine/observed_entity_store.cpp)
 add_library(vln_memory::vln_memory_observed_entity_store ALIAS vln_memory_observed_entity_store)
 target_link_libraries(vln_memory_observed_entity_store PUBLIC vln_memory_entity_store vln_memory_observation_dataset)
+add_executable(memory_semantic_build src/apps/memory_semantic_build_main.cpp)
+target_link_libraries(memory_semantic_build PRIVATE vln_memory_observed_entity_store vln_memory_entity_builder
+  nlohmann_json::nlohmann_json OpenSSL::Crypto)
+install(TARGETS memory_semantic_build DESTINATION lib/${PROJECT_NAME})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_entity_store PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(vln_memory_observed_entity_store PRIVATE -Wall -Wextra -Wpedantic)
@@ -336,6 +340,7 @@ if(BUILD_TESTING)
       --binary $<TARGET_FILE:memory_observation_dataset>
       --reader $<TARGET_FILE:test_observation_dataset_reader>
       --store $<TARGET_FILE:test_entity_store>
+      --semantic $<TARGET_FILE:memory_semantic_build>
       --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
       --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_dataset_checks)
     set_tests_properties(observation_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
@@ -367,7 +372,7 @@ endif()
 # Linux 安装后共享库按自身目录寻找兄弟依赖，包外消费者无需为本包手动补 LD_LIBRARY_PATH。
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set_target_properties(${memory_export_targets} PROPERTIES INSTALL_RPATH "$ORIGIN")
-  set_target_properties(preparation_compact memory_build_input memory_observation_dataset
+  set_target_properties(preparation_compact memory_build_input memory_observation_dataset memory_semantic_build
     PROPERTIES INSTALL_RPATH "$ORIGIN/..")
   if(TARGET bag_builder)
     set_target_properties(bag_builder PROPERTIES INSTALL_RPATH "$ORIGIN/..")

@@ -18,7 +18,7 @@ namespace vln_memory
 enum class ObservationDatasetReadCode
 {
   ready, unsupported_dataset, invalid_manifest, invalid_observation, invalid_batch,
-  integrity_mismatch, observation_not_found, batch_not_found, source_changed, io_error
+  integrity_mismatch, observation_not_found, batch_not_found, source_changed, io_error, ambiguous_observation
 };
 
 /** @brief 打开时核对的来源、地图和观测版本；preparation_root 为清单中的路径。 */
@@ -82,6 +82,9 @@ public:
 
   /** @brief 按发布的 ID 回读一条观测，复用 observation/1 完整校验。 */
   ObservationDatasetLoadResult loadObservation(std::string_view observation_id) const;
+
+  /** @brief 在同一已打开数据集按两路原始采样时间查找已经发布的唯一配对。 */
+  ObservationDatasetLoadResult loadObservationByStamps(SensorStamp rgb, SensorStamp depth) const;
 
   /** @brief 按批次序号完整回读并校验该批记录。 */
   ObservationDatasetBatchResult loadBatch(std::size_t batch_index) const;

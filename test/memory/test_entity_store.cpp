@@ -45,6 +45,7 @@ void restoreLegacyEntityTable(const fs::path & file)
   execute(file, R"sql(
     PRAGMA foreign_keys = OFF;
     BEGIN;
+    DROP TABLE entity_relations;
     CREATE TABLE legacy_entities(
       entity_id TEXT PRIMARY KEY NOT NULL,
       kind TEXT NOT NULL CHECK(kind IN ('object','region')),

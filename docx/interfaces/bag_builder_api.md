@@ -53,7 +53,7 @@ YAML 需按 [配置说明](../config/vln_memory.md) 填真实绑定/单位/时�
 | clock/segment | 单个明确同钟段和采集依据。两路 header 须已处于同一可比较时间基准，最大重排量由 max_header_reorder_ns 声明 |
 | rgb_camera/depth_camera | CameraInfoMatchOptions：实际 image_topic/camera_info_topic、optical_frame、binding_basis、raw/rectified、synchronized/static_calibration、独立 max_delta_ns |
 | depth | DepthOptions：米/毫米、optical_z、范围、注册状态/依据及声明网格；不从编码或尺寸猜测 |
-| sync_tolerance_ns | 非负 int64 纳秒最大绝对时差（含边界）；0 严格，正值为 RGB 基准单调一对一最近候选。省略/API 默认 0，示例显式 30000000（30 ms 试用值） |
+| sync_tolerance_ns | 非负 int64 纳秒最大绝对时差（含边界）；0 严格，正值为 RGB 基准单调一对一最近候选。省略/API 默认 30000000（30 ms），示例使用同一门限 |
 | tf_max_gap_ns | 可选非负 int64 纳秒。省略时按所需链的动态样本估计，显式 0 只接受精确动态点 |
 | tf_max_translation_step_m / tf_max_rotation_step_rad | 可选有限正值，限制相邻插值端点的平移量/最短旋转角 |
 | limits | 分别限制消息/图像/标定/TF 条目与样本、序列化单消息、像素/源图像字节、全部输出字节 |
