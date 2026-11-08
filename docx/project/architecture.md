@@ -40,7 +40,7 @@ flowchart LR
 | --- | --- |
 | preparation | `bag_preparation/1`。保存媒体、源消息摘要、配对、相机模型、历史 TF 和待处理报告。新导出的 v7 manifest 绑定媒体 SHA-256 索引。 |
 | 正式观测数据集 | `observation_dataset/2` 的 manifest、`observation/1` 的逐条记录、批次映射及选择和问题报告。读取器兼容旧 v1，按 ID 或批次回读，并通过来源指纹回查 preparation。便携发布可在同一目录内附带精简 preparation。 |
-| 实体记录 | 拥有型 C++ `Entity`，状态为 `located` 或 `pending_location`。物品保存深度选区和表面代表点，空间保存内部确认与底盘锚点。SQLite 工作库绑定正式观测集，提供事务写入和按 ID 回读。完整记忆版本待实现。 |
+| 实体记录 | 拥有型 C++ `Entity`，状态为 `located` 或 `pending_location`。物品保存深度选区和表面代表点，空间保存内部确认与底盘锚点。SQLite 工作库绑定正式观测集，支持按实体修订追加观测，并按 ID 回读所有证据。完整记忆版本待实现。 |
 
 ## 时间、几何与证据
 

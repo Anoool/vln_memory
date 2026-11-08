@@ -26,15 +26,16 @@ struct EntityStoreContext
 enum class EntityStoreCode
 {
   ready, already_exists, not_found, invalid_store, invalid_entity, invalid_reference,
-  dataset_mismatch, observation_read_failed, storage_error
+  dataset_mismatch, observation_read_failed, storage_error,
+  already_linked, revision_conflict, evidence_conflict
 };
 
 struct EntityStoreResult
 {
   EntityStoreCode code{EntityStoreCode::storage_error};
   std::string message;
-  /** @brief 成功表示事务已提交。 */
-  bool ok() const noexcept {return code == EntityStoreCode::ready;}
+  /** @brief ready 表示操作成功，already_linked 表示相同证据已存在。 */
+  bool ok() const noexcept {return code == EntityStoreCode::ready || code == EntityStoreCode::already_linked;}
 };
 
 struct EntityStoreLoadResult : EntityStoreResult
@@ -63,6 +64,18 @@ public:
    */
   EntityStoreResult insertEntity(
     const Entity & entity, const EntityStoreContext & context, const Observation & observation);
+
+  /**
+   * @brief 给已有实体追加一条证据，在同一事务中递增实体 revision。
+   * @param expected_revision 调用方读到的实体 revision，过期时返回冲突。
+   * @param evidence 上游基于已校验观测构造的类型证据。
+   * @param context 已校验的观测集绑定。
+   * @param observation 从该观测集回读的正式观测。
+   * @note 实体的当前定位依据仍为首条观测。常规入口为 appendObservedEvidence。
+   */
+  EntityStoreResult appendEntityObservation(
+    std::string_view entity_id, std::uint64_t expected_revision, const EntityObservationRef & evidence,
+    const EntityStoreContext & context, const Observation & observation);
 
   /** @brief 按原 ID 读取拥有型实体，证据按关联顺序排列，无需访问观测目录。 */
   EntityStoreLoadResult loadEntity(std::string_view entity_id) const;

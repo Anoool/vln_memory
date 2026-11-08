@@ -16,6 +16,23 @@ std::optional<EntityStoreContext> storeContext(const ObservationDatasetReader & 
     info.map_id, info.map_frame, info.geometry_revision};
 }
 
+/** @brief 写入前核对数据集身份并回读准确的观测，统一映射读取错误。 */
+template<typename Write>
+EntityStoreResult writeWithObservation(
+  EntityStore & store, const ObservationDatasetReader & dataset, std::string_view observation_id, Write write)
+{
+  const auto context = storeContext(dataset);
+  if (!context || store.context().dataset_manifest_sha256 != context->dataset_manifest_sha256) {
+    return {EntityStoreCode::dataset_mismatch, "Dataset differs from the store binding"};
+  }
+  const auto loaded = dataset.loadObservation(observation_id);
+  if (loaded.code == ObservationDatasetReadCode::observation_not_found) {
+    return {EntityStoreCode::invalid_reference, loaded.message};
+  }
+  if (!loaded.ok()) {return {EntityStoreCode::observation_read_failed, loaded.message};}
+  return write(*context, *loaded.observation);
+}
+
 }  // namespace
 
 /** @brief 使用读取器核验后的观测集身份创建数据库。 */
@@ -31,19 +48,24 @@ EntityStoreOpenResult createObservedEntityStore(
 EntityStoreResult insertObservedEntity(
   EntityStore & store, const ObservationDatasetReader & dataset, const Entity & entity)
 {
-  const auto context = storeContext(dataset);
-  if (!context || store.context().dataset_manifest_sha256 != context->dataset_manifest_sha256) {
-    return {EntityStoreCode::dataset_mismatch, "Dataset differs from the store binding"};
-  }
   if (entity.observations.size() != 1) {
     return {EntityStoreCode::invalid_reference, "Expected one observation for a new entity"};
   }
-  const auto loaded = dataset.loadObservation(entity.observations.front().observation_id);
-  if (loaded.code == ObservationDatasetReadCode::observation_not_found) {
-    return {EntityStoreCode::invalid_reference, loaded.message};
-  }
-  if (!loaded.ok()) {return {EntityStoreCode::observation_read_failed, loaded.message};}
-  return store.insertEntity(entity, *context, *loaded.observation);
+  return writeWithObservation(store, dataset, entity.observations.front().observation_id,
+    [&](const EntityStoreContext & context, const Observation & observation) {
+      return store.insertEntity(entity, context, observation);
+    });
+}
+
+/** @brief 回读证据引用的观测后，向已有实体提交一条关联。 */
+EntityStoreResult appendObservedEvidence(
+  EntityStore & store, const ObservationDatasetReader & dataset, std::string_view entity_id,
+  std::uint64_t expected_revision, const EntityObservationRef & evidence)
+{
+  return writeWithObservation(store, dataset, evidence.observation_id,
+    [&](const EntityStoreContext & context, const Observation & observation) {
+      return store.appendEntityObservation(entity_id, expected_revision, evidence, context, observation);
+    });
 }
 
 }  // namespace vln_memory

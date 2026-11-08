@@ -86,6 +86,12 @@ public:
       value.size(), SQLITE_TRANSIENT, SQLITE_UTF8));
   }
 
+  /** @brief 绑定 SQLite 有符号整数，用于实体修订。 */
+  void bindInteger(int column, std::int64_t value)
+  {
+    check(db_, sqlite3_bind_int64(stmt_.get(), column, value));
+  }
+
   /** @brief 绑定可空字段，空指针含义由 SQL NULL 表达。 */
   void bindOptional(int column, const std::optional<std::string> & value)
   {
@@ -197,6 +203,13 @@ bool sameMap(const Record & record, const EntityStoreContext & context)
     record.geometry_revision == context.geometry_revision;
 }
 
+/** @brief 比较写入来源与工作库绑定的发布版本及地图。 */
+bool matchesDataset(const EntityStoreContext & dataset, const EntityStoreContext & bound)
+{
+  return dataset.dataset_manifest_sha256 == bound.dataset_manifest_sha256 &&
+    dataset.source_manifest_sha256 == bound.source_manifest_sha256 && sameMap(dataset, bound);
+}
+
 /** @brief 校验实体自身字段，初始定位状态由首条证据单独核对。 */
 bool validEntity(const Entity & entity)
 {
@@ -233,6 +246,39 @@ bool matchesBodyAnchor(const EntityObservationRef & ref, const Observation & obs
   return pose && pose->pose && a.body_frame == observation.body_frame &&
     a.stamp.sec == pose->time.stamp.sec && a.stamp.nanosec == pose->time.stamp.nanosec &&
     a.point_map_m == pose->pose->translation_m;
+}
+
+/** @brief 核对确切的正式观测及其空间锚点，供创建和追加共用。 */
+bool matchesObservation(
+  const EntityObservationRef & ref, const Observation & observation, const EntityStoreContext & bound)
+{
+  return sameMap(observation, bound) && !ref.observation_id.empty() && ref.observation_id == observation.id &&
+    ref.observation_revision != 0 && ref.observation_revision == observation.revision &&
+    ref.source_manifest_sha256 == observation.source_manifest_sha256 &&
+    ref.source_manifest_sha256 == bound.source_manifest_sha256 && matchesBodyAnchor(ref, observation);
+}
+
+/** @brief 绑定一个实体与观测修订的联合键，保留完整无符号观测修订。 */
+void bindAssociationKey(Statement & row, std::string_view entity_id, const EntityObservationRef & ref)
+{
+  row.bind(1, entity_id);
+  row.bind(2, ref.observation_id);
+  row.bind(3, std::to_string(ref.observation_revision));
+}
+
+/** @brief 在调用方的事务中写一条证据及加入时的实体修订。 */
+void insertEvidence(
+  sqlite3 * db, std::string_view entity_id, const EntityObservationRef & ref,
+  std::string_view payload, std::int64_t linked_at_revision)
+{
+  Statement row(db, "INSERT INTO entity_observations"
+    "(entity_id,observation_id,observation_revision,source_manifest_sha256,evidence_json,linked_at_revision) "
+    "VALUES(?1,?2,?3,?4,?5,?6)");
+  bindAssociationKey(row, entity_id, ref);
+  row.bind(4, ref.source_manifest_sha256);
+  row.bind(5, payload);
+  row.bindInteger(6, linked_at_revision);
+  row.writeOne();
 }
 
 /** @brief 用规范十进制 TEXT 保留无符号观测修订的完整范围。 */
@@ -360,8 +406,7 @@ EntityStoreResult EntityStore::insertEntity(
   const Entity & entity, const EntityStoreContext & dataset, const Observation & observation)
 {
   const auto & bound = context();
-  if (dataset.dataset_manifest_sha256 != bound.dataset_manifest_sha256 ||
-    dataset.source_manifest_sha256 != bound.source_manifest_sha256 || !sameMap(dataset, bound)) {
+  if (!matchesDataset(dataset, bound)) {
     return {Code::dataset_mismatch, "Dataset differs from the store binding"};
   }
   if (!validEntity(entity) || entity.revision != 1 || entity.observations.size() != 1) {
@@ -372,11 +417,7 @@ EntityStoreResult EntityStore::insertEntity(
     !matchesInitialLocation(entity)) {
     return {Code::invalid_entity, "Invalid new entity location evidence"};
   }
-  if (!sameMap(entity, bound) || !sameMap(observation, bound) ||
-    ref.observation_id.empty() || ref.observation_id != observation.id ||
-    ref.observation_revision == 0 || ref.observation_revision != observation.revision ||
-    ref.source_manifest_sha256 != observation.source_manifest_sha256 ||
-    ref.source_manifest_sha256 != bound.source_manifest_sha256 || !matchesBodyAnchor(ref, observation)) {
+  if (!sameMap(entity, bound) || !matchesObservation(ref, observation, bound)) {
     return {Code::invalid_reference, "Entity does not reference the verified observation revision and map"};
   }
 
@@ -396,16 +437,79 @@ EntityStoreResult EntityStore::insertEntity(
       if (error.code == SQLITE_CONSTRAINT_PRIMARYKEY) {return {Code::already_exists, "Entity ID already exists"};}
       throw;
     }
-    Statement evidence_row(db, "INSERT INTO entity_observations"
-      "(entity_id,observation_id,observation_revision,source_manifest_sha256,evidence_json) VALUES(?1,?2,?3,?4,?5)");
-    evidence_row.bind(1, entity.entity_id);
-    evidence_row.bind(2, ref.observation_id);
-    evidence_row.bind(3, std::to_string(ref.observation_revision));
-    evidence_row.bind(4, ref.source_manifest_sha256);
-    evidence_row.bind(5, evidence);
-    evidence_row.writeOne();
+    insertEvidence(db, entity.entity_id, ref, evidence, 1);
     transaction.commit();
     return {Code::ready, ""};
+  } catch (const std::exception & error) {
+    return {Code::storage_error, error.what()};
+  }
+}
+
+/** @brief 在持有写锁时检查当前修订、追加证据并推进实体修订。 */
+EntityStoreResult EntityStore::appendEntityObservation(
+  std::string_view entity_id, std::uint64_t expected_revision, const EntityObservationRef & evidence,
+  const EntityStoreContext & dataset, const Observation & observation)
+{
+  const auto & bound = context();
+  if (!matchesDataset(dataset, bound)) {
+    return {Code::dataset_mismatch, "Dataset differs from the store binding"};
+  }
+  if (!matchesObservation(evidence, observation, bound)) {
+    return {Code::invalid_reference, "Entity evidence does not reference the verified observation revision and map"};
+  }
+  try {
+    auto * db = state_->db.get();
+    Transaction transaction(db);
+    EntityKind kind;
+    std::int64_t revision;
+    {
+      Statement current(db, "SELECT kind,revision FROM entities WHERE entity_id=?1");
+      current.bind(1, entity_id);
+      if (!current.step()) {return {Code::not_found, "Entity ID not found"};}
+      kind = readKind(current.text(0));
+      revision = current.integer(1);
+      if (revision <= 0) {return {Code::invalid_store, "Invalid stored entity revision"};}
+    }
+    if (static_cast<std::uint64_t>(revision) != expected_revision) {
+      return {Code::revision_conflict, "Entity revision has changed"};
+    }
+    const auto width = observation.depth_image.width;
+    const auto height = observation.depth_image.height;
+    if (!detail::validEntityEvidence(kind, evidence, width, height)) {
+      return {Code::invalid_entity, "Invalid observation evidence for entity kind"};
+    }
+    const auto payload = detail::encodeEntityEvidence(evidence);
+    {
+      Statement existing(db, "SELECT source_manifest_sha256,evidence_json FROM entity_observations "
+        "WHERE entity_id=?1 AND observation_id=?2 AND observation_revision=?3");
+      bindAssociationKey(existing, entity_id, evidence);
+      if (existing.step()) {
+        EntityObservationRef saved;
+        detail::decodeEntityEvidence(existing.text(1), kind, saved);
+        if (existing.text(0) != bound.source_manifest_sha256 ||
+          !detail::validEntityEvidence(kind, saved, width, height) || !matchesBodyAnchor(saved, observation)) {
+          return {Code::invalid_store, "Invalid stored observation evidence"};
+        }
+        if (detail::encodeEntityEvidence(saved) == payload) {
+          return {Code::already_linked, "Identical evidence is already linked"};
+        }
+        return {Code::evidence_conflict, "Observation revision is already linked with different evidence"};
+      }
+    }
+    if (revision == std::numeric_limits<std::int64_t>::max()) {
+      return {Code::invalid_entity, "Entity revision limit reached"};
+    }
+    const auto next_revision = revision + 1;
+    insertEvidence(db, entity_id, evidence, payload, next_revision);
+    Statement advance(db, "UPDATE entities SET revision=?1 WHERE entity_id=?2 AND revision=?3");
+    advance.bindInteger(1, next_revision);
+    advance.bind(2, entity_id);
+    advance.bindInteger(3, revision);
+    advance.writeOne();
+    transaction.commit();
+    return {Code::ready, ""};
+  } catch (const std::invalid_argument & error) {
+    return {Code::invalid_store, error.what()};
   } catch (const std::exception & error) {
     return {Code::storage_error, error.what()};
   }

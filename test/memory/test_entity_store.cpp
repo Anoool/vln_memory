@@ -59,6 +59,63 @@ void restoreLegacyAssociationTable(const fs::path & file)
   )sql");
 }
 
+/** @brief 验证迁移后的库可以追加证据，版本冲突和后半段写入失败不会留下部分结果。 */
+void appendCases(
+  const fs::path & file, EntityStore & store, const Entity & original, const Observation & first)
+{
+  auto second = first;
+  second.id = "a-second-view";  // 按观测 ID 排序时会错误地放在首条前面。
+  const EntityObservationRef ref{second.id, second.revision, second.source_manifest_sha256,
+    ObjectSelectionEvidence{DepthBoundingBox{0, 0, 2, 2}, {}, DepthRegionCode::ready, 4, 4, 4,
+      DepthRegionPoint{{1, 1}, 1.25F, {0.1, 0.2, 1.25}}}, std::nullopt};
+  auto stale = openEntityStore(file);
+  expect(stale.ok(), stale.message);
+  const auto before = stale.store->loadEntity(original.entity_id);
+  expect(before.ok() && before.entity && before.entity->revision == 1, "Wrong base revision");
+  const auto & binding = store.context();
+  auto wrong_source = ref;
+  wrong_source.source_manifest_sha256 = std::string(64, 'c');
+  expect(store.appendEntityObservation(original.entity_id, 1, wrong_source, binding, second).code ==
+    Code::invalid_reference, "Wrong evidence source was accepted");
+
+  execute(file, "CREATE TRIGGER inject_revision_failure BEFORE UPDATE OF revision ON entities "
+    "BEGIN SELECT RAISE(ABORT, 'injected revision failure'); END");
+  const auto failed = store.appendEntityObservation(original.entity_id, 1, ref, binding, second);
+  expect(failed.code == Code::storage_error && failed.message.find("injected revision failure") != std::string::npos,
+    "Test did not reach the revision update");
+  const auto rolled_back = store.loadEntity(original.entity_id);
+  expect(rolled_back.ok() && rolled_back.entity && rolled_back.entity->revision == 1 &&
+    rolled_back.entity->observations.size() == 1, "An association or revision survived rollback");
+  execute(file, "DROP TRIGGER inject_revision_failure");
+
+  const auto appended = store.appendEntityObservation(original.entity_id, 1, ref, binding, second);
+  expect(appended.code == Code::ready, appended.message);
+  expect(stale.store->appendEntityObservation(original.entity_id, before.entity->revision, ref,
+    stale.store->context(), second).code == Code::revision_conflict, "Stale revision was accepted");
+  const auto duplicate = store.appendEntityObservation(original.entity_id, 2, ref, binding, second);
+  expect(duplicate.ok() && duplicate.code == Code::already_linked, "Identical evidence was not idempotent");
+  auto changed = ref;
+  changed.object_selection->representative->point_map_m[0] += 1.0;
+  expect(store.appendEntityObservation(original.entity_id, 2, changed, binding, second).code ==
+    Code::evidence_conflict, "Different evidence for the same observation overwrote the old evidence");
+
+  auto reopened = openEntityStore(file);
+  expect(reopened.ok(), reopened.message);
+  const auto loaded = reopened.store->loadEntity(original.entity_id);
+  expect(loaded.ok() && loaded.entity && loaded.entity->revision == 2 && loaded.entity->observations.size() == 2,
+    "Append did not survive reopening or retry changed the revision");
+  const auto & entity = *loaded.entity;
+  const auto & appended_ref = entity.observations[1];
+  expect(entity.entity_id == original.entity_id && entity.status == original.status &&
+    entity.location_pending_reason == original.location_pending_reason &&
+    entity.observations.front().observation_id == first.id && appended_ref.observation_id == second.id &&
+    appended_ref.observation_revision == ref.observation_revision &&
+    appended_ref.source_manifest_sha256 == ref.source_manifest_sha256 && appended_ref.object_selection &&
+    appended_ref.object_selection->representative &&
+    appended_ref.object_selection->representative->point_map_m == ref.object_selection->representative->point_map_m,
+    "Association order, original entity state or new evidence was lost");
+}
+
 /** @brief 验证写入、回滚、重复 ID 和 v1 升级后仍完整的原始引用。 */
 void storeCases(const fs::path & parent)
 {
@@ -129,6 +186,7 @@ void storeCases(const fs::path & parent)
     ref.object_selection && !ref.object_selection->representative, "Pending reference or selection was lost");
   const auto & vertices = std::get<DepthPolygon>(ref.object_selection->selection).vertices;
   expect(vertices.size() == 3 && vertices[1].u == 2 && vertices[2].v == 2, "Polygon was not preserved");
+  appendCases(file, *reopened.store, restored, observation);
 }
 
 /** @brief 使用真正发布的观测、准备层和实体创建器完成事务回读。 */
@@ -141,6 +199,15 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   const auto batch = dataset.reader->loadBatch(0);
   expect(batch.ok() && !batch.observations.empty(), batch.message);
   const auto & observation = batch.observations.front();
+  const auto & batches = dataset.reader->batches();
+  expect(batch.observations.size() > 1 || batches.size() > 1, "At least two observations are required");
+  const auto & second_id = batch.observations.size() > 1 ?
+    batch.observations[1].id : batches[1].observation_ids.front();
+  const auto second = dataset.reader->loadObservation(second_id);
+  expect(second.ok(), second.message);
+  const EntityObservationRef next_view{
+    second.observation->id, second.observation->revision, second.observation->source_manifest_sha256,
+    std::nullopt, std::nullopt};
   DepthRegionOptions options;
   options.min_cluster_points = 1;
   const auto object = createObjectEntity(*preparation.reader, observation, "箱子", DepthBoundingBox{u, v, u + 1, v + 1}, options);
@@ -165,6 +232,9 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   for (const auto * entity : {&*object.entity, &*region.entity}) {
     const auto inserted = insertObservedEntity(*created.store, *dataset.reader, *entity);
     expect(inserted.ok(), inserted.message);
+    const auto appended = appendObservedEvidence(
+      *created.store, *dataset.reader, entity->entity_id, entity->revision, next_view);
+    expect(appended.code == Code::ready, appended.message);
   }
   created.store.reset();
 
@@ -174,6 +244,14 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   const auto restored_region = reopened.store->loadEntity(region.entity->entity_id);
   expect(restored_object.ok() && restored_object.entity, restored_object.message);
   expect(restored_region.ok() && restored_region.entity, restored_region.message);
+  for (const auto * entity : {&*restored_object.entity, &*restored_region.entity}) {
+    expect(entity->revision == 2 && entity->observations.size() == 2 &&
+      entity->observations[0].observation_id == observation.id &&
+      entity->observations[1].observation_id == next_view.observation_id &&
+      entity->observations[1].observation_revision == next_view.observation_revision &&
+      entity->observations[1].source_manifest_sha256 == next_view.source_manifest_sha256,
+      "Published observation associations differ after reopening");
+  }
   const auto & restored_ref = restored_object.entity->observations.front();
   expect(restored_ref.object_selection.has_value(), "Stored object lost its selection");
   const auto & stored_selection = *restored_ref.object_selection;
@@ -198,7 +276,7 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
       restored_region.entity->location_pending_reason == "missing_region_confirmation",
       "Stored region lost its pending reason");
   }
-  std::cout << "Entity store round-trip passed for observation " << observation.id << '\n';
+  std::cout << "Entity store round-trip passed for two published observations per entity" << '\n';
 }
 
 }  // namespace

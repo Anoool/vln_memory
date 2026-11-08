@@ -14,4 +14,9 @@ EntityStoreOpenResult createObservedEntityStore(
 EntityStoreResult insertObservedEntity(
   EntityStore & store, const ObservationDatasetReader & dataset, const Entity & entity);
 
+/** @brief 从已绑定观测集核验并追加证据，由调用方提供实体 ID 和当前 revision。 */
+EntityStoreResult appendObservedEvidence(
+  EntityStore & store, const ObservationDatasetReader & dataset, std::string_view entity_id,
+  std::uint64_t expected_revision, const EntityObservationRef & evidence);
+
 }  // namespace vln_memory
