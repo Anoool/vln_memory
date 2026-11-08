@@ -64,7 +64,7 @@ public:
   EntityStoreResult insertEntity(
     const Entity & entity, const EntityStoreContext & context, const Observation & observation);
 
-  /** @brief 按原 ID 读取拥有型实体和证据，读取不需要访问观测目录。 */
+  /** @brief 按原 ID 读取拥有型实体，证据按关联顺序排列，无需访问观测目录。 */
   EntityStoreLoadResult loadEntity(std::string_view entity_id) const;
 
 private:
@@ -83,7 +83,7 @@ struct EntityStoreOpenResult : EntityStoreResult
 /** @brief 在新路径创建并绑定工作库，不覆盖已有文件。 */
 EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, const EntityStoreContext & context);
 
-/** @brief 打开既有工作库，检查 schema 和绑定，缺失路径不创建文件。 */
+/** @brief 打开既有工作库，验证绑定并事务升级 v1，缺失路径不创建文件。 */
 EntityStoreOpenResult openEntityStore(const std::filesystem::path & path);
 
 }  // namespace vln_memory

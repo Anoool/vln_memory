@@ -162,13 +162,13 @@ bool finitePoint(const std::array<double, 3> & point)
 
 /** @brief 验证选区和定位状态，地图点只能来自有效投影码。 */
 bool validObject(
-  const ObjectSelectionEvidence & object, bool located, std::uint32_t width, std::uint32_t height)
+  const ObjectSelectionEvidence & object, std::uint32_t width, std::uint32_t height)
 {
+  const bool located = object.representative.has_value();
   if (object.options.include_points ||
     checkDepthRegionSelection(width, height, object.selection, object.options) != Projection::ready ||
     object.leading_cluster_points > object.valid_points || object.valid_points > object.region_pixels ||
-    object.region_pixels > object.options.max_region_pixels ||
-    located != object.representative.has_value()) {return false;}
+    object.region_pixels > object.options.max_region_pixels) {return false;}
   if (!object.projection_code) {return !located && object.region_pixels == 0;}
   switch (*object.projection_code) {
     case Projection::no_valid_depth: return !located && object.region_pixels > 0 && object.valid_points == 0;
@@ -202,20 +202,23 @@ void decodeEntityEvidence(std::string_view payload, EntityKind kind, EntityObser
   else {ref.region_interior = decodeRegion(value);}
 }
 
-/** @brief 校验两种实体的证据互斥，待定位记录不带推测坐标。 */
-bool validEntityEvidence(const Entity & entity, std::uint32_t width, std::uint32_t height)
+/** @brief 单条证据的定位点来自实测表面或历史底盘锚点。 */
+bool hasEntityLocation(const EntityObservationRef & ref) noexcept
 {
-  const auto & ref = entity.observations.front();
-  const bool located = entity.status == EntityStatus::located;
-  if (entity.kind == EntityKind::object) {
-    if (ref.region_interior) {return false;}
-    if (!ref.object_selection) {return !located;}
-    return validObject(*ref.object_selection, located, width, height);
+  return (ref.object_selection && ref.object_selection->representative) ||
+    (ref.region_interior && ref.region_interior->body_anchor);
+}
+
+/** @brief 校验两种实体的证据互斥，允许单条观测缺少几何。 */
+bool validEntityEvidence(EntityKind kind, const EntityObservationRef & ref, std::uint32_t width, std::uint32_t height)
+{
+  if (kind == EntityKind::object) {
+    return !ref.region_interior && (!ref.object_selection || validObject(*ref.object_selection, width, height));
   }
   if (ref.object_selection) {return false;}
-  if (!ref.region_interior) {return !located;}
+  if (!ref.region_interior) {return true;}
   const auto & region = *ref.region_interior;
-  if (region.confirmation_ref.empty() || located != region.body_anchor.has_value()) {return false;}
+  if (region.confirmation_ref.empty()) {return false;}
   if (!region.body_anchor) {return true;}
   const auto & a = *region.body_anchor;
   return !a.body_frame.empty() && a.stamp.nanosec < 1000000000U && finitePoint(a.point_map_m);

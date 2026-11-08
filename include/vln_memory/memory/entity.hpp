@@ -66,6 +66,7 @@ struct Entity
   std::string map_id;
   std::string map_frame;
   std::string geometry_revision;
+  // 工作库按加入顺序返回，首条为初始观测和当前定位依据。
   std::vector<EntityObservationRef> observations;
   std::optional<std::string> location_pending_reason;
 };

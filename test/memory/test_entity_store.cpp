@@ -39,7 +39,27 @@ void execute(const fs::path & file, const char * sql)
   expect(written == SQLITE_OK, sqlite3_errmsg(db.get()));
 }
 
-/** @brief 验证写入、回滚、重复 ID 和重启后仍完整的原始引用。 */
+/** @brief 用首版关联表格式构造含实际证据的 v1 库。 */
+void restoreLegacyAssociationTable(const fs::path & file)
+{
+  execute(file, R"sql(
+    BEGIN;
+    ALTER TABLE entity_observations RENAME TO observations_v2;
+    CREATE TABLE entity_observations(
+      entity_id TEXT NOT NULL REFERENCES entities(entity_id),
+      observation_id TEXT NOT NULL, observation_revision TEXT NOT NULL, source_manifest_sha256 TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      PRIMARY KEY(entity_id, observation_id, observation_revision)
+    );
+    INSERT INTO entity_observations
+      SELECT entity_id,observation_id,observation_revision,source_manifest_sha256,evidence_json FROM observations_v2;
+    DROP TABLE observations_v2;
+    PRAGMA user_version = 1;
+    COMMIT;
+  )sql");
+}
+
+/** @brief 验证写入、回滚、重复 ID 和 v1 升级后仍完整的原始引用。 */
 void storeCases(const fs::path & parent)
 {
   const EntityStoreContext binding{std::string(64, 'a'), std::string(64, 'b'), "map_id", "map", "geometry-v1"};
@@ -92,6 +112,7 @@ void storeCases(const fs::path & parent)
   expect(store.insertEntity(entity, binding, observation).code == Code::already_exists, "Duplicate ID was accepted");
 
   created.store.reset();
+  restoreLegacyAssociationTable(file);
   auto reopened = openEntityStore(file);
   expect(reopened.ok(), reopened.message);
   const auto loaded = reopened.store->loadEntity(entity.entity_id);
