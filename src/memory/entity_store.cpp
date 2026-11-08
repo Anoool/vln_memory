@@ -271,11 +271,12 @@ bool matchesObservation(
 }
 
 /** @brief 绑定一个实体与观测修订的联合键，保留完整无符号观测修订。 */
-void bindAssociationKey(Statement & row, std::string_view entity_id, const EntityObservationRef & ref)
+void bindAssociationKey(
+  Statement & row, std::string_view entity_id, std::string_view observation_id, std::uint64_t observation_revision)
 {
   row.bind(1, entity_id);
-  row.bind(2, ref.observation_id);
-  row.bind(3, std::to_string(ref.observation_revision));
+  row.bind(2, observation_id);
+  row.bind(3, std::to_string(observation_revision));
 }
 
 /** @brief 在调用方的事务中写一条证据及加入时的实体修订。 */
@@ -286,7 +287,7 @@ void insertEvidence(
   Statement row(db, "INSERT INTO entity_observations"
     "(entity_id,observation_id,observation_revision,source_manifest_sha256,evidence_json,linked_at_revision) "
     "VALUES(?1,?2,?3,?4,?5,?6)");
-  bindAssociationKey(row, entity_id, ref);
+  bindAssociationKey(row, entity_id, ref.observation_id, ref.observation_revision);
   row.bind(4, ref.source_manifest_sha256);
   row.bind(5, payload);
   row.bindInteger(6, linked_at_revision);
@@ -502,7 +503,7 @@ EntityStoreResult EntityStore::appendEntityObservation(
     {
       Statement existing(db, "SELECT source_manifest_sha256,evidence_json FROM entity_observations "
         "WHERE entity_id=?1 AND observation_id=?2 AND observation_revision=?3");
-      bindAssociationKey(existing, entity_id, evidence);
+      bindAssociationKey(existing, entity_id, evidence.observation_id, evidence.observation_revision);
       if (existing.step()) {
         EntityObservationRef saved;
         detail::decodeEntityEvidence(existing.text(1), kind, saved);
@@ -526,6 +527,98 @@ EntityStoreResult EntityStore::appendEntityObservation(
     advance.bind(2, entity_id);
     advance.bindInteger(3, revision);
     advance.writeOne();
+    transaction.commit();
+    return {Code::ready, ""};
+  } catch (const std::invalid_argument & error) {
+    return {Code::invalid_store, error.what()};
+  } catch (const std::exception & error) {
+    return {Code::storage_error, error.what()};
+  }
+}
+
+/** @brief 选择本实体已保存的证据，在事务中把待定位实体更新为已定位。 */
+EntityStoreResult EntityStore::resolveEntityLocation(
+  std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
+  const EntityStoreContext & dataset, const Observation & observation)
+{
+  const auto & bound = context();
+  if (!matchesDataset(dataset, bound)) {
+    return {Code::dataset_mismatch, "Dataset differs from the store binding"};
+  }
+  if (selected.observation_id.empty() || selected.observation_id != observation.id ||
+    selected.observation_revision == 0 || selected.observation_revision != observation.revision) {
+    return {Code::invalid_reference, "Selected observation revision differs from the verified observation"};
+  }
+
+  try {
+    auto * db = state_->db.get();
+    Transaction transaction(db);
+    EntityKind kind;
+    std::int64_t revision;
+    {
+      Statement current(db, "SELECT kind,revision,status,pending_reason,location_linked_at_revision "
+        "FROM entities WHERE entity_id=?1");
+      current.bind(1, entity_id);
+      if (!current.step()) {return {Code::not_found, "Entity ID not found"};}
+      kind = readKind(current.text(0));
+      revision = current.integer(1);
+      if (revision <= 0) {return {Code::invalid_store, "Invalid stored entity revision"};}
+      if (static_cast<std::uint64_t>(revision) != expected_revision) {
+        return {Code::revision_conflict, "Entity revision has changed"};
+      }
+      const auto status = current.text(2);
+      const auto pending_reason = current.optionalText(3);
+      const auto current_location = current.optionalInteger(4);
+      if (status == "located" && !pending_reason && current_location &&
+        *current_location > 0 && *current_location <= revision) {
+        return {Code::already_located, "Entity already has a selected location"};
+      }
+      if (status != "pending_location" || !pending_reason || !validText(*pending_reason) || current_location) {
+        return {Code::invalid_store, "Invalid stored entity location state"};
+      }
+    }
+
+    std::int64_t linked_at_revision;
+    {
+      Statement linked(db, "SELECT linked_at_revision,source_manifest_sha256,evidence_json FROM entity_observations "
+        "WHERE entity_id=?1 AND observation_id=?2 AND observation_revision=?3");
+      bindAssociationKey(linked, entity_id, selected.observation_id, selected.observation_revision);
+      if (!linked.step()) {return {Code::invalid_reference, "Selected observation is not linked to the entity"};}
+      linked_at_revision = linked.integer(0);
+      EntityObservationRef saved{selected.observation_id, selected.observation_revision, linked.text(1),
+        std::nullopt, std::nullopt};
+      try {
+        detail::decodeEntityEvidence(linked.text(2), kind, saved);
+      } catch (const std::exception & error) {
+        return {Code::invalid_store, error.what()};
+      }
+      if (linked_at_revision <= 0 || linked_at_revision > revision ||
+        !detail::validEntityEvidence(kind, saved, observation.depth_image.width, observation.depth_image.height)) {
+        return {Code::invalid_store, "Invalid stored location evidence"};
+      }
+      if (!matchesObservation(saved, observation, bound)) {
+        return {Code::invalid_reference, "Saved evidence does not match the verified observation and map"};
+      }
+      if (!detail::hasEntityLocation(saved)) {
+        return {Code::location_unavailable, "Selected evidence has no valid location"};
+      }
+      if (kind == EntityKind::object &&
+        (!observation.depth_media || !observation.depth_storage || !observation.depth_model ||
+         !observation.depth_camera_pose_map || !observation.depth_camera_pose_map->ok())) {
+        return {Code::location_unavailable, "Selected observation lacks depth projection inputs"};
+      }
+    }
+    if (revision == std::numeric_limits<std::int64_t>::max()) {
+      return {Code::invalid_entity, "Entity revision limit reached"};
+    }
+
+    Statement resolve(db, "UPDATE entities SET revision=?1,status='located',pending_reason=NULL,"
+      "location_linked_at_revision=?2 WHERE entity_id=?3 AND revision=?4 AND status='pending_location'");
+    resolve.bindInteger(1, revision + 1);
+    resolve.bindInteger(2, linked_at_revision);
+    resolve.bind(3, entity_id);
+    resolve.bindInteger(4, revision);
+    resolve.writeOne();
     transaction.commit();
     return {Code::ready, ""};
   } catch (const std::invalid_argument & error) {

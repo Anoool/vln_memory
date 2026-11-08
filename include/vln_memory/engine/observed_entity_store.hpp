@@ -19,4 +19,9 @@ EntityStoreResult appendObservedEvidence(
   EntityStore & store, const ObservationDatasetReader & dataset, std::string_view entity_id,
   std::uint64_t expected_revision, const EntityObservationRef & evidence);
 
+/** @brief 从绑定观测集核验定位依据，为待定位实体提交显式状态变更。 */
+EntityStoreResult resolveEntityLocation(
+  EntityStore & store, const ObservationDatasetReader & dataset, std::string_view entity_id,
+  std::uint64_t expected_revision, const EntityLocationRef & selected);
+
 }  // namespace vln_memory

@@ -90,12 +90,49 @@ void expectLocationReference(const Entity & entity, const Observation & observat
     "Location does not reference the expected observation revision");
 }
 
-/** @brief 构造 schema 3 定位引用记录，验证非首条定位依据与修订空档的回读。 */
-void locationReadCases(
-  const fs::path & file, EntityStore & store, const Entity & original, const Observation & selected)
+/** @brief 验证补定位的引用、版本、回滚，以及选择后继续追加。 */
+void locationResolveCases(
+  const fs::path & file, EntityStore & store, const Entity & original,
+  const Observation & first, const Observation & selected)
 {
-  // 补定位写入接口在下一部分实现。这里直接构造只供回读验证的数据库记录。
-  execute(file, "UPDATE entities SET status='located', pending_reason=NULL, revision=3, location_linked_at_revision=3");
+  const auto & binding = store.context();
+  const EntityLocationRef target{selected.id, selected.revision};
+  const EntityLocationRef first_ref{first.id, first.revision};
+  expect(store.resolveEntityLocation(original.entity_id, 1, target, binding, selected).code ==
+    Code::revision_conflict, "Stale location request was accepted");
+  expect(store.resolveEntityLocation(original.entity_id, 2, first_ref, binding, first).code ==
+    Code::location_unavailable, "Observation without geometry was accepted");
+  auto incomplete = selected;
+  incomplete.depth_camera_pose_map.reset();
+  expect(store.resolveEntityLocation(original.entity_id, 2, target, binding, incomplete).code ==
+    Code::location_unavailable, "Projection from observation without depth pose was accepted");
+  auto foreign = selected;
+  foreign.id = "another-entity-observation";
+  const EntityLocationRef foreign_ref{foreign.id, foreign.revision};
+  expect(store.resolveEntityLocation(original.entity_id, 2, foreign_ref, binding, foreign).code ==
+    Code::invalid_reference, "Unlinked observation was accepted");
+  const EntityLocationRef wrong_revision{selected.id, 1};
+  expect(store.resolveEntityLocation(original.entity_id, 2, wrong_revision, binding, selected).code ==
+    Code::invalid_reference, "Wrong observation revision was accepted");
+
+  execute(file, "CREATE TRIGGER inject_location_failure AFTER UPDATE OF status ON entities "
+    "BEGIN SELECT RAISE(FAIL, 'injected location failure'); END");
+  const auto failed = store.resolveEntityLocation(original.entity_id, 2, target, binding, selected);
+  expect(failed.code == Code::storage_error && failed.message.find("injected location failure") != std::string::npos,
+    "Test did not reach the location update");
+  const auto rolled_back = store.loadEntity(original.entity_id);
+  expect(rolled_back.ok() && rolled_back.entity && rolled_back.entity->revision == 2 &&
+    rolled_back.entity->status == EntityStatus::pending_location && !rolled_back.entity->location_observation &&
+    rolled_back.entity->location_pending_reason == original.location_pending_reason &&
+    rolled_back.entity->observations.size() == 2, "Failed resolution changed the entity");
+  execute(file, "DROP TRIGGER inject_location_failure");
+
+  const auto resolved = store.resolveEntityLocation(original.entity_id, 2, target, binding, selected);
+  expect(resolved.code == Code::ready, resolved.message);
+  expect(store.resolveEntityLocation(original.entity_id, 3, target, binding, selected).code ==
+    Code::already_located, "Located entity accepted another resolution");
+
+  execute(file, "UPDATE entities SET location_linked_at_revision=3");
   expect(store.loadEntity(original.entity_id).code == Code::invalid_store, "Dangling location reference accepted");
   execute(file, "UPDATE entities SET location_linked_at_revision=1");
   expect(store.loadEntity(original.entity_id).code == Code::invalid_store, "Location without geometry accepted");
@@ -123,6 +160,11 @@ void appendCases(
 {
   auto second = first;
   second.id = "a-second-view";  // 按观测 ID 排序时会错误地放在首条前面。
+  // 核心回归构造补定位所需字段。完整观测验证在发布目录回归中执行。
+  second.depth_media = "fixture-depth.png";
+  second.depth_storage.emplace();
+  second.depth_model.emplace();
+  second.depth_camera_pose_map.emplace().pose = TfPose{};
   const EntityObservationRef ref{second.id, second.revision, second.source_manifest_sha256,
     ObjectSelectionEvidence{DepthBoundingBox{0, 0, 2, 2}, {}, DepthRegionCode::ready, 4, 4, 4,
       DepthRegionPoint{{1, 1}, 1.25F, {0.1, 0.2, 1.25}}}, std::nullopt};
@@ -172,7 +214,7 @@ void appendCases(
     appended_ref.object_selection->representative &&
     appended_ref.object_selection->representative->point_map_m == ref.object_selection->representative->point_map_m,
     "Association order, original entity state or new evidence was lost");
-  locationReadCases(file, *reopened.store, entity, second);
+  locationResolveCases(file, *reopened.store, entity, first, second);
 }
 
 /** @brief 验证写入、回滚、重复 ID 和 v1 升级后仍完整的原始引用。 */
@@ -247,6 +289,74 @@ void storeCases(const fs::path & parent)
   const auto & vertices = std::get<DepthPolygon>(ref.object_selection->selection).vertices;
   expect(vertices.size() == 3 && vertices[1].u == 2 && vertices[2].v == 2, "Polygon was not preserved");
   appendCases(file, *reopened.store, restored, observation);
+}
+
+/** @brief 用现有创建器产出的第二帧几何，为第一帧创建的原实体补定位。 */
+void resolvePublishedEvidence(
+  EntityStore & store, const ObservationDatasetReader & dataset, const Entity & pending, const Entity & candidate)
+{
+  expect(pending.status == EntityStatus::pending_location && candidate.location_observation,
+    "Expected pending entity and a candidate location");
+  const auto inserted = insertObservedEntity(store, dataset, pending);
+  expect(inserted.ok(), inserted.message);
+  const auto appended = appendObservedEvidence(
+    store, dataset, pending.entity_id, 1, candidate.observations.front());
+  expect(appended.code == Code::ready, appended.message);
+  const auto before = store.loadEntity(pending.entity_id);
+  expect(before.ok() && before.entity && before.entity->status == EntityStatus::pending_location &&
+    before.entity->revision == 2 && before.entity->observations.size() == 2 && !before.entity->location_observation,
+    "Appending a location candidate selected it before resolution");
+  const auto resolved = resolveEntityLocation(store, dataset, pending.entity_id, 2, *candidate.location_observation);
+  expect(resolved.code == Code::ready, resolved.message);
+}
+
+/** @brief 通过发布目录重开数据库，验证原 ID、两条观测及第二条定位依据。 */
+void expectResolvedRoundTrip(
+  EntityStore & store, const Entity & pending, const Observation & first, const Observation & second)
+{
+  const auto loaded = store.loadEntity(pending.entity_id);
+  expect(loaded.ok() && loaded.entity && loaded.entity->entity_id == pending.entity_id &&
+    loaded.entity->revision == 3 && loaded.entity->observations.size() == 2 &&
+    loaded.entity->observations[0].observation_id == first.id &&
+    loaded.entity->observations[1].observation_id == second.id && !loaded.entity->location_pending_reason,
+    "Location update did not round-trip on the original entity");
+  expectLocationReference(*loaded.entity, second);
+}
+
+/** @brief 用实际正式观测的深度投影和构造空间确认验证补定位写入。 */
+void publishedResolution(
+  const fs::path & file, const ObservationDatasetReader & dataset, const PreparationReader & preparation,
+  const Observation & first, const Observation & second, const DepthBoundingBox & box, bool confirm)
+{
+  auto opened = openEntityStore(file);
+  expect(opened.ok(), opened.message);
+  const auto pending_object = createObjectEntity(preparation, first, "箱子");
+  expect(pending_object.ok(), pending_object.message);
+  DepthRegionOptions options;
+  options.min_cluster_points = 1;
+  const auto object_candidate = createObjectEntity(preparation, second, "箱子", box, options);
+  expect(object_candidate.ok() && object_candidate.entity->status == EntityStatus::located,
+    "Second observation lacks an object projection for this selection");
+  resolvePublishedEvidence(*opened.store, dataset, *pending_object.entity, *object_candidate.entity);
+
+  std::optional<Entity> pending_region;
+  if (confirm) {
+    auto initial = createRegionEntity(preparation, first, "房间");
+    expect(initial.ok(), initial.message);
+    pending_region = std::move(*initial.entity);
+    const RegionInteriorConfirmation confirmation{"房间", second.id, second.revision,
+      second.source_manifest_sha256, second.map_id, second.map_frame, second.geometry_revision,
+      "fixture/second-interior-confirmation"};
+    const auto region_candidate = createRegionEntity(preparation, second, "房间", confirmation);
+    expect(region_candidate.ok(), region_candidate.message);
+    resolvePublishedEvidence(*opened.store, dataset, *pending_region, *region_candidate.entity);
+  }
+  opened.store.reset();
+
+  const auto reopened = openEntityStore(file);
+  expect(reopened.ok(), reopened.message);
+  expectResolvedRoundTrip(*reopened.store, *pending_object.entity, first, second);
+  if (pending_region) {expectResolvedRoundTrip(*reopened.store, *pending_region, first, second);}
 }
 
 /** @brief 使用真正发布的观测、准备层和实体创建器完成事务回读。 */
@@ -345,7 +455,9 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
       restored_region.entity->location_pending_reason == "missing_region_confirmation",
       "Stored region lost its pending reason");
   }
-  std::cout << "Entity location reference and two published observations survived v2 migration" << '\n';
+  publishedResolution(file, *dataset.reader, *preparation.reader, observation, *second.observation,
+    DepthBoundingBox{u, v, u + 1, v + 1}, confirm);
+  std::cout << "Entity location migration and resolution from the second published observation passed" << '\n';
 }
 
 }  // namespace

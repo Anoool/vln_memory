@@ -8,7 +8,7 @@
 | `memory_build_input` | 单独生成用途筛选、关键帧和分批清单，适合检查选帧结果。 |
 | `memory_observation_dataset` | 直接从 preparation 筛选并发布正式观测、批次及文件摘要。 |
 | `createObjectEntity` / `createRegionEntity` | C++ 接口。用观测和深度选区或空间内部确认创建拥有型实体记录。 |
-| `createObservedEntityStore` / `insertObservedEntity` / `appendObservedEvidence` | C++ 接口。绑定正式观测集，事务写入实体并追加多条观测，重开后可按 ID 回读。 |
+| `createObservedEntityStore` / `insertObservedEntity` / `appendObservedEvidence` / `resolveEntityLocation` | C++ 接口。绑定正式观测集，事务写入、追加观测及选用已有证据补定位。 |
 
 ## 安装
 
@@ -101,12 +101,12 @@ C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::
 | --- | --- |
 | S0–S1 数据契约、读取与配对 | 传感器时间、来源、录包配置、读取配对及 preparation 导出已实现。完整构建系统配置随业务模块补齐。 |
 | S2 离线观测 | 相机模型、历史 TF、索引回读、用途筛选、关键帧、正式观测发布和按 ID/批次回读已实现。 |
-| S3 几何与工作库 | 已实现单点和深度原图区域投影、物品及空间创建、SQLite 事务写入、多观测追加和按 ID 回读。补定位、关系和查询索引待实现。 |
+| S3 几何与工作库 | 已实现单点和深度原图区域投影、物品及空间创建、SQLite 事务写入、多观测追加、补定位和按 ID 回读。关系和查询索引待实现。 |
 | S4–S6 构建、发布与查看 | 八项构建工具、模型批次、纠错标注、完整记忆版本和 MemoryViewer 待实现。 |
 
 真实短包已验证媒体回读、历史位姿、数值投影和物品创建。空间定位与异常场景使用带明确确认的构造录包验证。深度物理尺度、RGB/Depth 注册精度和曝光同步仍需独立验收。
 
-**下一步**基于已保存的观测证据实现显式补定位，随后接入关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
+**下一步**接入 `inside` 空间归属和 `near` 距离关系。完整顺序见 [系统规划](docx/project/system_plan.md#102-后续任务与依赖)，原设计逐条状态见 [范围与验收](docx/project/sections_1_2_scope.md)。
 
 ## 目录结构
 

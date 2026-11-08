@@ -17,6 +17,15 @@ auto appended = vln_memory::appendObservedEvidence(
 
 追加成功后，`loadEntity` 按加入顺序返回全部证据。读取实体当前位置时，用 `location_observation` 的观测 ID 和修订定位对应证据。若返回 `revision_conflict`，先重新读取实体再决定是否追加。
 
+需要让待定位实体使用某条已关联证据时，从 `loadEntity` 返回的观测列表中选出候选，并传入当前实体 revision。成功后用 `loadEntity` 读取新的状态和定位引用。
+
+```cpp
+const auto & candidate = current.entity->observations.at(1);
+auto resolved = vln_memory::resolveEntityLocation(
+  *opened.store, *dataset.reader, current.entity->entity_id, current.entity->revision,
+  {candidate.observation_id, candidate.observation_revision});
+```
+
 保持清单字节原样时，可移动整个观测目录。引用模式下可给 `openSourcePreparation` 传入新的 preparation 路径。重写或重新发布观测清单会改变绑定身份。
 
-ROS 夹具使用已发布的便携观测集验证物品和经确认的空间各关联两帧，重开后保留原 ID、证据顺序及定位依据。测试程序的 `--published DATASET U V DB_PARENT` 模式可以对真实短包复验，需要至少两条观测，`U,V` 是首条观测的有效深度原图像素。数值位置仍以该录包的标定、尺度及历史轨迹为依据。
+ROS 夹具使用已发布的便携观测集验证物品和空间从第二帧补定位。重开后保留原 ID 和两条观测，实体 revision 为 3，定位依据指向第二帧。测试程序的 `--published DATASET U V DB_PARENT` 模式可以对真实短包复验物品补定位，需要至少两条观测，`U,V` 是前两条观测中均有效的深度原图像素。数值位置仍以该录包的标定、尺度及历史轨迹为依据。

@@ -27,7 +27,7 @@ enum class EntityStoreCode
 {
   ready, already_exists, not_found, invalid_store, invalid_entity, invalid_reference,
   dataset_mismatch, observation_read_failed, storage_error,
-  already_linked, revision_conflict, evidence_conflict
+  already_linked, revision_conflict, evidence_conflict, location_unavailable, already_located
 };
 
 struct EntityStoreResult
@@ -75,6 +75,17 @@ public:
    */
   EntityStoreResult appendEntityObservation(
     std::string_view entity_id, std::uint64_t expected_revision, const EntityObservationRef & evidence,
+    const EntityStoreContext & context, const Observation & observation);
+
+  /**
+   * @brief 用已关联的几何证据补定位，原子更新状态、定位依据和实体修订。
+   * @param expected_revision 调用方读到的实体修订，过期时返回冲突。
+   * @param selected 本实体中作为定位依据的观测 ID 与修订。
+   * @param context 已校验的观测集绑定。
+   * @param observation 从该观测集回读的选中观测。
+   */
+  EntityStoreResult resolveEntityLocation(
+    std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
     const EntityStoreContext & context, const Observation & observation);
 
   /** @brief 按原 ID 读取拥有型实体，证据按关联顺序排列，无需访问观测目录。 */

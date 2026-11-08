@@ -68,4 +68,15 @@ EntityStoreResult appendObservedEvidence(
     });
 }
 
+/** @brief 回读选中的观测，使用工作库内的原有几何证据补定位。 */
+EntityStoreResult resolveEntityLocation(
+  EntityStore & store, const ObservationDatasetReader & dataset, std::string_view entity_id,
+  std::uint64_t expected_revision, const EntityLocationRef & selected)
+{
+  return writeWithObservation(store, dataset, selected.observation_id,
+    [&](const EntityStoreContext & context, const Observation & observation) {
+      return store.resolveEntityLocation(entity_id, expected_revision, selected, context, observation);
+    });
+}
+
 }  // namespace vln_memory
