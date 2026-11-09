@@ -119,7 +119,7 @@ void writeJsonLine(OutputFiles & files, const std::string & path, nlohmann::json
 void writeJsonFile(OutputFiles & files, const std::string & path, nlohmann::json record)
 {
   if (!record.is_object()) {throw BagBuildError("invalid_output", "JSON document must be an object");}
-  record["schema_version"] = "bag_preparation/1";
+  if (!record.contains("schema_version")) {record["schema_version"] = "bag_preparation/1";}
   const auto content = record.dump(2) + "\n";
   if (content.size() > detail::kMaxPreparationJsonBytes) {
     throw BagBuildError("limit_exceeded", "JSON document exceeds preparation reader limit: " + path);

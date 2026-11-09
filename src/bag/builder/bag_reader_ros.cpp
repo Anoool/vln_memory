@@ -430,7 +430,7 @@ void indexImage(
 /** @brief 保存所有标定（包含坏候选）及来源，CDR 副本按保存策略生成。 */
 void indexCameraInfo(
   const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
-  const BagBuildOptions & options, OutputFiles & output)
+  const BagBuildOptions & options, OutputFiles & output, bool write_preparation)
 {
   if (scan.calibrations.size() >= options.max_calibrations) {
     throw BagBuildError("limit_exceeded", "Calibration limit exceeded");
@@ -459,7 +459,7 @@ void indexCameraInfo(
   if (!record.normalized) {
     addIssue(scan, source, "camera_info", cameraInfoErrorCodeName(normalized.code), normalized.message);
   }
-  writeJsonLine(output, "camera_info.jsonl", cameraInfoJson(record));
+  if (write_preparation) {writeJsonLine(output, "camera_info.jsonl", cameraInfoJson(record));}
   scan.calibrations.push_back(std::move(record));
 }
 
@@ -489,7 +489,7 @@ nlohmann::json transformJson(
 /** @brief 复用已有 TF 适配和冲突规则，逐条输出状态；资源失败不能按坏帧忽略。 */
 void indexTf(
   const RawMessage & raw, const BagMessageRef & source, BagScan & scan,
-  const BagBuildOptions & options, OutputFiles & output)
+  const BagBuildOptions & options, OutputFiles & output, bool write_preparation)
 {
   std::string error;
   const auto message = deserialize<tf2_msgs::msg::TFMessage>(raw, error);
@@ -512,6 +512,7 @@ void indexTf(
   if (report.entry_codes.size() != message->transforms.size()) {
     throw BagBuildError("tf_adapter_error", "TF adapter did not process the complete message");
   }
+  if (!write_preparation) {return;}
   for (std::size_t index = 0; index < message->transforms.size(); ++index) {
     writeJsonLine(
       output, "tf.jsonl", transformJson(
@@ -521,7 +522,9 @@ void indexTf(
 }
 
 /** @brief 顺序扫描调度，反序列化的各类消息在辅助函数结束时释放。 */
-void scanMessages(const BagBuildOptions & options, Reader & reader, BagScan & scan, OutputFiles & output)
+void scanMessages(
+  const BagBuildOptions & options, Reader & reader, BagScan & scan, OutputFiles & output,
+  bool write_preparation)
 {
   auto cursor = makeCursor(scan);
   std::map<std::string, std::int64_t> high_water;
@@ -533,14 +536,14 @@ void scanMessages(const BagBuildOptions & options, Reader & reader, BagScan & sc
       output.write("evidence/raw/" + source.message_id + ".cdr",
         raw->serialized_data->buffer, source.serialized_bytes);
     }
-    writeJsonLine(output, "messages.jsonl", sourceJson(source));
+    if (write_preparation) {writeJsonLine(output, "messages.jsonl", sourceJson(source));}
     ++scan.topics[cursor.topics.at(source.topic)].scanned_count;
     scan.messages.push_back(source);
     if (source.topic == options.rgb_camera.image_topic || source.topic == options.depth_camera.image_topic) {
       indexImage(*raw, source, scan.topics[cursor.topics.at(source.topic)].type, scan, options, high_water);
     } else if (source.topic == options.tf_topic || source.topic == options.tf_static_topic) {
-      indexTf(*raw, source, scan, options, output);
-    } else {indexCameraInfo(*raw, source, scan, options, output);}
+      indexTf(*raw, source, scan, options, output, write_preparation);
+    } else {indexCameraInfo(*raw, source, scan, options, output, write_preparation);}
   }
   for (const auto & topic : scan.topics) {
     if (topic.selected && topic.declared_count != topic.scanned_count) {
@@ -607,7 +610,7 @@ void verifyBagSources(const BagBuildOptions & options, const BagScan & scan)
 }
 
 /** @brief 完整扫描后返回稳定索引，失败保留工作目录而不发布 manifest。 */
-BagScan scanBag(const BagBuildOptions & options, OutputFiles & output)
+BagScan scanBag(const BagBuildOptions & options, OutputFiles & output, bool write_preparation)
 {
   const auto errors = validateBagBuildOptions(options);
   if (!errors.empty()) {throw BagBuildError("invalid_config", errors.front());}
@@ -625,7 +628,7 @@ BagScan scanBag(const BagBuildOptions & options, OutputFiles & output)
     throw BagBuildError("source_changed", "Metadata changed while opening");
   }
   inspectTopics(options, reader, scan);
-  scanMessages(options, reader, scan, output);
+  scanMessages(options, reader, scan, output, write_preparation);
   reader.close();
   verifyBagSources(options, scan);
   return scan;

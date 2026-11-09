@@ -552,8 +552,7 @@ void checkDepthHeader(const fs::path & path, const CameraImageReference & image,
 }
 
 /** @brief 读取已解析存储契约的媒体，确保质量计数与实际米制像素一致。 */
-DepthFrame readDepth(const fs::path & path, const CameraImageReference & image, const Json & details,
-  const PreparedDepthStorage & storage)
+DepthFrame readDepth(const fs::path & path, const CameraImageReference & image, const PreparedDepthStorage & storage)
 {
   const auto pixels = checkDepthBudget(path, image);
   DepthFrame out;
@@ -582,11 +581,6 @@ DepthFrame readDepth(const fs::path & path, const CameraImageReference & image, 
   out.valid_pixels = valid;
   out.invalid_pixels = static_cast<std::size_t>(pixels - valid);
   out.valid_ratio = static_cast<double>(valid) / static_cast<double>(pixels);
-  out.zero_pixels = integer<std::size_t>(details.at("zero_pixels"));
-  out.negative_pixels = integer<std::size_t>(details.at("negative_pixels"));
-  out.nonfinite_pixels = integer<std::size_t>(details.at("nonfinite_pixels"));
-  out.out_of_range_pixels = integer<std::size_t>(details.at("out_of_range_pixels"));
-  out.unrepresentable_pixels = integer<std::size_t>(details.at("unrepresentable_pixels"));
   out.source_encoding = storage.source_encoding;
   if (out.source_encoding == "16UC1") {out.source_numeric_type = DepthNumericType::uint16;}
   if (out.source_encoding == "32FC1") {out.source_numeric_type = DepthNumericType::float32;}
@@ -806,7 +800,13 @@ PreparedPair readPair(
       checkFileSnapshots(root, result.file_snapshots);
       return result;
     }
-    result.depth = readDepth(*result.depth_media, result.depth_image, depth.at("details"), *result.depth_storage);
+    result.depth = readDepth(*result.depth_media, result.depth_image, *result.depth_storage);
+    const auto & details = depth.at("details");
+    result.depth->zero_pixels = integer<std::size_t>(details.at("zero_pixels"));
+    result.depth->negative_pixels = integer<std::size_t>(details.at("negative_pixels"));
+    result.depth->nonfinite_pixels = integer<std::size_t>(details.at("nonfinite_pixels"));
+    result.depth->out_of_range_pixels = integer<std::size_t>(details.at("out_of_range_pixels"));
+    result.depth->unrepresentable_pixels = integer<std::size_t>(details.at("unrepresentable_pixels"));
     result.depth->alignment = result.depth_alignment;
     result.depth->alignment_basis = result.alignment_basis;
     if (result.depth_alignment == DepthAlignment::aligned_to_rgb) {
@@ -825,6 +825,13 @@ PreparedPair readPair(
 }
 
 }  // namespace
+
+/** @brief 复用 PNG/NPY 解析和米制深度校验，路径已由观测读取器核验。 */
+DepthFrame detail::readStoredDepth(
+  const fs::path & path, const CameraImageReference & image, const PreparedDepthStorage & storage)
+{
+  return readDepth(path, image, storage);
+}
 
 /** @brief reader 私有状态，仅拥有元数据和行位置，逐对读取使用局部文件流。 */
 struct PreparationReaderState

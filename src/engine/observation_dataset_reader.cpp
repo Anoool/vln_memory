@@ -155,7 +155,8 @@ DatasetManifest readManifest(const fs::path & path)
   const auto bytes = detail::readPreparationDocument(path);
   const auto row = detail::parsePreparationJson(bytes);
   const auto & version = row.at("schema_version");
-  require((version == detail::kObservationDatasetVersion || version == detail::kObservationDatasetLegacyVersion) &&
+  const bool direct = version == detail::kDirectObservationVersion;
+  require((direct || version == detail::kObservationDatasetVersion || version == detail::kObservationDatasetLegacyVersion) &&
     row.at("artifact_kind") == "observation_dataset" && row.at("observation_schema_version") == kObservationSchemaVersion,
     Code::unsupported_dataset, "Unsupported observation dataset or record schema");
   DatasetManifest out;
@@ -163,9 +164,10 @@ DatasetManifest readManifest(const fs::path & path)
   auto & info = out.info;
   info.schema_version = version.get<std::string>();
   info.dataset_manifest_sha256 = out.sha256;
-  const auto preparation = row.at("preparation_root").get<std::string>();
+  info.direct_evidence = direct;
+  const auto preparation = direct ? std::string{} : row.at("preparation_root").get<std::string>();
   info.preparation_root = preparation;
-  if (row.contains("preparation_mode")) {
+  if (!direct && row.contains("preparation_mode")) {
     const auto & mode = row.at("preparation_mode");
     require(mode == "reference" || mode == "bundle", Code::invalid_manifest, "Unknown preparation delivery mode");
     info.preparation_bundled = mode == "bundle";
@@ -181,12 +183,22 @@ DatasetManifest readManifest(const fs::path & path)
   const auto revision_end = revision.data() + revision.size();
   const auto decoded = std::from_chars(revision.data(), revision_end, info.revision);
   require(decoded.ec == std::errc{} && decoded.ptr == revision_end && info.revision > 0 && revision.front() != '0' &&
-    validText(preparation) && validDigest(info.source_manifest_sha256) && validText(info.map_id) &&
+    (direct || validText(preparation)) && validDigest(info.source_manifest_sha256) && validText(info.map_id) &&
     info.map_id.size() <= 4096 && validText(info.geometry_revision) && info.geometry_revision.size() <= 4096 &&
     validText(info.map_frame) && info.map_frame.front() != '/' && info.map_frame.find(' ') == std::string::npos &&
     validText(info.map_basis), Code::invalid_manifest, "Invalid dataset source or map context");
   info.observation_count = count(row.at("observations"), Code::invalid_manifest);
   info.pending_count = count(row.at("pending"), Code::invalid_manifest);
+  if (direct) {
+    out.batch_size = count(row.at("batch_size"), Code::invalid_manifest);
+    out.hashes = row.at("file_sha256");
+    require(out.batch_size > 0 && info.pending_count <= info.observation_count &&
+      out.hashes.is_object() && out.hashes.size() == 2 &&
+      validDigest(out.hashes.at("observations").get<std::string>()) &&
+      validDigest(out.hashes.at("media").get<std::string>()),
+      Code::invalid_manifest, "Invalid direct observation counts or file digests");
+    return out;
+  }
   const auto issue_count = count(row.at("issues"), Code::invalid_manifest);
   out.batch_count = count(row.at("batches"), Code::invalid_manifest);
   out.batch_size = count(row.at("selection_options").at("batch_size"), Code::invalid_manifest);
@@ -271,7 +283,8 @@ ObservationPairReference sourcePairReference(const Json & row)
 
 /** @brief 索引 ID 与发布行，检查批次覆盖、地图上下文及 pending 计数。 */
 std::map<std::string, RowLocation, std::less<>> indexObservations(
-  const fs::path & path, const DatasetManifest & manifest, const std::vector<ObservationDatasetBatch> & batches)
+  const fs::path & path, const DatasetManifest & manifest, std::vector<ObservationDatasetBatch> & batches,
+  const std::optional<detail::PreparationMediaIndex> & media)
 {
   std::map<std::string, RowLocation, std::less<>> rows;
   const auto & info = manifest.info;
@@ -289,15 +302,32 @@ std::map<std::string, RowLocation, std::less<>> indexObservations(
         row.at("source_manifest_sha256") == info.source_manifest_sha256 && reasons.is_array(),
         Code::invalid_observation, "Observation context or source differs from dataset manifest");
       const auto id = row.at("id").get<std::string>();
-      require(!id.empty() && batch < batches.size() && id == batches[batch].observation_ids[position],
-        Code::invalid_batch, "Batch reference differs from published observation order");
+      require(!id.empty() && rows.size() < info.observation_count,
+        Code::invalid_observation, "Unexpected observation row");
       RowLocation location{offset, line.size(), detail::preparationSha256(line), sourcePairReference(row)};
+      if (media) {
+        for (const auto * kind : {"rgb", "depth"}) {
+          const auto & reference = row.at(std::string(kind) + "_media");
+          const auto message = row.at(std::string(kind) + "_message_id").get<std::string>();
+          const auto bound = media->find(message);
+          require(reference.is_null() ? bound == media->end() :
+            bound != media->end() && reference == bound->second.path,
+            Code::invalid_observation, "Observation media differs from sealed index");
+        }
+        if (batches.empty() || batches.back().observation_ids.size() == manifest.batch_size) {
+          batches.push_back({batches.size(), {}});
+        }
+        batches.back().observation_ids.push_back(id);
+      } else {
+        require(batch < batches.size() && id == batches[batch].observation_ids[position],
+          Code::invalid_batch, "Batch reference differs from published observation order");
+        if (++position == batches[batch].observation_ids.size()) {
+          ++batch;
+          position = 0;
+        }
+      }
       require(rows.emplace(id, std::move(location)).second, Code::invalid_observation, "Duplicate observation ID");
       if (!reasons.empty()) {++pending;}
-      if (++position == batches[batch].observation_ids.size()) {
-        ++batch;
-        position = 0;
-      }
     };
   verifyDigest(manifest, "observations", detail::scanPreparationJsonl(path, visit));
   require(rows.size() == info.observation_count && pending == info.pending_count,
@@ -328,12 +358,26 @@ struct ObservationDatasetReaderState
   ObservationDatasetInfo info;
   std::string manifest_sha256;
   std::vector<FileSnapshot> files;
+  std::optional<detail::PreparationMediaIndex> media;
   std::vector<ObservationDatasetBatch> batches;
   std::map<std::string, RowLocation, std::less<>> rows;
 };
 
 namespace
 {
+/** @brief 验证正式观测的媒体角色与固定相对目录，解析后拒绝软链。 */
+FileSnapshot directMediaFile(
+  const ObservationDatasetReaderState & state, const std::string & message, const std::string & reference,
+  const char * role)
+{
+  const auto bound = state.media->find(message);
+  const fs::path relative(reference);
+  require(bound != state.media->end() && bound->second.path == reference &&
+    relative.parent_path() == fs::path("evidence") / role && relative.has_filename(),
+    Code::invalid_observation, "Media reference does not match its sealed observation role");
+  return snapshot(state.root / relative);
+}
+
 /** @brief 只用已建索引比对发布观测的配对身份及原时间，不读媒体。 */
 std::optional<std::string> findSourcePairMismatch(
   const ObservationDatasetReaderState & state, const PreparationReader & source)
@@ -425,11 +469,71 @@ ObservationDatasetBatchResult ObservationDatasetReader::loadBatch(std::size_t ba
     });
 }
 
-/** @brief 核对来源身份后才把 PreparationReader 交给调用方。 */
+/** @brief 读回直出 PNG 的同一份字节，再校验内容摘要。 */
+ObservationRgbResult ObservationDatasetReader::loadRgb(std::string_view id) const
+{
+  return readResult<ObservationRgbResult>([&]() -> ObservationRgbResult {
+      require(state_->media.has_value(), Code::media_unavailable, "Use preparation for legacy media");
+      auto loaded = loadObservation(id);
+      require(loaded.ok(), loaded.code, loaded.message);
+      const auto & obs = *loaded.observation;
+      require(obs.rgb_media.has_value(), Code::media_unavailable, "Observation has no RGB media");
+      const auto file = directMediaFile(*state_, obs.rgb_message_id, *obs.rgb_media, "rgb");
+      constexpr auto max_rgb_bytes = 128U * 1024U * 1024U;
+      require(file.bytes > 0 && file.bytes <= max_rgb_bytes, Code::invalid_observation, "RGB media exceeds read budget");
+      std::vector<std::uint8_t> bytes(file.bytes);
+      std::ifstream input(file.path, std::ios::binary);
+      require(static_cast<bool>(input.read(reinterpret_cast<char *>(bytes.data()), bytes.size())) &&
+        input.peek() == std::char_traits<char>::eof() && !input.bad(), Code::io_error, "Cannot read complete RGB media");
+      const std::string_view view(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+      require(detail::preparationSha256(view) == state_->media->at(obs.rgb_message_id).sha256,
+        Code::integrity_mismatch, "RGB media SHA-256 differs");
+      checkFiles({file});
+      checkDatasetSnapshot(state_->files, state_->manifest_sha256);
+      return {Code::ready, "", std::move(bytes)};
+    });
+}
+
+/** @brief 直接从深度证据恢复像素，并校验读回前后的文件状态。 */
+ObservationDepthResult ObservationDatasetReader::loadDepth(std::string_view id) const
+{
+  return readResult<ObservationDepthResult>([&]() -> ObservationDepthResult {
+      require(state_->media.has_value(), Code::media_unavailable, "Use preparation for legacy media");
+      auto loaded = loadObservation(id);
+      require(loaded.ok(), loaded.code, loaded.message);
+      const auto & obs = *loaded.observation;
+      require(obs.depth_media && obs.depth_storage, Code::media_unavailable, "Observation has no depth media");
+      const auto file = directMediaFile(*state_, obs.depth_message_id, *obs.depth_media, "depth");
+      const auto & source = *obs.depth_storage;
+      const PreparedDepthStorage storage{source.format, source.dtype, source.unit, source.scale_to_m,
+        source.invalid_rule, source.source_encoding, source.source_unit, source.source_scale_to_m,
+        source.min_depth_m, source.max_depth_m, source.valid_pixels, source.invalid_pixels, false};
+      require(file.bytes <= DepthLimits{}.max_input_bytes, Code::invalid_observation, "Depth media exceeds read budget");
+      require(detail::preparationFileSha256(file.path) == state_->media->at(obs.depth_message_id).sha256,
+        Code::integrity_mismatch, "Depth media SHA-256 differs");
+      auto depth = parseChecked(Code::invalid_observation,
+          [&] {return detail::readStoredDepth(file.path, obs.depth_image, storage);});
+      depth.alignment = obs.depth_alignment;
+      depth.alignment_basis = obs.alignment_basis;
+      if (depth.alignment == DepthAlignment::aligned_to_rgb) {
+        depth.rgb_grid = {obs.rgb_image.width, obs.rgb_image.height, obs.rgb_image.frame_id};
+      }
+      checkFiles({file});
+      require(detail::preparationFileSha256(file.path) == state_->media->at(obs.depth_message_id).sha256,
+        Code::source_changed, "Depth media changed while reading");
+      checkDatasetSnapshot(state_->files, state_->manifest_sha256);
+      return {Code::ready, "", std::move(depth)};
+    });
+}
+
+/** @brief 核对来源身份后才把 PreparationReader 交给旧格式调用方。 */
 PreparationOpenResult ObservationDatasetReader::openSourcePreparation(const fs::path & override_root) const
 {
   try {
     checkDatasetSnapshot(state_->files, state_->manifest_sha256);
+    if (state_->info.direct_evidence) {
+      return {PreparationReadCode::unsupported_dataset, "Direct observations contain their own evidence", nullptr};
+    }
     const auto & hint = state_->info.preparation_root;
     const auto root = override_root.empty() ? state_->root / hint : override_root;
     auto opened = openPreparation(root);
@@ -461,20 +565,37 @@ ObservationDatasetOpenResult openObservationDataset(const fs::path & root)
   return readResult<ObservationDatasetOpenResult>([&]() -> ObservationDatasetOpenResult {
       auto state = std::make_unique<ObservationDatasetReaderState>();
       state->root = fs::canonical(root);
-      const auto manifest_path = state->root / detail::kObservationDatasetManifest;
+      const auto direct_path = state->root / detail::kDirectObservationManifest;
+      const bool direct = fs::exists(fs::symlink_status(direct_path));
+      const auto manifest_path = direct ? direct_path : state->root / detail::kObservationDatasetManifest;
       state->files.push_back(snapshot(manifest_path));
       const auto manifest = parseChecked(Code::invalid_manifest, [&] {return readManifest(manifest_path);});
-      for (const auto & [name, relative] : detail::kObservationDatasetFiles) {
-        state->files.push_back(snapshot(state->root / relative));
-        if (!manifest.hashes.is_null() && (std::string_view(name) == "selection" || std::string_view(name) == "issues")) {
-          verifyDigest(manifest, name, detail::preparationFileSha256(state->root / relative));
+      require(direct == manifest.info.direct_evidence, Code::invalid_manifest, "Manifest is at the wrong path");
+      if (direct) {
+        const auto source = state->root / detail::kDirectObservationSource;
+        const auto media = state->root / detail::kDirectObservationMediaIndex;
+        state->files.push_back(snapshot(state->root / detail::kObservationDatasetRows));
+        state->files.push_back(snapshot(source));
+        state->files.push_back(snapshot(media));
+        require(detail::preparationFileSha256(source) == manifest.info.source_manifest_sha256,
+          Code::integrity_mismatch, "Direct observation source digest differs");
+        state->media = parseChecked(Code::integrity_mismatch, [&] {
+            return detail::readSealedMediaIndex(media, manifest.hashes.at("media").get<std::string>());
+          });
+      } else {
+        for (const auto & [name, relative] : detail::kObservationDatasetFiles) {
+          state->files.push_back(snapshot(state->root / relative));
+          if (!manifest.hashes.is_null() && (std::string_view(name) == "selection" || std::string_view(name) == "issues")) {
+            verifyDigest(manifest, name, detail::preparationFileSha256(state->root / relative));
+          }
         }
+        state->batches = parseChecked(Code::invalid_batch, [&] {
+            return readBatches(state->root / detail::kObservationDatasetBatches, manifest);
+          });
       }
-      state->batches = parseChecked(Code::invalid_batch, [&] {
-          return readBatches(state->root / detail::kObservationDatasetBatches, manifest);
-        });
       state->rows = parseChecked(Code::invalid_observation, [&] {
-          return indexObservations(state->root / detail::kObservationDatasetRows, manifest, state->batches);
+          return indexObservations(
+            state->root / detail::kObservationDatasetRows, manifest, state->batches, state->media);
         });
       state->info = manifest.info;
       state->info.file_integrity_verified = !manifest.hashes.is_null();

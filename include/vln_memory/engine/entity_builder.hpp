@@ -7,6 +7,7 @@
 #include <vln_memory/bag/builder/preparation_reader.hpp>
 #include <vln_memory/memory/entity.hpp>
 #include <vln_memory/memory/observation.hpp>
+#include <vln_memory/engine/observation_dataset_reader.hpp>
 
 namespace vln_memory
 {
@@ -56,6 +57,16 @@ struct RegionInteriorConfirmation
  */
 EntityBuildResult createRegionEntity(
   const PreparationReader & reader, const Observation & observation, std::string_view semantic_label,
+  const std::optional<RegionInteriorConfirmation> & confirmation = std::nullopt);
+
+/** @brief 从直出观测与证据创建物品，按 ID 绑定同一发布目录。 */
+EntityBuildResult createObjectEntity(
+  const ObservationDatasetReader & dataset, std::string_view observation_id, std::string_view semantic_label,
+  const std::optional<DepthRegion> & selection = std::nullopt, const DepthRegionOptions & options = {});
+
+/** @brief 从直出观测中的历史底盘位姿及上游确认创建区域。 */
+EntityBuildResult createRegionEntity(
+  const ObservationDatasetReader & dataset, std::string_view observation_id, std::string_view semantic_label,
   const std::optional<RegionInteriorConfirmation> & confirmation = std::nullopt);
 
 }  // namespace vln_memory

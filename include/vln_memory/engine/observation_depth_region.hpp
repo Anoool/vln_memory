@@ -3,6 +3,7 @@
 #include <vln_memory/bag/builder/preparation_reader.hpp>
 #include <vln_memory/bag/depth/depth_region_projection.hpp>
 #include <vln_memory/memory/observation.hpp>
+#include <vln_memory/engine/observation_dataset_reader.hpp>
 
 namespace vln_memory
 {
@@ -32,6 +33,11 @@ struct ObservationDepthRegionResult
  */
 ObservationDepthRegionResult projectObservationDepthRegion(
   const PreparationReader & reader, const Observation & observation,
+  const DepthRegion & region, const DepthRegionOptions & options = {});
+
+/** @brief 从直出证据按观测 ID 回读深度并投影深度原图选区。 */
+ObservationDepthRegionResult projectObservationDepthRegion(
+  const ObservationDatasetReader & dataset, std::string_view observation_id,
   const DepthRegion & region, const DepthRegionOptions & options = {});
 
 }  // namespace vln_memory

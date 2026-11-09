@@ -1,6 +1,6 @@
 # VLN 空间语义记忆规划：当前只交付原设计第 1、2 部分
 
-更新：2026-11-08。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
+更新：2026-11-09。本规划依据用户提供的 VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md（更新 2026-10-27）及用户最新范围要求，替换此前同时展开完整在线查询/导航接入的总体路线。原始附件不修改。
 
 **当前目标：原文第 1 部分“核心约定与数据规范”及第 2 部分“离线构建流程、工具与规范”。当前已实现观测准备层基础与 BagBuilder preparation 导出，有效模型与数值位姿已接入 preparation，区域投影、物品创建和空间创建已接入，两个原文部分都未完成。**逐项证据见 [范围与进度对照](sections_1_2_scope.md)。
 
@@ -10,10 +10,8 @@
 
 ```text
 ROS 2 bag + config/vln_memory.yaml（目前支持 bag 段）
-  -> BagBuilder：来源/时间段、RGB-D 配对、标定/TF 数值解析
-  -> preparation JSONL + evidence/ + pending/质量报告
-  -> 离线构建输入：读取和核对引用、按用途筛选、关键帧/批次选择
-  -> MemoryEngine：几何、观测与实体/关系、构建读取与修改工具、模型批次/恢复
+  -> BagBuilder：配对、标定、历史 TF、选帧，直出 memory/observations.jsonl + evidence/
+  -> MemoryEngine：读现有观测、几何工具、模型批次/恢复、实体与关系
   -> 原文 1.6 规定的完整版本、索引与原子发布 manifest
   -> MemoryViewer：map 实体/关系、图像/选区/轨迹/位姿联动及命名标注
 ```
@@ -80,7 +78,7 @@ stamp 等于 rgb_stamp，rgb_stamp 与 depth_stamp 保留各自原始时间，�
 
 记录两张图各自 frame/stamp、CameraInfo 原始模型/选择版本、有效投影参数、原始与标准媒体、bag 来源、clock/segment、配对策略/时差、TF 查询与质量。未定位/坏帧保留证据进入 pending。
 
-关键帧依据有效底盘位姿的位移/转角及明确采样策略选择，输出 observation_id 引用；处理首帧、静止、缺姿态、定位跳变，不把每张解码图像自动称关键帧。BagBuilder 负责 preparation 与原始证据。离线构建组织关键帧和业务观测，完整记忆版本发布时导出 observations.jsonl 及相关证据。
+关键帧依据有效底盘位姿的位移、转角和明确采样策略选择，处理首帧、静止、缺姿态和定位跳变。BagBuilder 在同一次运行里发布正式观测与证据。MemoryEngine 组织模型需要的观测批次，并通过工具使用已有记录。
 
 ## 5. S3：原文第 1 部分的数据与几何业务
 
@@ -161,7 +159,7 @@ Viewer 需在 map 中展示全部已定位实体与语义连接，联动 RGB/Dep
 
 ### 10.1 已可用的链路
 
-`bag_builder` 导出带来源和媒体摘要的 preparation；`memory_observation_dataset` 复用 Reader、关键帧和批次逻辑发布正式观测；C++ 接口从同源观测创建物品或空间。各模块用法见 [文档导航](../README.md)。
+`bag_builder` 默认直出正式观测和证据。观测读取器按 ID 读图，投影和实体业务使用该目录，`memory_semantic_build` 可将结构化操作写入 SQLite。旧 preparation/v1/v2 路径保留用于历史数据。各模块用法见 [文档导航](../README.md)。
 
 ### 10.2 后续任务与依赖
 

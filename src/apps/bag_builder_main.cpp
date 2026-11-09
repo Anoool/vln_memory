@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <nlohmann/json.hpp>
+#include "build_input_cli.hpp"
 
 namespace
 {
@@ -15,7 +16,11 @@ namespace
 void usage()
 {
   std::cout << "Usage: ros2 run vln_memory bag_builder --config FILE [--bag INPUT] [--output DIRECTORY]"
-    << " [--sync-tolerance-ms NONNEGATIVE_INTEGER]\n";
+    << " [--sync-tolerance-ms NONNEGATIVE_INTEGER]\n"
+    << "  Direct output (default): --map-id ID --geometry-revision REV --map-basis TEXT\n"
+    << "  [--purpose rgb|depth_map|prepared_rgbd] [--batch-size N] [--distance-m M] [--yaw-deg D]\n"
+    << "  [--max-step-m M] [--max-step-yaw-deg D]\n"
+    << "  Legacy output: --format preparation\n";
 }
 
 /** @brief 将显式整数毫秒转换为纳秒，拒绝负值、尾随字符和乘法溢出。 */
@@ -37,33 +42,47 @@ std::int64_t toleranceNs(const std::string & value)
 int main(int argc, char ** argv)
 {
   try {
-    std::string config;
-    std::string input;
-    std::string output;
-    std::optional<std::int64_t> tolerance;
+    namespace cli = vln_memory::cli;
+    cli::Arguments args;
+    const std::set<std::string> allowed{"--config", "--bag", "--output", "--sync-tolerance-ms",
+      "--format", "--map-id", "--geometry-revision", "--map-basis", "--purpose", "--batch-size",
+      "--distance-m", "--yaw-deg", "--max-step-m", "--max-step-yaw-deg"};
     for (int index = 1; index < argc; ++index) {
       const std::string flag(argv[index]);
       if (flag == "--help" || flag == "-h") {usage(); return 0;}
-      if ((flag != "--config" && flag != "--bag" && flag != "--output" && flag != "--sync-tolerance-ms") ||
-        index + 1 >= argc) {
+      if (!allowed.count(flag) || index + 1 >= argc || !args.emplace(flag, argv[++index]).second) {
         usage(); return 2;
       }
-      const std::string value(argv[++index]);
-      if (flag == "--config") {config = value;}
-      else if (flag == "--bag") {input = value;}
-      else if (flag == "--output") {output = value;}
-      else {tolerance = toleranceNs(value);}
     }
-    if (config.empty()) {usage(); return 2;}
-    auto options = vln_memory::loadBagBuildOptions(config);
-    if (!input.empty()) {options.bag_uri = input;}
-    if (!output.empty()) {options.output_directory = output;}
-    if (tolerance) {options.sync_tolerance_ns = *tolerance;}
-    const auto result = vln_memory::buildBag(options);
+    auto options = vln_memory::loadBagBuildOptions(cli::required(args, "--config"));
+    if (args.count("--bag")) {options.bag_uri = cli::required(args, "--bag");}
+    if (args.count("--output")) {options.output_directory = cli::required(args, "--output");}
+    if (args.count("--sync-tolerance-ms")) {
+      options.sync_tolerance_ns = toleranceNs(cli::required(args, "--sync-tolerance-ms"));
+    }
+    const bool preparation = args.count("--format") && args.at("--format") == "preparation";
+    if (args.count("--format") && !preparation && args.at("--format") != "observations") {
+      throw std::invalid_argument("Expected --format observations or preparation");
+    }
+    vln_memory::BagBuildResult result;
+    if (preparation) {
+      for (const auto * flag : {"--map-id", "--geometry-revision", "--map-basis", "--purpose", "--batch-size",
+          "--distance-m", "--yaw-deg", "--max-step-m", "--max-step-yaw-deg"}) {
+        if (args.count(flag)) {throw std::invalid_argument("Observation options require direct output");}
+      }
+      result = vln_memory::buildBag(options);
+    } else {
+      const vln_memory::ObservationBuildContext context{cli::required(args, "--map-id"),
+        cli::required(args, "--geometry-revision"), options.map_frame, cli::required(args, "--map-basis"), 1, {}};
+      args.try_emplace("--purpose", "rgb");
+      args.try_emplace("--batch-size", "4");
+      result = vln_memory::buildBagObservations(options, context, cli::selectionOptions(args));
+    }
     const nlohmann::json report{{"status", vln_memory::bagBuildStatusName(result.status)},
       {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
       {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},
       {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
+      {"observations", result.observations}, {"pending_observations", result.pending_observations},
       {"camera_models", result.camera_models}, {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
       {"timestamp_match_policy", vln_memory::rgbdSyncPolicyName(options.sync_tolerance_ns)},
       {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},

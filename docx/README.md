@@ -13,7 +13,7 @@
 
 | 层 | 模块与接口 |
 | --- | --- |
-| 录包配置与准备 | [配置](config/vln_memory.md)、[BagBuilder API](interfaces/bag_builder_api.md)、[bag_builder CLI](modules/bag/bag_builder_main.md)、[录包读取](modules/bag/bag_reader_ros.md)、[压缩图像解码](modules/bag/image_decoder_ros.md) |
+| BagBuilder 直出与录包配置 | [配置](config/vln_memory.md)、[BagBuilder API](interfaces/bag_builder_api.md)、[bag_builder CLI](modules/bag/bag_builder_main.md)、[录包读取](modules/bag/bag_reader_ros.md)、[压缩图像解码](modules/bag/image_decoder_ros.md) |
 | 配对与标定来源 | [RGB-D 配对](modules/bag/rgbd_sync.md)、[标定索引](modules/bag/camera_info_index.md)、[准备层接口总览](interfaces/observation_preparation_api.md) |
 | preparation 回读与存储 | [PreparationReader](modules/bag/preparation_reader.md)、[共享元数据校验](modules/bag/preparation_metadata.md)、[精简转换](modules/bag/preparation_compactor.md)、[媒体写入](modules/bag/media_writer.md)、[JSONL 契约](modules/bag/jsonl_writer.md)、[目录发布](modules/bag/preparation_storage.md) |
 | 选帧与观测 | [离线输入、关键帧及分批](modules/engine/build_input.md)、[观测组装](modules/engine/observation_builder.md)、[正式 Observation](modules/memory/observation.md)、[参考时刻](project/observation_time_contract.md)、[数据集发布及便携模式](modules/engine/observation_dataset.md)、[数据集读取器](modules/engine/observation_dataset_reader.md) |

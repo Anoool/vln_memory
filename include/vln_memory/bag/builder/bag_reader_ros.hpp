@@ -37,7 +37,7 @@ struct BagScan
 using BagImageConsumer = std::function<void (const BagImageRecord &, const sensor_msgs::msg::Image *)>;
 
 /** @brief 扫描所有配置消息、保存原始 CDR/标定/TF，返回拥有型索引；失败抛 BagBuildError。 */
-BagScan scanBag(const BagBuildOptions & options, OutputFiles & output);
+BagScan scanBag(const BagBuildOptions & options, OutputFiles & output, bool write_preparation = true);
 /** @brief 同约定重扫并逐条核对来源/摘要，仅图像调用 consumer，不保留借用引用。 */
 void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer);
 /** @brief 复核全部输入分卷及 metadata 指纹；改变/活动 WAL 拒绝发布。 */

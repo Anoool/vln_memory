@@ -1,6 +1,6 @@
 # 从结构化识别结果构建语义记忆
 
-`memory_semantic_build` 读取已发布的 v2 观测目录和标准输入的 JSONL。每行是一条操作，标准输出返回一行结果。不同操作分别提交，任一失败时进程最终返回非零。数据集在同一进程内索引一次，实体库在首次实体操作时打开或创建。
+`memory_semantic_build` 读取 BagBuilder 直出的 `memory/` 或已校验的 v2 观测目录，并从标准输入接收 JSONL 操作。每行是一条操作，标准输出返回一行结果。不同操作分别提交，任一失败时进程最终返回非零。数据集在同一进程内索引一次，实体库在首次实体操作时打开或创建。
 
 ```bash
 ros2 run vln_memory memory_semantic_build \
@@ -30,7 +30,7 @@ ros2 run vln_memory memory_semantic_build \
 
 ## 与 vln_agent 接入
 
-`capture_image` 的 `images[0].metadata` 提供原始 `rgb_stamp`、`depth_stamp`。回放宿主将录包绑定到同源的已发布观测目录及 preparation 摘要，再向本命令发送 `lookup`。取得 `observation_id` 后，把模型输出整理为上述 JSONL 操作。实体 ID 和修订由返回结果回传给宿主，用于后续追加和关系操作。
+`capture_image` 的 `images[0].metadata` 提供原始 `rgb_stamp`、`depth_stamp`。回放宿主将录包绑定到同源的已发布观测目录及来源清单摘要，再向本命令发送 `lookup`。取得 `observation_id` 后，把模型输出整理为上述 JSONL 操作。实体 ID 和修订由返回结果回传给宿主，用于后续追加和关系操作。
 
 本地 Agent 的 `EnvironmentMemory::saveResponse` 已接收 `environment_observation`。宿主可复用这份结构化输出，把 `objects[].label` 转成物品的 `create` 或 `append`。模型的 `objects[].id` 只在单次响应内有效，由宿主确认跨帧身份并维护 `entity_key → entity_id/revision`。图像参考系下的 `left_of` 等关系保留在响应记录中。地图工作库的 `inside` 需要显式归属证据，`near` 根据已选定位点计算。两个 SQLite 文件各自保持现有用途，适配器通过 JSONL 交接。
 

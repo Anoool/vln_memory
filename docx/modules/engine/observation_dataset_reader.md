@@ -2,6 +2,8 @@
 
 公开头为 [observation_dataset_reader.hpp](../../../include/vln_memory/engine/observation_dataset_reader.hpp)，链接 `vln_memory::vln_memory_observation_dataset`。ROS 和无 ROS 构建均提供。
 
+BagBuilder 直出目录使用 `evidence/observation_manifest.json`（`observation_dataset/3`）。打开时核对来源清单、观测行和媒体索引摘要，并从 JSONL 的发布顺序在内存中组织批次。`loadRgb(id)` 返回经过摘要校验的 PNG 字节，`loadDepth(id)` 按正式观测中的存储语义恢复米制深度，支持 NPY 和源 16UC1 PNG。直出目录可整体搬移。空间和实体入口接受这一读取器。以下 `openSourcePreparation()` 示例用于 v1/v2 历史目录。
+
 ```cpp
 #include <vln_memory/engine/observation_dataset_reader.hpp>
 

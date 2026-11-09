@@ -113,18 +113,18 @@ bool matchesRegionSource(const PreparedPair & pair, const Observation & observat
     (pair.body_pose && detail::sameRecordedPose(*pair.body_pose, *observation.body_pose_map));
 }
 
-}  // namespace
-
 /** @brief 从实际投影结果或明确的缺几何状态构建一条新物品记录。 */
-EntityBuildResult createObjectEntity(
-  const PreparationReader & reader, const Observation & observation, std::string_view semantic_label,
-  const std::optional<DepthRegion> & selection, const DepthRegionOptions & options)
+template<typename Verify, typename Project>
+EntityBuildResult createObject(
+  const Observation & observation, std::string_view semantic_label,
+  const std::optional<DepthRegion> & selection, const DepthRegionOptions & options,
+  Verify verify, Project project)
 {
   if (!validText(semantic_label)) {return {Code::invalid_label, "Invalid semantic label", std::nullopt};}
   if (!selection) {
     const auto checked = validateObservation(observation);
     if (!checked.ok()) {return {Code::invalid_observation, checked.message, std::nullopt};}
-    if (auto error = pendingReferenceError(reader, observation)) {return std::move(*error);}
+    if (auto error = verify()) {return std::move(*error);}
     return finishObject(observation, semantic_label, std::nullopt, "missing_selection");
   }
   if (selection->valueless_by_exception()) {
@@ -133,9 +133,9 @@ EntityBuildResult createObjectEntity(
   // 仅保留代表点和质量计数，证据不要求复制全部簇点。
   auto point_options = options;
   point_options.include_points = false;
-  const auto projected = projectObservationDepthRegion(reader, observation, *selection, point_options);
+  const auto projected = project(*selection, point_options);
   if (const auto * pending = missingGeometry(projected.code)) {
-    if (auto error = pendingReferenceError(reader, observation)) {return std::move(*error);}
+    if (auto error = verify()) {return std::move(*error);}
     const auto code = checkDepthRegionSelection(
       observation.depth_image.width, observation.depth_image.height, *selection, point_options);
     if (code != DepthRegionCode::ready) {return {Code::invalid_selection, depthRegionCodeName(code), std::nullopt};}
@@ -167,6 +167,37 @@ EntityBuildResult createObjectEntity(
       result.valid_points, leading_count, result.representative}, result.ok() ? nullptr : reason);
 }
 
+/** @brief 复用空间待定位语义，以已核验的底盘原点写入实际锚点。 */
+EntityBuildResult finishRegion(
+  const Observation & observation, std::string_view label,
+  const std::optional<RegionInteriorConfirmation> & confirmation, const TfPoseResult * body)
+{
+  auto ref = observationRef(observation);
+  if (!confirmation) {
+    return finishEntity(observation, label, EntityKind::region, std::move(ref), "missing_region_confirmation");
+  }
+  ref.region_interior = RegionInteriorEvidence{confirmation->evidence_ref, std::nullopt};
+  if (!observation.body_pose_map) {
+    return finishEntity(observation, label, EntityKind::region, std::move(ref), "missing_body_map_pose");
+  }
+  ref.region_interior->body_anchor = RegionBodyAnchor{observation.body_frame, body->time.stamp, body->pose->translation_m};
+  return finishEntity(observation, label, EntityKind::region, std::move(ref), nullptr);
+}
+
+}  // namespace
+
+/** @brief 旧观测仍通过保存的 preparation 配对核对来源、计算投影。 */
+EntityBuildResult createObjectEntity(
+  const PreparationReader & reader, const Observation & observation, std::string_view semantic_label,
+  const std::optional<DepthRegion> & selection, const DepthRegionOptions & options)
+{
+  return createObject(observation, semantic_label, selection, options,
+    [&] {return pendingReferenceError(reader, observation);},
+    [&](const auto & shape, const auto & projection) {
+      return projectObservationDepthRegion(reader, observation, shape, projection);
+    });
+}
+
 /** @brief 以来源一致且经确认在内部的底盘原点创建空间，缺证据时保持待定位。 */
 EntityBuildResult createRegionEntity(
   const PreparationReader & reader, const Observation & observation, std::string_view semantic_label,
@@ -190,18 +221,40 @@ EntityBuildResult createRegionEntity(
   const auto stable = reader.verifyUnchanged();
   if (!stable.ok()) {return {Code::preparation_read_failed, stable.message, std::nullopt};}
 
-  auto ref = observationRef(observation);
-  if (!confirmation) {
-    return finishEntity(observation, semantic_label, EntityKind::region, std::move(ref), "missing_region_confirmation");
+  const auto & body = loaded.pair->body_pose;
+  return finishRegion(observation, semantic_label, confirmation, body ? &*body : nullptr);
+}
+
+/** @brief 对已由直出清单核验的观测复用物品证据和待定位处理。 */
+EntityBuildResult createObjectEntity(
+  const ObservationDatasetReader & dataset, std::string_view id, std::string_view label,
+  const std::optional<DepthRegion> & selection, const DepthRegionOptions & options)
+{
+  if (!dataset.info().direct_evidence) {return {Code::source_mismatch, "Expected direct evidence", std::nullopt};}
+  const auto loaded = dataset.loadObservation(id);
+  if (!loaded.ok()) {return {Code::invalid_observation, loaded.message, std::nullopt};}
+  return createObject(*loaded.observation, label, selection, options,
+    []() -> std::optional<EntityBuildResult> {return std::nullopt;},
+    [&](const auto & shape, const auto & projection) {
+      return projectObservationDepthRegion(dataset, id, shape, projection);
+    });
+}
+
+/** @brief 从绑定的直出观测读取实际底盘原点，确认引用须指向该观测。 */
+EntityBuildResult createRegionEntity(
+  const ObservationDatasetReader & dataset, std::string_view id, std::string_view label,
+  const std::optional<RegionInteriorConfirmation> & confirmation)
+{
+  if (!dataset.info().direct_evidence) {return {Code::source_mismatch, "Expected direct evidence", std::nullopt};}
+  if (!validText(label)) {return {Code::invalid_label, "Invalid semantic label", std::nullopt};}
+  const auto loaded = dataset.loadObservation(id);
+  if (!loaded.ok()) {return {Code::invalid_observation, loaded.message, std::nullopt};}
+  const auto & obs = *loaded.observation;
+  if (confirmation && !matchesRegionConfirmation(*confirmation, obs, label)) {
+    return {Code::invalid_region_confirmation, "Confirmation reference or region, observation, and map scope mismatch",
+      std::nullopt};
   }
-  ref.region_interior = RegionInteriorEvidence{confirmation->evidence_ref, std::nullopt};
-  if (!observation.body_pose_map) {
-    return finishEntity(observation, semantic_label, EntityKind::region, std::move(ref), "missing_body_map_pose");
-  }
-  const auto & body = *loaded.pair->body_pose;
-  ref.region_interior->body_anchor = RegionBodyAnchor{
-    loaded.pair->body_frame, body.time.stamp, body.pose->translation_m};
-  return finishEntity(observation, semantic_label, EntityKind::region, std::move(ref), nullptr);
+  return finishRegion(obs, label, confirmation, obs.body_pose_map ? &*obs.body_pose_map : nullptr);
 }
 
 }  // namespace vln_memory

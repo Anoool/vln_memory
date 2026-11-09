@@ -107,6 +107,8 @@ struct BagBuildResult
   std::size_t decoded_frames{0};
   std::size_t camera_models{0};
   std::size_t pairs{0};
+  std::size_t observations{0};
+  std::size_t pending_observations{0};
   std::size_t prepared_pairs{0};
   std::size_t posed_frames{0};
   std::size_t posed_pairs{0};

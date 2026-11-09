@@ -6,7 +6,8 @@
 
 | 接口 | 提供文件（include/vln_memory/bag/builder/） | 参数/返回 | 用途 |
 | --- | --- | --- | --- |
-| buildBag | bag_builder.hpp；实现 src/bag/builder/bag_builder.cpp | const BagBuildOptions& → BagBuildResult | 完整两遍提取/发布，顶层错误转结构化结果 |
+| buildBagObservations | bag_builder.hpp；实现 src/bag/builder/bag_builder.cpp | BagBuildOptions、ObservationBuildContext、可选 BuildInputOptions → BagBuildResult | 从录包直接发布正式观测和证据，默认命令行入口 |
+| buildBag | bag_builder.hpp；实现 src/bag/builder/bag_builder.cpp | const BagBuildOptions& → BagBuildResult | 历史 preparation 两遍提取和发布 |
 | loadBagBuildOptions | bag_config.hpp/.cpp | YAML 路径 string → BagBuildOptions | 严格加载；错误抛 BagBuildError |
 | validateBagBuildOptions | bag_config.hpp/.cpp | const options& → vector<string> | 无 I/O 汇总配置问题 |
 | pairRgbDepth | rgbd_sync.hpp/.cpp | 两个 RgbdStreamIndex、RgbdSyncOptions → RgbdSyncResult | 无 ROS 同段时间配对 |

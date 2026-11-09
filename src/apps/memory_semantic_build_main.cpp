@@ -172,7 +172,7 @@ private:
       return dataset_.loadObservation(requiredText(request, "observation_id"));
     }
     if (requiredText(request, "source_manifest_sha256") != dataset_.info().source_manifest_sha256) {
-      throw std::invalid_argument("Replay source does not match the bound preparation");
+      throw std::invalid_argument("Replay source does not match the published observation source");
     }
     return dataset_.loadObservationByStamps(stamp(request.at("rgb_stamp")), stamp(request.at("depth_stamp")));
   }
@@ -196,13 +196,14 @@ private:
   EntityBuildResult build(const Json & request, const Observation & obs, EntityKind kind, const std::string & label)
   {
     const auto box = depthSelection(request);
-    if (!preparation_) {
+    if (!dataset_.info().direct_evidence && !preparation_) {
       auto opened = dataset_.openSourcePreparation(source_);
       if (!opened.ok()) {throw std::runtime_error(opened.message);}
       preparation_ = std::move(opened.reader);
     }
     if (kind == EntityKind::object) {
       if (request.contains("confirmation_ref")) {throw std::invalid_argument("Interior confirmation requires a region");}
+      if (dataset_.info().direct_evidence) {return createObjectEntity(dataset_, obs.id, label, box);}
       return createObjectEntity(*preparation_, obs, label, box);
     }
     if (box) {throw std::invalid_argument("Depth selections require an object");}
@@ -211,6 +212,7 @@ private:
       confirmation = RegionInteriorConfirmation{label, obs.id, obs.revision, obs.source_manifest_sha256,
         obs.map_id, obs.map_frame, obs.geometry_revision, requiredText(request, "confirmation_ref")};
     }
+    if (dataset_.info().direct_evidence) {return createRegionEntity(dataset_, obs.id, label, confirmation);}
     return createRegionEntity(*preparation_, obs, label, confirmation);
   }
 

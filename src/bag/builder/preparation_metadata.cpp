@@ -386,6 +386,12 @@ std::optional<PreparationMediaIndex> readPreparationMediaIndex(
   require(seal.at("schema_version") == kPreparationMediaIndexSchema && validSha256(digest) &&
     (seal.at("baseline") == "exported" || seal.at("baseline") == "legacy_conversion"),
     Code::invalid_metadata, "Invalid preparation media integrity declaration");
+  return readSealedMediaIndex(path, digest);
+}
+
+/** @brief 验证发布时的索引内容，保留消息 ID、路径和摘要的一对一绑定。 */
+PreparationMediaIndex readSealedMediaIndex(const std::filesystem::path & path, std::string_view digest)
+{
   require(!std::filesystem::is_symlink(path) && std::filesystem::is_regular_file(path),
     Code::invalid_metadata, "Missing or invalid preparation media index");
   PreparationMediaIndex result;

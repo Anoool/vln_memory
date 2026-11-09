@@ -227,6 +227,28 @@ def check_bundle(binary, reader, store, semantic, root, source, expected):
   check_semantic(semantic, relocated, root / "semantic.sqlite3")
 
 
+def check_direct(reader, semantic, root, fixture, legacy_output):
+  """Move both direct depth formats, read their media and reject changed bytes."""
+  legacy = rows(legacy_output / "observations.jsonl")
+  for storage in ("metric_npy", "source_png16"):
+    direct = root / ("moved_" + storage)
+    shutil.copytree(fixture / ("direct_" + storage), direct)
+    assert {path.name for path in direct.iterdir()} == {"observations.jsonl", "evidence"}
+    records = rows(direct / "observations.jsonl")
+    keys = ("id", "pair_id", "rgb_stamp", "depth_stamp", "camera_pose_map", "depth_camera_pose_map",
+            "body_pose_map", "rgb_model", "depth_model", "pending_reasons")
+    assert [{key: row[key] for key in keys} for row in records] == [
+        {key: row[key] for key in keys} for row in legacy]
+    subprocess.run([str(reader.resolve()), "--direct", str(direct), "0", "0"], check=True)
+    if storage == "source_png16":
+      check_semantic(semantic, direct, root / "direct.sqlite3")
+    for field in ("rgb_media", "depth_media"):
+      media = direct / records[0][field]
+      original = media.read_bytes()
+      media.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+    subprocess.run([str(reader.resolve()), "--direct-corrupt", str(direct)], check=True)
+
+
 def main():
   """Check happy path, bad depth, empty selection, atomic failure, and overwrite refusal."""
   parser = argparse.ArgumentParser()
@@ -306,6 +328,7 @@ def main():
   check_published(empty, empty_output, 0)
   check_reader(args.reader, root, source, good, expected, empty_output)
   check_bundle(args.binary, args.reader, args.store, args.semantic, root, source, expected)
+  check_direct(args.reader, args.semantic, root, fixture, good)
   failed_bundle = root / "failed_bundle"
   code, result = call(args.binary, damaged, failed_bundle, mode="bundle")
   assert code == 1 and result["code"] == "invalid_media" and not failed_bundle.exists(), result

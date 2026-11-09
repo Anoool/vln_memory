@@ -728,6 +728,15 @@ void integrationCases(const fs::path & root)
   createFixture(input, FixtureKind::normal);
   auto options = fixtureOptions(input, root / "normal_out");
   const auto normal = buildBag(options);
+  const ObservationBuildContext direct_context{"fixture", "v1", "map", "Fixture recorded TF", 1, {}};
+  auto direct_options = options;
+  direct_options.save_raw_cdr = false;
+  for (const auto mode : {BagDepthStorage::metric_npy, BagDepthStorage::source_png16}) {
+    direct_options.depth_storage = mode;
+    direct_options.output_directory = (root / ("direct_" + std::string(bagDepthStorageName(mode)))).string();
+    const auto direct = buildBagObservations(direct_options, direct_context);
+    expect(direct.ok() && direct.observations == normal.pairs, direct.message);
+  }
   expect(!rcutils_error_is_set(), "Message decoding left stale global ROS error state");
   checkNormal(root / "normal_out", normal);
   expect(!BagBuildOptions{}.save_raw_cdr, "CDR should be omitted by default");

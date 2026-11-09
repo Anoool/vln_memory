@@ -45,6 +45,12 @@ struct PreparationMediaDigest
 
 using PreparationMediaIndex = std::map<std::string, PreparationMediaDigest>;
 
+/** @brief 复用媒体索引格式，按发布清单核对索引摘要。 */
+PreparationMediaIndex readSealedMediaIndex(const std::filesystem::path & path, std::string_view digest);
+/** @brief 按已校验的网格和存储语义恢复单张深度。 */
+DepthFrame readStoredDepth(
+  const std::filesystem::path & path, const CameraImageReference & image, const PreparedDepthStorage & storage);
+
 /** @brief 读取并验证 manifest 绑定的媒体索引；旧产物返回空 optional。 */
 std::optional<PreparationMediaIndex> readPreparationMediaIndex(
   const std::filesystem::path & root, const nlohmann::json & manifest);

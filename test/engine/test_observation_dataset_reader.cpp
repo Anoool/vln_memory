@@ -122,6 +122,34 @@ void projectBundled(const fs::path & root, std::int64_t u, std::int64_t v)
     region.entity->location_pending_reason == "missing_region_confirmation", region.message);
 }
 
+/** @brief 使用搬移后的直出目录读媒体、投影，或验证篡改拒绝。 */
+void verifyDirect(const fs::path & root, bool corrupt, std::int64_t u = 0, std::int64_t v = 0)
+{
+  const auto opened = openObservationDataset(root);
+  expect(opened.ok() && opened.reader->info().direct_evidence, opened.message);
+  const auto & reader = *opened.reader;
+  expect(!reader.openSourcePreparation().ok(), "Direct observations required preparation");
+  const auto batch = reader.loadBatch(0);
+  expect(batch.ok() && !batch.observations.empty(), batch.message);
+  const auto & id = batch.observations.front().id;
+  const auto rgb = reader.loadRgb(id);
+  const auto depth = reader.loadDepth(id);
+  if (corrupt) {
+    expect(rgb.code == Code::integrity_mismatch && depth.code == Code::integrity_mismatch,
+      "Tampered image or depth media was accepted");
+    return;
+  }
+  expect(rgb.ok() && rgb.png.size() > 8 && rgb.png[0] == 137 && rgb.png[1] == 'P', rgb.message);
+  expect(depth.ok(), depth.message);
+  DepthRegionOptions options;
+  options.min_cluster_points = 1;
+  const DepthBoundingBox selection{u, v, u + 1, v + 1};
+  const auto projected = projectObservationDepthRegion(reader, id, selection, options);
+  expect(projected.ok(), projected.message);
+  const auto entity = createObjectEntity(reader, id, "测试物品", selection, options);
+  expect(entity.ok() && entity.entity->status == EntityStatus::located, entity.message);
+}
+
 }  // namespace
 
 /** @brief 与 Python 发布夹具配合，也可独立验证任意已发布目录。 */
@@ -132,6 +160,10 @@ int main(int argc, char ** argv)
     const std::string_view mode(argv[1]);
     if (mode == "--verify" && (argc == 5 || argc == 6)) {
       verify(argv[2], std::stoull(argv[3]), std::string_view(argv[4]) == "v2", argc == 6 ? fs::path(argv[5]) : fs::path{});
+    } else if (mode == "--direct" && argc == 5) {
+      verifyDirect(argv[2], false, std::stoll(argv[3]), std::stoll(argv[4]));
+    } else if (mode == "--direct-corrupt" && argc == 3) {
+      verifyDirect(argv[2], true);
     } else if (mode == "--project" && argc == 5) {
       projectBundled(argv[2], std::stoll(argv[3]), std::stoll(argv[4]));
     } else if (mode == "--reject" && argc == 4) {

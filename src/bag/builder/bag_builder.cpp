@@ -2,10 +2,16 @@
 
 #include "preparation_metadata.hpp"
 #include "preparation_storage.hpp"
+#include "../../engine/observation_dataset_format.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <tuple>
 
 #include <filesystem>
 #include <map>
 #include <set>
+#include <string_view>
 #include <utility>
 
 #include <vln_memory/bag/builder/bag_reader_ros.hpp>
@@ -37,6 +43,13 @@ struct PreparedFrame
   bool alignment_checked{false};
   bool aligned{false};
   bool depth_quality{true};
+  CameraImageReference image;
+  std::optional<CameraModel> model;
+  std::optional<TfPoseResult> camera_pose;
+  std::optional<TfPoseResult> body_pose;
+  std::optional<PreparedDepthStorage> depth_storage;
+  DepthAlignment depth_alignment{DepthAlignment::unknown};
+  std::string alignment_basis;
 };
 
 /** @brief 单帧转换的小型返回，不含拥有型像素；details 保存统计/原始语义。 */
@@ -49,6 +62,7 @@ struct ConvertedFrame
   bool aligned{false};
   bool depth_quality{true};
   Json details = Json::object();
+  std::optional<PreparedDepthStorage> depth_storage;
 };
 
 /** @brief 初始化固定 JSONL 文件，零条消息/问题仍有明确的空文件契约。 */
@@ -174,6 +188,13 @@ ConvertedFrame convertDepth(
     {"scale_to_m", store_source_png ? frame.source_scale_to_m : 1.0},
     {"invalid_rule", store_source_png ? "zero_or_out_of_range_to_nan" : "nan"},
     {"min_depth_m", frame.min_depth_m}, {"max_depth_m", frame.max_depth_m}};
+  result.depth_storage = PreparedDepthStorage{store_source_png ? "png" : "npy",
+    store_source_png ? "uint16" : "float32", store_source_png ? frame.source_unit : DepthUnit::meters,
+    store_source_png ? frame.source_scale_to_m : 1.0,
+    store_source_png ? "zero_or_out_of_range_to_nan" : "nan", frame.source_encoding, frame.source_unit,
+    frame.source_scale_to_m, frame.min_depth_m,
+    std::isfinite(frame.max_depth_m) ? std::optional<double>(frame.max_depth_m) : std::nullopt,
+    frame.valid_pixels, frame.invalid_pixels, false};
   const auto grid = rgb_grids.find(image.source.message_id);
   result.details["alignment_code"] = "not_checked_no_pair";
   if (grid != rgb_grids.end()) {
@@ -210,7 +231,8 @@ Json cameraModelJson(const CameraModelResult & result)
 /** @brief 生成相机模型，并按各图原始采样时刻求 map 位姿。 */
 void attachGeometryChecks(
   const BagImageRecord & image, bool is_rgb, const BagBuildOptions & options,
-  const BagScan & scan, const CameraInfoIndex & calibrations, PreparedFrame & prepared, Json & record)
+  const BagScan & scan, const CameraInfoIndex & calibrations, PreparedFrame & prepared, Json & record,
+  bool retain_observation)
 {
   const CameraInfoMatchOptions * binding = &options.depth_camera;
   if (is_rgb) {binding = &options.rgb_camera;}
@@ -232,21 +254,24 @@ void attachGeometryChecks(
     if (model.model) {model.model->normalization_applied = selected.normalization_applied;}
     prepared.model_ready = model.ok();
     record["camera_model"] = cameraModelJson(model);
+    if (retain_observation && model.ok()) {prepared.model = std::move(model.model);}
     record["effective_model_computed"] = prepared.model_ready;
   }
   TfTimeOptions time;
   time.clock_id = options.clock_id;
   time.segment_id = options.segment_id;
   time.max_interpolation_gap_ns = options.tf_max_gap_ns.value();
-  const auto camera_tf = scan.tf_index.lookupPose(
+  auto camera_tf = scan.tf_index.lookupPose(
     options.map_frame, image.frame_id, image.stamp, time, options.tf_jump_limits);
   prepared.camera_pose_ready = camera_tf.ok();
   record["map_camera_tf"] = tfPoseJson(camera_tf);
+  if (retain_observation && camera_tf.ok()) {prepared.camera_pose = std::move(camera_tf);}
   if (is_rgb) {
-    const auto body_tf = scan.tf_index.lookupPose(
+    auto body_tf = scan.tf_index.lookupPose(
       options.map_frame, options.body_frame, image.stamp, time, options.tf_jump_limits);
     prepared.body_pose_ready = body_tf.ok();
     record["map_body_tf"] = tfPoseJson(body_tf);
+    if (retain_observation && body_tf.ok()) {prepared.body_pose = std::move(body_tf);}
   }
   record["pose_computed"] = prepared.camera_pose_ready && (!is_rgb || prepared.body_pose_ready);
 }
@@ -277,21 +302,22 @@ Json frameRecord(const BagImageRecord & image, bool is_rgb, bool metadata_availa
 /** @brief 每个坏帧/全无效深度独立可查；未配对策略与像素质量分别报告。 */
 void reportConversionIssues(
   const BagImageRecord & image, bool metadata_available, const ConvertedFrame & converted,
-  OutputFiles & output, std::vector<BagIssue> & issues)
+  OutputFiles & output, std::vector<BagIssue> & issues, bool write_preparation)
 {
+  const auto * pending_path = write_preparation ? "reports/pending.jsonl" : "evidence/pending.jsonl";
   if (converted.media_path.empty()) {
     if (metadata_available) {
       issues.push_back({"decode", converted.code, converted.message, image.source.message_id, {}});
     }
     writeJsonLine(
-      output, "reports/pending.jsonl", {{"kind", "invalid_frame"},
+      output, pending_path, {{"kind", "invalid_frame"},
         {"message_id", image.source.message_id}, {"reason", converted.code}});
   } else if (!converted.depth_quality) {
     issues.push_back(
       {"quality", "insufficient_valid_depth", "Decoded depth fails numeric quality threshold",
         image.source.message_id, {}});
     writeJsonLine(
-      output, "reports/pending.jsonl", {{"kind", "invalid_depth_quality"},
+      output, pending_path, {{"kind", "invalid_depth_quality"},
         {"message_id", image.source.message_id}, {"reason", "insufficient_valid_depth"}});
   }
 }
@@ -300,7 +326,8 @@ void reportConversionIssues(
 PreparedFrame processImage(
   const BagImageRecord & image, const sensor_msgs::msg::Image * message,
   const BagBuildOptions & options, const BagScan & scan, const CameraInfoIndex & calibrations,
-  const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles & output, std::vector<BagIssue> & issues)
+  const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles & output, std::vector<BagIssue> & issues,
+  bool write_preparation)
 {
   const bool is_rgb = image.source.topic == options.rgb_camera.image_topic;
   ConvertedFrame converted;
@@ -325,10 +352,23 @@ PreparedFrame processImage(
   auto record = frameRecord(image, is_rgb, metadata_available, converted);
   if (!converted.media_path.empty()) {
     record["media_path"] = converted.media_path;
-    attachGeometryChecks(image, is_rgb, options, scan, calibrations, prepared, record);
+    attachGeometryChecks(image, is_rgb, options, scan, calibrations, prepared, record, !write_preparation);
   }
-  reportConversionIssues(image, metadata_available, converted, output, issues);
-  writeJsonLine(output, "frames.jsonl", std::move(record));
+  reportConversionIssues(image, metadata_available, converted, output, issues, write_preparation);
+  if (write_preparation) {
+    writeJsonLine(output, "frames.jsonl", std::move(record));
+  } else {
+    prepared.image = {image.source.topic, image.width, image.height, image.frame_id, image.stamp};
+    if (!is_rgb && !converted.media_path.empty()) {
+      const auto & details = converted.details;
+      prepared.depth_storage = std::move(converted.depth_storage);
+      if (converted.aligned) {prepared.depth_alignment = DepthAlignment::aligned_to_rgb;}
+      else if (details.at("alignment_code") == "not_aligned") {
+        prepared.depth_alignment = DepthAlignment::not_aligned;
+      }
+      prepared.alignment_basis = details.at("alignment_basis");
+    }
+  }
   return prepared;
 }
 
@@ -544,15 +584,198 @@ void validateReferences(
   }
 }
 
+/** @brief 从正式位姿引用中收集原始 TF 消息，只保留实际用到的端点。 */
+void addPoseSources(std::set<std::string> & ids, const std::optional<TfPoseResult> & pose)
+{
+  if (!pose) {return;}
+  for (const auto & edge : pose->time.edges) {
+    ids.insert(edge.before.source_message_id);
+    if (edge.after) {ids.insert(edge.after->source_message_id);}
+  }
+}
+
+/** @brief 为正式观测保留选中的原始 CameraInfo 及其配置，有效模型另存。 */
+PreparedCalibration directCalibration(
+  const PreparedFrame & frame, const CameraInfoMatchOptions & options,
+  const std::map<std::string, const BagCameraInfoRecord *> & calibrations)
+{
+  PreparedCalibration result;
+  result.selection = options;
+  if (frame.camera_matched) {
+    result.selection_code = "matched";
+    result.calibration_id = frame.calibration_id;
+    result.source_message_id = frame.calibration_id;
+    result.original = calibrations.at(frame.calibration_id)->data;
+  }
+  return result;
+}
+
+/** @brief 固定直出来源身份及生效设置，摘要不依赖之后才写入的观测 JSONL。 */
+std::string writeDirectSource(
+  const BagBuildOptions & options, const BagScan & scan, const fs::path & work, OutputFiles & output)
+{
+  Json sources = Json::array();
+  for (const auto & file : scan.source_files) {
+    sources.push_back({{"path", file.path}, {"bytes", std::to_string(file.bytes)}, {"sha256", file.sha256}});
+  }
+  writeJsonFile(output, detail::kDirectObservationSource, {{"schema_version", "observation_source/1"},
+    {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope}, {"metadata_sha256", scan.metadata_sha256},
+    {"source_files", sources}, {"effective_options", effectiveOptions(options)}});
+  return detail::preparationFileSha256(work / detail::kDirectObservationSource);
+}
+
+/** @brief 按已固定配对和候选顺序组装正式记录；只借用当前运行中的元数据。 */
+void writeDirectObservations(
+  const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection,
+  const BagScan & scan, const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
+  const fs::path & work, OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
+{
+  const auto source_digest = writeDirectSource(options, scan, work, output);
+  std::map<std::string, const BagMessageRef *> messages;
+  for (const auto & message : scan.messages) {messages.emplace(message.message_id, &message);}
+  std::map<std::string, const BagCameraInfoRecord *> calibrations;
+  for (const auto & calibration : scan.calibrations) {calibrations.emplace(calibration.source.message_id, &calibration);}
+
+  std::vector<BuildInputFrame> candidates;
+  candidates.reserve(sync.pairs.size());
+  for (const auto & pair : sync.pairs) {
+    const auto & rgb = frames.at(pair.rgb.message_id);
+    const auto & depth = frames.at(pair.depth.message_id);
+    BuildInputFrame item;
+    item.source_index = candidates.size();
+    item.pair_id = "p_" + pair.rgb.message_id;
+    item.bag_id = scan.bag_id;
+    item.map_frame = options.map_frame;
+    item.clock_id = options.clock_id;
+    item.segment_id = options.segment_id;
+    item.rgb_message_id = pair.rgb.message_id;
+    item.depth_message_id = pair.depth.message_id;
+    item.rgb_stamp = pair.rgb.stamp;
+    item.depth_stamp = pair.depth.stamp;
+    item.delta_ns = pair.delta_ns;
+    item.capture_sync_status = "unknown";
+    item.pending_reasons = pairReasons(rgb, depth);
+    item.pair_status = item.pending_reasons.empty() ? "prepared_for_geometry" : "pending";
+    if (rgb.body_pose) {item.body_pose_map = rgb.body_pose->pose;}
+    if (item.pending_reasons.empty()) {++result.prepared_pairs;}
+    else {issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, item.pair_id});}
+    if (rgb.camera_pose_ready && depth.camera_pose_ready && rgb.body_pose_ready) {++result.posed_pairs;}
+    if (selection.purpose != BuildInputPurpose::depth_map && rgb.media_path.empty()) {
+      item.eligibility_reasons.push_back("missing_rgb_media");
+    }
+    if (selection.purpose != BuildInputPurpose::rgb &&
+      (!depth.depth_storage || !depth.model || !depth.camera_pose)) {
+      item.eligibility_reasons.push_back("missing_depth_geometry");
+    }
+    if (selection.purpose == BuildInputPurpose::prepared_rgbd && !item.pending_reasons.empty()) {
+      item.eligibility_reasons.push_back("pair_not_prepared");
+    }
+    item.eligible = item.eligibility_reasons.empty();
+    candidates.push_back(std::move(item));
+  }
+  result.pairs = candidates.size();
+  selectBuildInputFrames(candidates, selection);
+  for (const auto & item : candidates) {
+    if (!item.selected) {
+      issues.push_back({"selection", item.selection_reason, "Pair excluded from direct observations", {}, item.pair_id});
+      continue;
+    }
+    const auto & rgb = frames.at(item.rgb_message_id);
+    const auto & depth = frames.at(item.depth_message_id);
+    PreparedPair pair;
+    pair.bag_id = scan.bag_id;
+    pair.pair_id = item.pair_id;
+    pair.map_frame = options.map_frame;
+    pair.body_frame = options.body_frame;
+    pair.time_scope = {options.clock_id, options.segment_id};
+    pair.clock_basis = options.clock_basis;
+    pair.segment_basis = options.segment_basis;
+    pair.source_manifest_sha256 = source_digest;
+    pair.delta_ns = item.delta_ns;
+    pair.sync_tolerance_ns = options.sync_tolerance_ns;
+    pair.timestamp_match_policy = rgbdSyncPolicyName(options.sync_tolerance_ns);
+    pair.capture_sync_status = item.capture_sync_status;
+    pair.status = item.pair_status;
+    pair.pending_reasons = item.pending_reasons;
+    pair.rgb_message_id = item.rgb_message_id;
+    pair.depth_message_id = item.depth_message_id;
+    pair.rgb_image = rgb.image;
+    pair.depth_image = depth.image;
+    if (!rgb.media_path.empty()) {pair.rgb_media_relative = rgb.media_path;}
+    if (!depth.media_path.empty()) {pair.depth_media_relative = depth.media_path;}
+    pair.rgb_model = rgb.model;
+    pair.depth_model = depth.model;
+    pair.rgb_pose = rgb.camera_pose;
+    pair.depth_pose = depth.camera_pose;
+    pair.body_pose = rgb.body_pose;
+    pair.rgb_calibration = directCalibration(rgb, options.rgb_camera, calibrations);
+    pair.depth_calibration = directCalibration(depth, options.depth_camera, calibrations);
+    pair.depth_storage = depth.depth_storage;
+    pair.depth_alignment = depth.depth_alignment;
+    pair.alignment_basis = depth.alignment_basis;
+    pair.tf_max_gap_ns = *options.tf_max_gap_ns;
+    pair.tf_jump_limits = options.tf_jump_limits;
+
+    std::set<std::string> ids{pair.rgb_message_id, pair.depth_message_id};
+    if (rgb.camera_matched) {ids.insert(rgb.calibration_id);}
+    if (depth.camera_matched) {ids.insert(depth.calibration_id);}
+    addPoseSources(ids, pair.rgb_pose);
+    addPoseSources(ids, pair.depth_pose);
+    addPoseSources(ids, pair.body_pose);
+    for (const auto & id : ids) {
+      const auto & source = *messages.at(id);
+      PreparedMessageSummary summary{source.message_id, source.topic, source.file_index, source.topic_ordinal,
+        source.message_order, source.bag_record_time_ns, source.serialized_bytes, source.payload_sha256, std::nullopt};
+      if (source.raw_cdr_saved) {summary.raw_path = "evidence/raw/" + id + ".cdr";}
+      pair.message_summaries.push_back(std::move(summary));
+    }
+    std::sort(pair.message_summaries.begin(), pair.message_summaries.end(), [](const auto & a, const auto & b) {
+      return std::tie(a.message_order, a.message_id) < std::tie(b.message_order, b.message_id);
+    });
+    const auto built = buildObservation(pair, context);
+    if (!built.ok()) {throw BagBuildError("invalid_observation", item.pair_id + ": " + built.message);}
+    const auto json = serializeObservation(*built.observation);
+    if (!json.ok()) {throw BagBuildError("invalid_observation", item.pair_id + ": " + json.message);}
+    output.appendLine(detail::kObservationDatasetRows, json.json);
+    ++result.observations;
+    if (!built.observation->pending_reasons.empty()) {++result.pending_observations;}
+  }
+}
+
+/** @brief 写最终清单，绑定根相对观测行、源清单与媒体索引。 */
+void writeDirectManifest(
+  const ObservationBuildContext & context, const BuildInputOptions & selection,
+  const BagBuildResult & result, const fs::path & work, OutputFiles & output)
+{
+  writeJsonFile(output, detail::kDirectObservationManifest, {{"artifact_kind", "observation_dataset"},
+    {"schema_version", detail::kDirectObservationVersion}, {"observation_schema_version", kObservationSchemaVersion},
+    {"map_id", context.map_id}, {"map_frame", context.map_frame}, {"map_basis", context.map_basis},
+    {"geometry_revision", context.geometry_revision}, {"revision", std::to_string(context.revision)},
+    {"observations", result.observations}, {"pending", result.pending_observations},
+    {"batch_size", selection.batch_size}, {"source_manifest_sha256",
+      detail::preparationFileSha256(work / detail::kDirectObservationSource)},
+    {"file_sha256", {{"observations", detail::preparationFileSha256(work / detail::kObservationDatasetRows)},
+      {"media", detail::preparationFileSha256(work / detail::kDirectObservationMediaIndex)}}}});
+}
+
 /** @brief 将扫描、配对、逐图转换和发布串联；大对象只在本次运行生命周期内拥有。 */
-void runBuild(BagBuildOptions options, BagBuildResult & result)
+void runBuild(
+  BagBuildOptions options, BagBuildResult & result,
+  const ObservationBuildContext * context, const BuildInputOptions & selection)
 {
   const auto final_path = detail::resolveOutputDirectory(options.output_directory);
   const auto work = detail::createWorkDirectory(options.bag_uri, final_path);
   result.work_directory = work.string();
   OutputFiles output(work, options.max_output_bytes);
-  initializeOutput(output);
-  auto scan = scanBag(options, output);
+  const bool write_preparation = context == nullptr;
+  const auto * media_index = write_preparation ?
+    detail::kPreparationMediaIndexFile : detail::kDirectObservationMediaIndex;
+  if (write_preparation) {initializeOutput(output);}
+  else {
+    output.ensureLines(detail::kObservationDatasetRows);
+    output.ensureLines(media_index);
+  }
+  auto scan = scanBag(options, output, write_preparation);
   const bool automatic_tf_gap = !options.tf_max_gap_ns.has_value();
   if (automatic_tf_gap) {
     options.tf_max_gap_ns = scan.tf_index.inferInterpolationGapNs(options.map_frame,
@@ -564,14 +787,22 @@ void runBuild(BagBuildOptions options, BagBuildResult & result)
   const CameraInfoIndex calibrations(scan.calibrations);
   std::map<std::string, PreparedFrame> frames;
   auto issues = std::move(scan.issues);
+  std::set<std::string> paired_rgb;
+  if (!write_preparation) {
+    for (const auto & pair : sync.pairs) {paired_rgb.insert(pair.rgb.message_id);}
+  }
   readBagImages(
     options, scan, [&](const auto & image, const auto * message) {
-      auto prepared = processImage(image, message, options, scan, calibrations, rgb_grids, output, issues);
-      if (image.source.topic == options.rgb_camera.image_topic) {++result.rgb_frames;} else {++result.depth_frames;}
+      const bool is_rgb = image.source.topic == options.rgb_camera.image_topic;
+      if (is_rgb) {++result.rgb_frames;} else {++result.depth_frames;}
+      if (!write_preparation && !(is_rgb ? paired_rgb.count(image.source.message_id) :
+        rgb_grids.count(image.source.message_id))) {return;}
+      auto prepared = processImage(
+        image, message, options, scan, calibrations, rgb_grids, output, issues, write_preparation);
       if (!prepared.media_path.empty()) {
         ++result.decoded_frames;
         const auto digest = detail::preparationFileSha256(work / prepared.media_path);
-        output.appendLine(detail::kPreparationMediaIndexFile,
+        output.appendLine(media_index,
           detail::preparationMediaRow(image.source.message_id, prepared.media_path, digest).dump());
       }
       if (prepared.model_ready) {++result.camera_models;}
@@ -590,35 +821,57 @@ void runBuild(BagBuildOptions options, BagBuildResult & result)
   } else if (result.timestamp_match_status == "no_pairs") {
     issues.push_back({"sync", "no_rgbd_pairs", "No RGB/Depth pairs within the configured tolerance", {}, {}});
   }
-  writePairs(options, sync, frames, output, result, issues);
-  writeUnmatched(sync, output, issues);
+  if (write_preparation) {
+    writePairs(options, sync, frames, output, result, issues);
+    writeUnmatched(sync, output, issues);
+  } else {
+    writeDirectObservations(options, *context, selection, scan, sync, frames, work, output, result, issues);
+  }
   for (const auto & issue : issues) {
-    writeJsonLine(output, "reports/issues.jsonl", issueJson(issue));
+    writeJsonLine(output, write_preparation ? "reports/issues.jsonl" : "evidence/issues.jsonl", issueJson(issue));
   }
   result.issue_count = issues.size();
   result.status = BagBuildStatus::completed;
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
-  writeJsonFile(output, "reports/summary.json", summaryRecord(options, scan, sync, result));
+  writeJsonFile(output, write_preparation ? "reports/summary.json" : "evidence/summary.json",
+    summaryRecord(options, scan, sync, result));
   output.close();
-  const auto media_index_sha256 = detail::preparationFileSha256(work / detail::kPreparationMediaIndexFile);
-  writeManifest(options, scan, result, automatic_tf_gap, media_index_sha256, output);
+  if (write_preparation) {
+    writeManifest(options, scan, result, automatic_tf_gap, detail::preparationFileSha256(work / media_index), output);
+  } else {
+    writeDirectManifest(*context, selection, result, work, output);
+  }
   detail::publishDirectory(work, final_path);
   result.output_directory = final_path.string();
   result.work_directory.clear();
   result.code = "ok";
 }
 
-}  // namespace
-
 /** @brief 顶层将可预期/系统错误转为失败结果，已存在输出不变且失败不标记完成。 */
-BagBuildResult buildBag(const BagBuildOptions & options)
+BagBuildResult build(
+  const BagBuildOptions & options, const ObservationBuildContext * context, const BuildInputOptions & selection)
 {
   BagBuildResult result;
   try {
     const auto errors = validateBagBuildOptions(options);
     if (!errors.empty()) {throw BagBuildError("invalid_config", errors.front());}
-    runBuild(options, result);
+    if (context) {
+      /** @brief 即便没有选中观测，也不能发布无效的地图上下文。 */
+      const auto text = [](std::string_view value) {
+          return value.find_first_not_of(' ') != std::string_view::npos &&
+            std::none_of(value.begin(), value.end(), [](unsigned char byte) {return byte < 32 || byte == 127;});
+        };
+      if (!text(context->map_id) || context->map_id.size() > 4096 ||
+        !text(context->geometry_revision) || context->geometry_revision.size() > 4096 ||
+        !text(context->map_basis) || context->map_frame != options.map_frame || context->revision == 0 ||
+        !std::all_of(context->additional_pending_reasons.begin(), context->additional_pending_reasons.end(), text)) {
+        throw BagBuildError("invalid_config", "Direct output requires valid map ID, geometry revision, map frame and basis");
+      }
+      std::vector<BuildInputFrame> empty;
+      selectBuildInputFrames(empty, selection);
+    }
+    runBuild(options, result, context, selection);
   } catch (const BagBuildError & error) {
     result.status = BagBuildStatus::failed;
     result.code = error.code();
@@ -633,6 +886,19 @@ BagBuildResult buildBag(const BagBuildOptions & options)
     result.message = error.what();
   }
   return result;
+}
+
+}  // namespace
+
+BagBuildResult buildBag(const BagBuildOptions & options)
+{
+  return build(options, nullptr, {});
+}
+
+BagBuildResult buildBagObservations(
+  const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection)
+{
+  return build(options, &context, selection);
 }
 
 }  // namespace vln_memory

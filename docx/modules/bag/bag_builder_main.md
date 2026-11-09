@@ -1,28 +1,22 @@
-# bag_builder_main.cpp
+# BagBuilder 直出正式观测
 
-[实现](../../../src/apps/bag_builder_main.cpp) 是薄命令入口，只加载 YAML、覆盖路径、调用 buildBag、显示结果，不复制业务算法，也不创建在线 ROS 节点。
-
-## 运行
+默认命令读取 ROS bag 并在同一次运行中完成配对、媒体提取、标定和历史 TF 查询、选帧以及正式观测发布。观测组装和选帧复用现有 C++ 函数。执行入口位于 [bag_builder_main.cpp](../../../src/apps/bag_builder_main.cpp)。
 
 ```bash
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 run vln_memory bag_builder --config /absolute/path/vln_memory.yaml \
-  --bag /absolute/path/recording --output /absolute/path/new_dataset
+  --bag /absolute/path/recording --output /absolute/path/memory \
+  --map-id room_map --geometry-revision trajectory-v1 --map-basis "Recorded map and TF"
 ```
 
-也可运行构建目录中的 bag_builder。--config 必需；--bag/--output 可覆盖配置路径；--help 显示语法。输出需不存在。先编辑实际话题、单位、时钟依据和光学 frame，不能直接套用示例语义。
+- `--config` 指向录包配置。`--bag`、`--output` 和 `--sync-tolerance-ms` 可覆盖当次设置。输出路径须尚未存在。
+- 地图 ID、几何版本、地图依据必填，地图 frame 取 YAML 的 `bag.map_frame`。
+- `--purpose` 默认 `rgb`，可选 `depth_map` 或 `prepared_rgbd`。`--batch-size` 默认 4，可用 `--distance-m`、`--yaw-deg`、`--max-step-m`、`--max-step-yaw-deg` 配置选帧。
+- `--format preparation` 使用历史准备目录流程，C++ 旧接口 `buildBag` 也沿用该流程。
 
-## 返回
+结果根只包含 `observations.jsonl` 和 `evidence/`。媒体以相对路径引用。标准媒体来自时间配对成功的帧，启用关键帧筛选时，证据目录可保留未选入正式观测的配对媒体。配置开启 `save_raw_cdr` 时还会保留原始消息。源清单和媒体索引均放在 `evidence/`。
 
-显示 status/code/message/output_directory/work_directory、图像/配对/问题数量。成功（包含 completed_with_issues）退出 0；构建失败退出 1；参数/加载错误退出 2。不要只凭退出 0 推断配对全部可用，应检查 prepared_pairs 与报告。
+BagBuilder 在新建临时目录中写同一套最终文件，引用校验和关闭写流后原子发布。退出 0 表示已发布，可带问题。检查 `observations`、`pending_observations`、`prepared_pairs` 和 `evidence/issues.jsonl` 以了解可用数量。退出 1 表示构建失败，退出 2 表示参数或配置错误。
 
-命令存在 rosbag2 日志，不能把全部 stdout 当一份纯 JSON。C++/其他模块应直接调用 buildBag 或读取文件契约。
-
-## 时间配对输出
-
-CLI 根据配置输出 timestamp_match_policy 和十进制字符串 sync_tolerance_ns：0 为 exact_header_one_to_one_v1，正值为 rgb_reference_monotonic_nearest_one_to_one_v1。no_exact_pairs 仅用于零门限无对，no_pairs 用于正门限无对；capture_sync_status 保持 unknown。
-
-YAML 的 sync_tolerance_ns: 30000000 允许至多 30 ms（含边界）的最近候选，改 0 恢复严格。exit 0 只表示完整发布，应检查实际对数、delta 和问题报告。
-
-colcon 环境按上例加载 install/setup.bash。直接 cmake --install 的独立前缀运行可执行文件时，需另将其 lib 加入 LD_LIBRARY_PATH，或使用构建目录的可执行文件。
+MemoryEngine 从已发布的目录读取正式观测。可用当前的 [语义构建命令](../engine/semantic_build.md) 传入结构化实体操作，媒体回读见 [观测读取器](../engine/observation_dataset_reader.md)。

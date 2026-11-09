@@ -1,12 +1,12 @@
 # vln_memory
 
-`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前已跑通 **ROS bag → preparation → 正式观测 → 物品与空间实体创建 → SQLite 工作库**，处于 S3 几何与工作库阶段。已发布的 preparation 和正式观测可在无 ROS 环境中使用。
+`vln_memory` 是面向视觉语言导航（VLN）的空间语义记忆项目，使用 ROS 2 Humble 和 C++17。当前已跑通 **ROS bag → 正式观测与证据 → 物品与空间实体创建 → SQLite 工作库**，处于 S3 几何与工作库阶段。已发布的 preparation 和正式观测可在无 ROS 环境中使用。
 
 | 入口 | 作用 |
 | --- | --- |
-| `bag_builder` | 读取 RGB-D 录包，提取媒体、标定和历史 TF，保存配对、来源及待处理原因。 |
+| `bag_builder` | 从录包直接发布 `memory/observations.jsonl` 和 `memory/evidence/`，保留配对、标定、历史 TF 和待处理原因。 |
 | `memory_build_input` | 单独生成用途筛选、关键帧和分批清单，适合检查选帧结果。 |
-| `memory_observation_dataset` | 直接从 preparation 筛选并发布正式观测、批次及文件摘要。 |
+| `memory_observation_dataset` | 将历史 preparation 转为旧版观测目录，也可重用已导出的配对。 |
 | `createObjectEntity` / `createRegionEntity` | C++ 接口。用观测和深度选区或空间内部确认创建拥有型实体记录。 |
 | `createObservedEntityStore` / `insertObservedEntity` / `appendObservedEvidence` / `resolveEntityLocation` | C++ 接口。绑定正式观测集，事务写入、追加观测及选用已有证据补定位。 |
 
@@ -54,40 +54,27 @@ cmake --install build/standalone --prefix "$PWD/build/standalone-install"
 
 ## 快速使用
 
-### 1. 从录包导出 preparation
+### 1. 从录包直出正式观测
 
-输入可为带 `metadata.yaml` 的未压缩 SQLite 录包目录，或其中一个 `.db3` 分卷。复制配置后按采集条件填写话题、坐标系、深度单位、注册状态及共同时间基准的依据。输出目录应尚未存在。详见 [录包配置](docx/config/vln_memory.md)。
+按采集条件填写 RGB 和深度话题、坐标系、深度单位、配准状态和共同时间基准。命令行另指定地图 ID、几何版本和依据，`map_frame` 取配置中的值。输出目录须尚未存在。
 
 ```bash
 cp config/vln_memory.yaml /tmp/vln_memory-local.yaml
-# 按录包实际内容编辑配置，并替换下方录包路径
+# 按录包实际内容修改配置
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 run vln_memory bag_builder --config /tmp/vln_memory-local.yaml \
-  --bag /absolute/path/to/recording --output "$PWD/build/my_preparation" --sync-tolerance-ms 30
+  --bag /absolute/path/to/recording --output "$PWD/build/memory" \
+  --map-id sample_map --geometry-revision trajectory-v1 --map-basis "Recorded map and TF"
 ```
 
-`--sync-tolerance-ms 30` 仅覆盖本次运行的时间配对门限，等价于 `bag.sync_tolerance_ns=30000000`。离线默认门限为 30 ms。门限为 0 时仅做精确配对，正值使用门限内一对一最近配对。`pairs` 是时间配对数，`prepared_pairs` 还需通过标定、位姿、深度质量和 RGB/Depth 注册检查。`bag.save_raw_cdr` 默认省略 CDR 副本并保留消息摘要，显式设为 `true` 可保留原始消息。新导出绑定 PNG/NPY 内容摘要，历史数据可用 [preparation_compact](docx/modules/bag/preparation_compactor.md) 生成带摘要的新副本。
+目录根包含 `observations.jsonl` 和 `evidence/`。后者保存媒体、来源清单和完整性索引，整个目录可搬移。默认选择 RGB 媒体可用的配对，也可用 `--purpose depth_map` 筛选具有深度模型和历史位姿的配对，或用 `--purpose prepared_rgbd` 筛选达到完整 RGB-D 几何准备条件的配对。详情见 [BagBuilder 直出](docx/modules/bag/bag_builder_main.md)。
 
-`bag_manifest.json` 描述来源与有效配置，`frames.jsonl`、`rgbd_pairs.jsonl` 记录帧和配对，媒体位于 `evidence/`。在 `reports/` 查看统计、错误及待处理原因。接口和回读方式见 [BagBuilder](docx/interfaces/bag_builder_api.md) 与 [PreparationReader](docx/modules/bag/preparation_reader.md)。
+历史流程可用 `--format preparation` 导出准备目录，随后用 [memory_observation_dataset](docx/modules/engine/observation_dataset.md) 转换或回读。
 
-### 2. 发布正式观测
+### 2. 使用观测创建实体
 
-从上一步的 preparation 直接发布。将示例地图 ID、轨迹版本、frame 和依据换成这批数据的实际上下文，其中 `--map-frame` 必须与 preparation 一致。`--purpose rgb` 选择有 RGB 媒体的可读配对，`depth_map` 要求深度模型与历史位姿，`prepared_rgbd` 还要求来源配对达到完整 RGB-D 几何准备状态。
-
-```bash
-ros2 run vln_memory memory_observation_dataset \
-  --input "$PWD/build/my_preparation" --output "$PWD/build/my_observations" \
-  --purpose depth_map --batch-size 4 --preparation-mode bundle \
-  --map-id sample_map --geometry-revision trajectory-v1 \
-  --map-frame map --map-basis "Recorded map and TF for this acquisition"
-```
-
-无 ROS 安装使用 `build/standalone-install/lib/vln_memory/memory_observation_dataset`，参数相同。产物包括 `observation_manifest.json`、`observations.jsonl`、`batches.jsonl`、选帧清单和问题报告。示例的 `bundle` 模式把精简 preparation 一并发布到输出的 `preparation/` 子目录。移动整个观测目录后仍可读取媒体和投影。默认 `reference` 模式共用输入 preparation，适合从同一套媒体派生多份观测。只需预览选帧与分批时，可独立运行 [memory_build_input](docx/modules/engine/build_input.md)。完整输出与错误语义见 [观测数据集发布](docx/modules/engine/observation_dataset.md)。
-
-### 3. 使用观测创建实体
-
-C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::vln_memory_observation_dataset` 与 `vln_memory::vln_memory_entity_builder`。用 `openObservationDataset` 打开观测目录，再按 ID 或批次取回记录。需要媒体时使用 `openSourcePreparation` 核对来源，便携包自动打开内置来源，引用模式迁移后可显式传入实际路径。详见 [数据集读取接口](docx/modules/engine/observation_dataset_reader.md)。随后选择实际业务入口：
+C++ 下游通过 `find_package(vln_memory CONFIG REQUIRED)` 链接 `vln_memory::vln_memory_observation_dataset` 与 `vln_memory::vln_memory_entity_builder`。用 `openObservationDataset` 打开结果目录，按 ID 或批次读记录。直出目录用 `loadRgb` 和 `loadDepth` 读媒体，旧版目录用 `openSourcePreparation` 打开绑定的来源。实体创建接受对应的读取器。详见 [数据集读取接口](docx/modules/engine/observation_dataset_reader.md)。
 
 - `createObjectEntity` 接收深度原图的 `bbox` 或 `polygon`，用该深度帧的历史位姿取得实测表面代表点。
 - `createRegionEntity` 接收上游给出的区域内部确认，在 RGB 参考时刻从历史底盘位姿取代表点。

@@ -9,7 +9,8 @@ namespace
 std::optional<EntityStoreContext> storeContext(const ObservationDatasetReader & dataset)
 {
   const auto & info = dataset.info();
-  if (info.schema_version != "observation_dataset/2" || !info.file_integrity_verified) {
+  if (!info.file_integrity_verified ||
+    (info.schema_version != "observation_dataset/2" && !info.direct_evidence)) {
     return std::nullopt;
   }
   return EntityStoreContext{info.dataset_manifest_sha256, info.source_manifest_sha256,
@@ -40,7 +41,7 @@ EntityStoreOpenResult createObservedEntityStore(
   const std::filesystem::path & path, const ObservationDatasetReader & dataset)
 {
   const auto context = storeContext(dataset);
-  if (!context) {return {{EntityStoreCode::dataset_mismatch, "Expected a verified v2 dataset"}, nullptr};}
+  if (!context) {return {{EntityStoreCode::dataset_mismatch, "Expected a verified observation dataset"}, nullptr};}
   return createEntityStore(path, *context);
 }
 

@@ -18,7 +18,8 @@ namespace vln_memory
 enum class ObservationDatasetReadCode
 {
   ready, unsupported_dataset, invalid_manifest, invalid_observation, invalid_batch,
-  integrity_mismatch, observation_not_found, batch_not_found, source_changed, io_error, ambiguous_observation
+  integrity_mismatch, observation_not_found, batch_not_found, source_changed, io_error, ambiguous_observation,
+  media_unavailable
 };
 
 /** @brief 打开时核对的来源、地图和观测版本；preparation_root 为清单中的路径。 */
@@ -37,6 +38,7 @@ struct ObservationDatasetInfo
   bool preparation_bundled{false};
   std::string schema_version;
   std::string dataset_manifest_sha256;
+  bool direct_evidence{false};
 };
 
 /** @brief 一组按发布顺序排列的正式观测 ID，批次从 0 开始。 */
@@ -64,6 +66,23 @@ struct ObservationDatasetBatchResult
   bool ok() const noexcept {return code == ObservationDatasetReadCode::ready;}
 };
 
+/** @brief 直出观测中经过摘要校验的 PNG 字节或米制深度。 */
+struct ObservationRgbResult
+{
+  ObservationDatasetReadCode code{ObservationDatasetReadCode::io_error};
+  std::string message;
+  std::vector<std::uint8_t> png;
+  bool ok() const noexcept {return code == ObservationDatasetReadCode::ready;}
+};
+
+struct ObservationDepthResult
+{
+  ObservationDatasetReadCode code{ObservationDatasetReadCode::io_error};
+  std::string message;
+  std::optional<DepthFrame> depth;
+  bool ok() const noexcept {return code == ObservationDatasetReadCode::ready && depth.has_value();}
+};
+
 struct ObservationDatasetReaderState;
 struct ObservationDatasetOpenResult;
 
@@ -88,6 +107,11 @@ public:
 
   /** @brief 按批次序号完整回读并校验该批记录。 */
   ObservationDatasetBatchResult loadBatch(std::size_t batch_index) const;
+
+  /** @brief 按正式观测 ID 从直出目录读取、核验并返回 PNG 媒体。 */
+  ObservationRgbResult loadRgb(std::string_view observation_id) const;
+  /** @brief 按正式观测 ID 从直出目录读取并恢复对应深度像素。 */
+  ObservationDepthResult loadDepth(std::string_view observation_id) const;
 
   /**
    * @brief 按清单路径或显式迁移路径打开来源，核对 preparation 指纹、地图 frame 和发布观测引用的配对及原始时间。

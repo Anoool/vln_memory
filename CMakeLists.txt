@@ -128,7 +128,7 @@ install(TARGETS memory_observation_dataset DESTINATION lib/${PROJECT_NAME})
 add_library(vln_memory_observation_depth_region SHARED src/engine/observation_depth_region.cpp)
 add_library(vln_memory::vln_memory_observation_depth_region ALIAS vln_memory_observation_depth_region)
 target_link_libraries(vln_memory_observation_depth_region PUBLIC
-  vln_memory_observation vln_memory_preparation_reader vln_memory_depth_projection)
+  vln_memory_observation_dataset vln_memory_observation vln_memory_preparation_reader vln_memory_depth_projection)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_observation_depth_region PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -223,7 +223,8 @@ if(VLN_MEMORY_ENABLE_ROS)
   target_link_libraries(vln_memory_bag_builder PUBLIC
     vln_memory_rgb_ros vln_memory_depth_ros vln_memory_camera_info_ros vln_memory_tf_ros
     vln_memory_rgbd_sync vln_memory_camera_info_index vln_memory_camera_model nlohmann_json::nlohmann_json
-    PRIVATE vln_memory_preparation_reader yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
+    PRIVATE vln_memory_observation_builder vln_memory_build_input
+    vln_memory_preparation_reader yaml-cpp OpenSSL::Crypto ${OpenCV_LIBS} ${memory_depth_codec})
   target_include_directories(vln_memory_bag_builder SYSTEM PRIVATE ${OpenCV_INCLUDE_DIRS} ${memory_depth_codec_include})
   ament_target_dependencies(vln_memory_bag_builder PUBLIC rosbag2_cpp rosbag2_storage rclcpp rcutils cv_bridge)
   if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

@@ -92,4 +92,26 @@ ObservationDepthRegionResult projectObservationDepthRegion(
   return {Code::evaluated, "", std::nullopt, std::nullopt, std::move(projection)};
 }
 
+/** @brief 只使用直出观测中经过校验的模型、位姿与深度。 */
+ObservationDepthRegionResult projectObservationDepthRegion(
+  const ObservationDatasetReader & dataset, std::string_view observation_id,
+  const DepthRegion & region, const DepthRegionOptions & options)
+{
+  const auto loaded = dataset.loadObservation(observation_id);
+  if (!loaded.ok()) {return rejected(Code::invalid_observation, loaded.message);}
+  const auto & observation = *loaded.observation;
+  if (!observation.depth_media || !observation.depth_storage) {
+    return rejected(Code::missing_depth, "Observation has no depth media and storage contract");
+  }
+  if (!observation.depth_model) {return rejected(Code::missing_depth_model, "Observation has no depth model");}
+  if (!observation.depth_camera_pose_map) {return rejected(Code::missing_depth_pose, "Observation has no depth pose");}
+  const auto data = dataset.loadDepth(observation_id);
+  if (!data.ok()) {return rejected(Code::source_mismatch, data.message);}
+  auto projection = std::visit([&](const auto & shape) {
+      return projectDepthRegionToMap(*data.depth, *observation.depth_model, *observation.depth_camera_pose_map,
+        observation.map_frame, shape, options);
+    }, region);
+  return {Code::evaluated, "", std::nullopt, std::nullopt, std::move(projection)};
+}
+
 }  // namespace vln_memory
