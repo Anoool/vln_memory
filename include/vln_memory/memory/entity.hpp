@@ -50,6 +50,7 @@ struct EntityObservationRef
   std::string source_manifest_sha256;
   std::optional<ObjectSelectionEvidence> object_selection;
   std::optional<RegionInteriorEvidence> region_interior{};
+  std::optional<std::string> requested_selector_json{};
 };
 
 /** @brief 选中作为定位依据的观测键，指向当前实体自己的证据列表。 */
@@ -78,7 +79,11 @@ struct Entity
   std::optional<std::string> location_pending_reason;
   std::optional<EntityLocationRef> location_observation{};
   std::optional<std::string> region_id{};  // 由已保存的 inside 关系读出。
+  std::string details_json{"{}"};
 };
+
+/** @brief 从选中的证据取得代表点，未定位时返回空。 */
+std::optional<std::array<double, 3>> selectedEntityPoint(const Entity & entity);
 
 /** @brief 分配独立的 128 位随机实体键；随机源失败时返回空，不生成替代键。 */
 std::optional<std::string> allocateEntityId();

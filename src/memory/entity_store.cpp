@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 #include <vln_memory/memory/observation.hpp>
@@ -18,14 +19,15 @@ namespace vln_memory
 namespace
 {
 using Code = EntityStoreCode;
+using Json = nlohmann::json;
 using Db = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
 
 constexpr int kApplicationId = 0x564c4e45;
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 6;
 
 constexpr char kSchema[] = R"sql(
   PRAGMA application_id = 0x564c4e45;
-  PRAGMA user_version = 4;
+  PRAGMA user_version = 6;
   CREATE TABLE store_meta(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     dataset_manifest_sha256 TEXT NOT NULL, source_manifest_sha256 TEXT NOT NULL,
@@ -37,6 +39,7 @@ constexpr char kSchema[] = R"sql(
     label TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0),
     status TEXT NOT NULL CHECK(status IN ('located','pending_location')),
     pending_reason TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
     location_linked_at_revision INTEGER CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision),
     CHECK((status = 'located') = (pending_reason IS NULL))
   );
@@ -51,21 +54,32 @@ constexpr char kSchema[] = R"sql(
 
 constexpr char kRelationSchema[] = R"sql(
   CREATE TABLE entity_relations(
-    predicate TEXT NOT NULL CHECK(predicate IN ('inside','near')),
+    predicate TEXT NOT NULL CHECK(predicate IN ('inside','near','on','hanging_on','connects_regions')),
     subject_id TEXT NOT NULL REFERENCES entities(entity_id),
     target_id TEXT NOT NULL REFERENCES entities(entity_id),
+    extra_id TEXT NOT NULL DEFAULT '',
     geometry_revision TEXT NOT NULL,
-    observation_id TEXT, observation_revision TEXT, evidence_ref TEXT,
-    distance_m REAL, threshold_m REAL,
-    PRIMARY KEY(predicate,subject_id,target_id),
-    CHECK(subject_id <> target_id),
-    CHECK((predicate='inside' AND observation_id IS NOT NULL AND observation_revision IS NOT NULL
-          AND evidence_ref IS NOT NULL AND distance_m IS NULL AND threshold_m IS NULL)
-      OR (predicate='near' AND subject_id < target_id AND observation_id IS NULL AND observation_revision IS NULL
-          AND evidence_ref IS NULL AND distance_m IS NOT NULL AND threshold_m IS NOT NULL
-          AND distance_m >= 0 AND threshold_m > 0 AND distance_m <= threshold_m))
+    evidence_json TEXT NOT NULL,
+    basis TEXT NOT NULL, evidence_ref TEXT NOT NULL,
+    recognition_state TEXT NOT NULL DEFAULT 'supported',
+    revision INTEGER NOT NULL DEFAULT 1,
+    region_membership INTEGER NOT NULL DEFAULT 0,
+    distance_m REAL, threshold_m REAL, dimension TEXT NOT NULL,
+    PRIMARY KEY(predicate,subject_id,target_id,extra_id),
+    CHECK(subject_id <> target_id)
   );
-  CREATE UNIQUE INDEX entity_inside_region ON entity_relations(subject_id) WHERE predicate='inside';
+  CREATE UNIQUE INDEX entity_inside_region ON entity_relations(subject_id)
+    WHERE region_membership=1 AND recognition_state='supported';
+  CREATE TABLE pending_entities(pending_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL);
+)sql";
+
+constexpr char kBuildSchema[] = R"sql(
+  CREATE TABLE tool_calls(
+    call_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL, result_json TEXT NOT NULL
+  );
+  CREATE TABLE build_progress(
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1), progress_json TEXT NOT NULL
+  );
 )sql";
 
 struct SqlError : std::runtime_error
@@ -113,10 +127,18 @@ public:
     check(db_, sqlite3_bind_int64(stmt_.get(), column, value));
   }
 
-  /** @brief 保存已经校验的米制数值。 */
-  void bindReal(int column, double value)
+  /** @brief 保存可空的米制数值。 */
+  void bindReal(int column, std::optional<double> value)
   {
-    check(db_, sqlite3_bind_double(stmt_.get(), column, value));
+    if (value) {check(db_, sqlite3_bind_double(stmt_.get(), column, *value));}
+    else {check(db_, sqlite3_bind_null(stmt_.get(), column));}
+  }
+
+  /** @brief 读取数值距离，NULL 表示定性关系。 */
+  std::optional<double> optionalReal(int column) const
+  {
+    if (sqlite3_column_type(stmt_.get(), column) == SQLITE_NULL) {return std::nullopt;}
+    return sqlite3_column_double(stmt_.get(), column);
   }
 
   /** @brief 绑定可空字段，空指针含义由 SQL NULL 表达。 */
@@ -184,16 +206,30 @@ class Transaction
 {
 public:
   /** @brief 先取得写锁，在一个事务中维护实体和证据。 */
-  explicit Transaction(sqlite3 * db) : db_(db) {execute(db_, "BEGIN IMMEDIATE");}
+  explicit Transaction(sqlite3 * db) : db_(db), nested_(!sqlite3_get_autocommit(db))
+  {
+    execute(db_, nested_ ? "SAVEPOINT entity_write" : "BEGIN IMMEDIATE");
+  }
 
   /** @brief 任何未提交路径都回滚。 */
-  ~Transaction() {if (!committed_) {sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);}}
+  ~Transaction()
+  {
+    if (!committed_) {
+      const auto * rollback = nested_ ? "ROLLBACK TO entity_write; RELEASE entity_write" : "ROLLBACK";
+      sqlite3_exec(db_, rollback, nullptr, nullptr, nullptr);
+    }
+  }
 
   /** @brief 仅在 SQLite 确认提交后标记成功。 */
-  void commit() {execute(db_, "COMMIT"); committed_ = true;}
+  void commit()
+  {
+    execute(db_, nested_ ? "RELEASE entity_write" : "COMMIT");
+    committed_ = true;
+  }
 
 private:
   sqlite3 * db_;
+  bool nested_;
   bool committed_{false};
 };
 
@@ -359,19 +395,41 @@ void upgradeSchema(sqlite3 * db)
   if (version < 1 || version > kSchemaVersion) {
     throw std::invalid_argument("Unsupported entity store format");
   }
-  if (version == 1) {
-    execute(db, "ALTER TABLE entity_observations ADD COLUMN linked_at_revision "
-      "INTEGER NOT NULL DEFAULT 1 CHECK(linked_at_revision > 0)");
+  if (version == kSchemaVersion) {
+    transaction.commit();
+    return;
   }
-  if (version < 3) {
-    execute(db, "ALTER TABLE entities ADD COLUMN location_linked_at_revision INTEGER "
-      "CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision)");
-    execute(db, "UPDATE entities SET location_linked_at_revision=1 WHERE status='located'");
-  }
-  if (version < 4) {
+  if (version < 5) {
+    if (version == 1) {
+      execute(db, "ALTER TABLE entity_observations ADD COLUMN linked_at_revision "
+        "INTEGER NOT NULL DEFAULT 1 CHECK(linked_at_revision > 0)");
+    }
+    if (version < 3) {
+      execute(db, "ALTER TABLE entities ADD COLUMN location_linked_at_revision INTEGER "
+        "CHECK(location_linked_at_revision > 0 AND location_linked_at_revision <= revision)");
+      execute(db, "UPDATE entities SET location_linked_at_revision=1 WHERE status='located'");
+    }
+    execute(db, "ALTER TABLE entities ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'");
+    if (version == 4) {
+      execute(db, "DROP INDEX entity_inside_region; ALTER TABLE entity_relations RENAME TO relations_v4");
+    }
     execute(db, kRelationSchema);
-    execute(db, "PRAGMA user_version = 4");
+    if (version == 4) {
+      execute(db, R"sql(
+        INSERT INTO entity_relations
+        (predicate,subject_id,target_id,geometry_revision,evidence_json,basis,evidence_ref,region_membership,
+         distance_m,threshold_m,dimension)
+        SELECT predicate,subject_id,target_id,geometry_revision,
+          CASE WHEN observation_id IS NULL THEN '[]' ELSE json_array(observation_id) END,
+          CASE WHEN predicate='near' THEN 'geometry_computed' ELSE 'human_confirmed' END,
+          coalesce(evidence_ref,''),predicate='inside',distance_m,threshold_m,
+          CASE WHEN predicate='near' THEN 'xyz' ELSE '' END FROM relations_v4;
+        DROP TABLE relations_v4;
+      )sql");
+    }
   }
+  execute(db, kBuildSchema);
+  execute(db, "PRAGMA user_version = 6");
   transaction.commit();
 }
 
@@ -413,6 +471,7 @@ EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, cons
     }
     execute(db, kSchema);
     execute(db, kRelationSchema);
+    execute(db, kBuildSchema);
     Statement insert(db, "INSERT INTO store_meta VALUES(1,?1,?2,?3,?4,?5)");
     insert.bind(1, context.dataset_manifest_sha256);
     insert.bind(2, context.source_manifest_sha256);
@@ -472,16 +531,20 @@ EntityStoreResult EntityStore::insertEntity(
 
   try {
     const auto evidence = detail::encodeEntityEvidence(ref);
+    if (!Json::parse(entity.details_json).is_object()) {
+      return {Code::invalid_entity, "Entity details must be an object"};
+    }
     auto * db = state_->db.get();
     Transaction transaction(db);
     Statement row(db, "INSERT INTO entities"
-      "(entity_id,kind,label,revision,status,pending_reason,location_linked_at_revision) "
-      "VALUES(?1,?2,?3,1,?4,?5,CASE WHEN ?4='located' THEN 1 END)");
+      "(entity_id,kind,label,revision,status,pending_reason,location_linked_at_revision,details_json) "
+      "VALUES(?1,?2,?3,1,?4,?5,CASE WHEN ?4='located' THEN 1 END,?6)");
     row.bind(1, entity.entity_id);
     row.bind(2, entity.kind == EntityKind::object ? "object" : "region");
     row.bind(3, entity.semantic_label);
     row.bind(4, entity.status == EntityStatus::located ? "located" : "pending_location");
     row.bindOptional(5, entity.location_pending_reason);
+    row.bind(6, entity.details_json);
     try {
       row.writeOne();
     } catch (const SqlError & error) {
@@ -649,6 +712,10 @@ EntityStoreResult EntityStore::resolveEntityLocation(
     resolve.bind(3, entity_id);
     resolve.bindInteger(4, revision);
     resolve.writeOne();
+    Statement review(db, "UPDATE entity_relations SET recognition_state='needs_review', revision=revision+1 "
+      "WHERE (subject_id=?1 OR target_id=?1 OR extra_id=?1) AND recognition_state='supported'");
+    review.bind(1, entity_id);
+    review.step();
     transaction.commit();
     return {Code::ready, ""};
   } catch (const std::invalid_argument & error) {
@@ -687,36 +754,19 @@ EntityStoreResult EntityStore::recordInside(
       if (*subject.entity->region_id == region_id) {return {Code::already_linked, "Object is already inside this region"};}
       return {Code::evidence_conflict, "Object already belongs to a different region"};
     }
-    Statement insert(db, "INSERT INTO entity_relations"
-      "(predicate,subject_id,target_id,geometry_revision,observation_id,observation_revision,evidence_ref) "
-      "VALUES('inside',?1,?2,?3,?4,?5,?6)");
-    insert.bind(1, object_id);
-    insert.bind(2, region_id);
-    insert.bind(3, context().geometry_revision);
-    insert.bind(4, ref->observation_id);
-    insert.bind(5, std::to_string(ref->observation_revision));
-    insert.bind(6, evidence_ref);
-    insert.writeOne();
+    EntityRelation relation;
+    relation.type = "inside";
+    relation.entity_ids = {std::string(object_id), std::string(region_id)};
+    relation.evidence_observation_ids = {observation.observation_id};
+    relation.basis = "human_confirmed";
+    relation.evidence_ref = evidence_ref;
+    const auto recorded = recordRelation(std::move(relation));
+    if (!recorded.ok()) {return recorded;}
     transaction.commit();
     return {Code::ready, ""};
   } catch (const std::exception & error) {
     return {Code::storage_error, error.what()};
   }
-}
-
-/** @brief 从工作库回读的已校验定位引用取得地图代表点。 */
-static std::optional<std::array<double, 3>> selectedPoint(const Entity & entity)
-{
-  if (!entity.location_observation) {return std::nullopt;}
-  for (const auto & ref : entity.observations) {
-    if (ref.observation_id != entity.location_observation->observation_id ||
-      ref.observation_revision != entity.location_observation->observation_revision) {continue;}
-    if (ref.object_selection && ref.object_selection->representative) {
-      return ref.object_selection->representative->point_map_m;
-    }
-    if (ref.region_interior && ref.region_interior->body_anchor) {return ref.region_interior->body_anchor->point_map_m;}
-  }
-  return std::nullopt;
 }
 
 /** @brief 按无向端点顺序维护当前阈值对应的 near 结果。 */
@@ -733,8 +783,8 @@ NearRelationResult EntityStore::recordNear(
     if (!first.ok()) {return {{first.code, first.message}};}
     const auto second = loadEntity(second_id);
     if (!second.ok()) {return {{second.code, second.message}};}
-    const auto first_point = selectedPoint(*first.entity);
-    const auto second_point = selectedPoint(*second.entity);
+    const auto first_point = selectedEntityPoint(*first.entity);
+    const auto second_point = selectedEntityPoint(*second.entity);
     if (!first_point || !second_point) {return {{Code::location_unavailable, "Both entities need a selected location"}};}
     const auto & a = *first_point;
     const auto & b = *second_point;
@@ -742,19 +792,24 @@ NearRelationResult EntityStore::recordNear(
     if (!std::isfinite(distance)) {return {{Code::invalid_entity, "Non-finite map distance"}};}
     if (second_id < first_id) {std::swap(first_id, second_id);}
     const bool related = distance <= threshold_m;
+    const auto existing = findRelation("near", {std::string(first_id), std::string(second_id)});
+    if (existing && existing->basis != "geometry_computed") {
+      transaction.commit();
+      return {{Code::ready, ""}, distance, related};
+    }
     if (related) {
-      Statement upsert(db, "INSERT INTO entity_relations"
-        "(predicate,subject_id,target_id,geometry_revision,distance_m,threshold_m) VALUES('near',?1,?2,?3,?4,?5) "
-        "ON CONFLICT(predicate,subject_id,target_id) DO UPDATE SET geometry_revision=excluded.geometry_revision,"
-        "distance_m=excluded.distance_m,threshold_m=excluded.threshold_m");
-      upsert.bind(1, first_id);
-      upsert.bind(2, second_id);
-      upsert.bind(3, context().geometry_revision);
-      upsert.bindReal(4, distance);
-      upsert.bindReal(5, threshold_m);
-      upsert.writeOne();
+      EntityRelation relation;
+      relation.type = "near";
+      relation.entity_ids = {std::string(first_id), std::string(second_id)};
+      relation.basis = "geometry_computed";
+      relation.distance_m = distance;
+      relation.threshold_m = threshold_m;
+      relation.dimension = "xyz";
+      const auto recorded = recordRelation(std::move(relation));
+      if (!recorded.ok()) {return {{recorded.code, recorded.message}};}
     } else {
-      Statement remove(db, "DELETE FROM entity_relations WHERE predicate='near' AND subject_id=?1 AND target_id=?2");
+      Statement remove(db, "DELETE FROM entity_relations WHERE predicate='near' AND subject_id=?1 AND target_id=?2 "
+        "AND basis='geometry_computed'");
       remove.bind(1, first_id);
       remove.bind(2, second_id);
       remove.step();
@@ -766,6 +821,248 @@ NearRelationResult EntityStore::recordNear(
   }
 }
 
+/** @brief 在同一连接上组合既有写入，底层方法以 savepoint 隔离自己的失败。 */
+EntityStoreResult EntityStore::writeAtomically(const std::function<EntityStoreResult()> & write)
+{
+  try {
+    Transaction transaction(state_->db.get());
+    auto result = write();
+    if (result.ok()) {transaction.commit();}
+    return result;
+  } catch (const std::exception & error) {
+    return {Code::storage_error, error.what()};
+  }
+}
+
+/** @brief 乐观校验并保存实体的语义字段，字段相同时保持原修订。 */
+EntityStoreResult EntityStore::updateEntityFields(
+  std::string_view entity_id, std::uint64_t expected_revision,
+  std::string_view label, std::string_view details_json, bool relation_changed)
+{
+  if (!validText(label) || !Json::parse(details_json, nullptr, false).is_object()) {
+    return {Code::invalid_entity, "Invalid entity label or details"};
+  }
+  return writeAtomically([&]() -> EntityStoreResult {
+    const auto current = loadEntity(entity_id);
+    if (!current.ok()) {return current;}
+    if (current.entity->revision != expected_revision) {return {Code::revision_conflict, "Entity revision has changed"};}
+    if (!relation_changed && current.entity->semantic_label == label && current.entity->details_json == details_json) {
+      return {Code::already_linked, ""};
+    }
+    if (expected_revision >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      return {Code::invalid_entity, "Entity revision limit reached"};
+    }
+    Statement row(state_->db.get(), "UPDATE entities SET label=?2,details_json=?3,revision=revision+1 WHERE entity_id=?1");
+    row.bind(1, entity_id);
+    row.bind(2, label);
+    row.bind(3, details_json);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
+/** @brief 使用现有主键索引列出实体，搜索逻辑由工具决定。 */
+std::vector<std::string> EntityStore::listEntityIds() const
+{
+  Statement row(state_->db.get(), "SELECT entity_id FROM entities ORDER BY entity_id");
+  std::vector<std::string> ids;
+  while (row.step()) {ids.push_back(row.text(0));}
+  return ids;
+}
+
+namespace
+{
+/** @brief 校验关系类型和端点个数，将对称端点排成统一顺序。 */
+void orderEndpoints(std::string_view type, std::vector<std::string> & ids)
+{
+  const bool connects = type == "connects_regions";
+  if ((type != "near" && type != "inside" && type != "on" && type != "hanging_on" && !connects) ||
+    ids.size() != (connects ? 3U : 2U) || ids[0] == ids[1] ||
+    (connects && (ids[0] == ids[2] || ids[1] == ids[2])))
+  {
+    throw std::invalid_argument("Invalid relation type or endpoints");
+  }
+  if (type == "near" && ids[1] < ids[0]) {std::swap(ids[0], ids[1]);}
+  if (connects && ids[2] < ids[1]) {std::swap(ids[1], ids[2]);}
+}
+
+/** @brief 将规范化的关系键绑定到固定 SQL。 */
+void bindRelationKey(Statement & row, std::string_view type, const std::vector<std::string> & ids)
+{
+  row.bind(1, type);
+  row.bind(2, ids[0]);
+  row.bind(3, ids[1]);
+  row.bind(4, ids.size() == 3 ? std::string_view(ids[2]) : std::string_view{});
+}
+}  // namespace
+
+/** @brief 通过复合主键恢复可回查的关系。 */
+std::optional<EntityRelation> EntityStore::findRelation(std::string_view type, std::vector<std::string> ids) const
+{
+  orderEndpoints(type, ids);
+  Statement row(state_->db.get(), "SELECT geometry_revision,evidence_json,basis,evidence_ref,"
+    "recognition_state,revision,distance_m,threshold_m,dimension FROM entity_relations "
+    "WHERE predicate=?1 AND subject_id=?2 AND target_id=?3 AND extra_id=?4");
+  bindRelationKey(row, type, ids);
+  if (!row.step()) {return std::nullopt;}
+  EntityRelation relation;
+  relation.type = type;
+  relation.entity_ids = std::move(ids);
+  relation.geometry_revision = row.text(0);
+  relation.evidence_observation_ids = Json::parse(row.text(1)).get<std::vector<std::string>>();
+  relation.basis = row.text(2);
+  relation.evidence_ref = row.text(3);
+  relation.recognition_state = row.text(4);
+  relation.revision = static_cast<std::uint64_t>(row.integer(5));
+  relation.distance_m = row.optionalReal(6);
+  relation.threshold_m = row.optionalReal(7);
+  relation.dimension = row.text(8);
+  return relation;
+}
+
+/** @brief 保存已核验来源的关系，保留修订并让已确认的 inside 成为空间归属来源。 */
+EntityStoreResult EntityStore::recordRelation(EntityRelation relation)
+{
+  try {
+    orderEndpoints(relation.type, relation.entity_ids);
+  } catch (const std::invalid_argument & error) {
+    return {Code::invalid_reference, error.what()};
+  }
+  const bool measured = relation.basis == "geometry_computed";
+  if (measured) {
+    if (relation.type != "near" || !relation.distance_m || !relation.threshold_m ||
+      !std::isfinite(*relation.distance_m) || !std::isfinite(*relation.threshold_m) ||
+      *relation.distance_m < 0 || *relation.threshold_m <= 0 || *relation.distance_m > *relation.threshold_m ||
+      (relation.dimension != "xy" && relation.dimension != "xyz"))
+    {
+      return {Code::invalid_reference, "Invalid measured near relation"};
+    }
+  } else if ((relation.basis != "model_observed" && relation.basis != "human_confirmed") ||
+    relation.evidence_observation_ids.empty() || relation.distance_m || relation.threshold_m)
+  {
+    return {Code::invalid_reference, "Semantic relations require observation evidence"};
+  }
+  if (relation.recognition_state != "tentative" && relation.recognition_state != "supported" &&
+    relation.recognition_state != "needs_review")
+  {
+    return {Code::invalid_reference, "Invalid relation recognition state"};
+  }
+  std::sort(relation.evidence_observation_ids.begin(), relation.evidence_observation_ids.end());
+  relation.evidence_observation_ids.erase(
+    std::unique(relation.evidence_observation_ids.begin(), relation.evidence_observation_ids.end()),
+    relation.evidence_observation_ids.end());
+  return writeAtomically([&]() -> EntityStoreResult {
+    std::vector<EntityKind> kinds;
+    for (const auto & id : relation.entity_ids) {
+      const auto entity = loadEntity(id);
+      if (!entity.ok()) {return entity;}
+      kinds.push_back(entity.entity->kind);
+    }
+    const bool region_membership = relation.type == "inside" && kinds[1] == EntityKind::region;
+    if (relation.type == "connects_regions" &&
+      (kinds[0] != EntityKind::object || kinds[1] != EntityKind::region || kinds[2] != EntityKind::region))
+    {
+      return {Code::invalid_entity, "connects_regions requires an object and two regions"};
+    }
+    if (region_membership && relation.recognition_state == "supported") {
+      const auto subject = loadEntity(relation.entity_ids[0]);
+      if (subject.entity->region_id && *subject.entity->region_id != relation.entity_ids[1]) {
+        return {Code::evidence_conflict, "Entity already belongs to a different region"};
+      }
+    }
+    const auto previous = findRelation(relation.type, relation.entity_ids);
+    if (previous && previous->geometry_revision == context().geometry_revision &&
+      previous->evidence_observation_ids == relation.evidence_observation_ids && previous->basis == relation.basis &&
+      previous->evidence_ref == relation.evidence_ref && previous->recognition_state == relation.recognition_state &&
+      previous->distance_m == relation.distance_m && previous->threshold_m == relation.threshold_m &&
+      previous->dimension == relation.dimension)
+    {
+      return {Code::already_linked, ""};
+    }
+    Statement row(state_->db.get(), R"sql(
+      INSERT INTO entity_relations(predicate,subject_id,target_id,extra_id,geometry_revision,evidence_json,
+        basis,evidence_ref,recognition_state,region_membership,distance_m,threshold_m,dimension)
+      VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+      ON CONFLICT(predicate,subject_id,target_id,extra_id) DO UPDATE SET
+        geometry_revision=excluded.geometry_revision,evidence_json=excluded.evidence_json,basis=excluded.basis,
+        evidence_ref=excluded.evidence_ref,recognition_state=excluded.recognition_state,
+        region_membership=excluded.region_membership,distance_m=excluded.distance_m,
+        threshold_m=excluded.threshold_m,dimension=excluded.dimension,revision=entity_relations.revision+1
+    )sql");
+    bindRelationKey(row, relation.type, relation.entity_ids);
+    row.bind(5, context().geometry_revision);
+    row.bind(6, Json(relation.evidence_observation_ids).dump());
+    row.bind(7, relation.basis);
+    row.bind(8, relation.evidence_ref);
+    row.bind(9, relation.recognition_state);
+    row.bindInteger(10, region_membership);
+    row.bindReal(11, relation.distance_m);
+    row.bindReal(12, relation.threshold_m);
+    row.bind(13, relation.dimension);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
+/** @brief 将待处理请求和原始证据保存到工作库，供之后定位或发布报告。 */
+EntityStoreResult EntityStore::savePending(std::string_view pending_id, std::string_view request_json)
+{
+  return writeAtomically([&]() -> EntityStoreResult {
+    Statement row(state_->db.get(), "INSERT INTO pending_entities VALUES(?1,?2)");
+    row.bind(1, pending_id);
+    row.bind(2, request_json);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
+/** @brief 返回已提交工具调用的原参数和输出。 */
+std::optional<ToolCallRecord> EntityStore::findToolCall(std::string_view call_id) const
+{
+  Statement row(state_->db.get(), "SELECT request_json,result_json FROM tool_calls WHERE call_id=?1");
+  row.bind(1, call_id);
+  if (!row.step()) {return std::nullopt;}
+  return ToolCallRecord{row.text(0), row.text(1)};
+}
+
+/** @brief 必须与业务写入处于同一事务，唯一键保护并行重放。 */
+void EntityStore::insertToolCall(std::string_view call_id, const ToolCallRecord & record)
+{
+  auto * db = state_->db.get();
+  if (sqlite3_get_autocommit(db) || !validText(call_id)) {
+    throw std::invalid_argument("Tool calls require a transaction and a nonempty call ID");
+  }
+  Statement row(db, "INSERT INTO tool_calls VALUES(?1,?2,?3)");
+  row.bind(1, call_id);
+  row.bind(2, record.request_json);
+  row.bind(3, record.result_json);
+  row.writeOne();
+}
+
+/** @brief 读取单个构建恢复点。 */
+std::optional<std::string> EntityStore::loadBuildProgress() const
+{
+  Statement row(state_->db.get(), "SELECT progress_json FROM build_progress WHERE singleton=1");
+  if (!row.step()) {return std::nullopt;}
+  return row.text(0);
+}
+
+/** @brief 比对已读取的状态后推进恢复点，失败时保留已提交的进度。 */
+EntityStoreResult EntityStore::saveBuildProgress(
+  const std::optional<std::string> & expected, std::string_view progress_json)
+{
+  return writeAtomically([&]() -> EntityStoreResult {
+    if (loadBuildProgress() != expected) {
+      return {Code::revision_conflict, "Build progress changed in another process"};
+    }
+    Statement row(state_->db.get(), "INSERT INTO build_progress VALUES(1,?1) "
+      "ON CONFLICT(singleton) DO UPDATE SET progress_json=excluded.progress_json");
+    row.bind(1, progress_json);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
 /** @brief 一次主键查询恢复实体和证据，断引用或损坏证据返回错误。 */
 EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
 {
@@ -773,7 +1070,7 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
     Statement query(state_->db.get(), "SELECT e.kind,e.label,e.revision,e.status,e.pending_reason,"
       "o.observation_id,o.observation_revision,o.source_manifest_sha256,o.evidence_json,o.linked_at_revision,"
       "e.location_linked_at_revision,(SELECT target_id FROM entity_relations "
-      "WHERE predicate='inside' AND subject_id=e.entity_id) "
+      "WHERE region_membership=1 AND recognition_state='supported' AND subject_id=e.entity_id),e.details_json "
       "FROM entities e LEFT JOIN entity_observations o USING(entity_id) WHERE e.entity_id=?1 "
       "ORDER BY o.linked_at_revision");
     query.bind(1, entity_id);
@@ -792,6 +1089,7 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
     if (!validEntity(entity)) {return {{Code::invalid_store, "Invalid stored entity"}, std::nullopt};}
     const auto selected_revision = query.optionalInteger(10);
     entity.region_id = query.optionalText(11);
+    entity.details_json = query.text(12);
     if ((entity.status == EntityStatus::located) != selected_revision.has_value()) {
       return {{Code::invalid_store, "Entity status differs from its location reference"}, std::nullopt};
     }

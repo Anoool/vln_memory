@@ -143,6 +143,24 @@ void polygonCases()
       "Invalid polygon was accepted");
   }
 }
+/** @brief RGB 位姿横移一个像素，仍应返回原始深度点的地图坐标。 */
+void rgbRegionCase()
+{
+  const auto s = scene();
+  auto rgb_pose = s.pose;
+  rgb_pose.pose->translation_m[1] += 0.2;
+  DepthRegionOptions options;
+  options.include_points = true;
+  const auto result = projectRgbRegionToMap(s.depth, s.model, s.pose, s.model, rgb_pose, "map",
+    DepthBoundingBox{1, 1, 4, 3}, options);
+  expect(result.ok() && result.valid_points == 6 && result.region_pixels == 6,
+    "RGB selector was not matched to six original depth pixels");
+  for (const auto & point : result.clusters.front().points) {
+    expect(point.pixel.u >= 2 && point.pixel.u < 5 && point.pixel.v >= 1 && point.pixel.v < 3,
+      "RGB selector reused same-coordinate depth pixels");
+    checkPoint(point);
+  }
+}
 }  // namespace
 
 /** @brief 运行无 ROS 的已知坐标和分簇回归。 */
@@ -152,6 +170,7 @@ int main()
     bboxCases();
     clusterCases();
     polygonCases();
+    rgbRegionCase();
     std::cout << "Depth region projection checks passed\n";
     return 0;
   } catch (const std::exception & e) {

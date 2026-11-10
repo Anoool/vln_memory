@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 #include "depth_projection_internal.hpp"
 
@@ -121,6 +122,40 @@ DepthRegionCluster describeCluster(
   return out;
 }
 
+/** @brief 统一计算连通簇、代表点和质量，保留每个点的原始深度像素。 */
+DepthRegionResult summarize(
+  DepthRegionResult out, std::vector<ProjectedCell> & cells, const DepthBoundingBox & box,
+  const DepthRegionOptions & options)
+{
+  const auto width = static_cast<std::size_t>(box.u_end - box.u_min);
+  const auto height = static_cast<std::size_t>(box.v_end - box.v_min);
+  if (out.valid_points == 0) {
+    out.code = out.projection_failures > 0 ? Code::projection_failed : Code::no_valid_depth;
+    return out;
+  }
+  std::vector<std::size_t> queue;
+  for (std::size_t index = 0; index < cells.size(); ++index) {
+    if (cells[index].visited || cells[index].depth_m <= 0) {continue;}
+    collectCluster(cells, index, width, height, options.max_neighbor_depth_delta_m, queue);
+    if (queue.size() >= options.min_cluster_points) {
+      out.clusters.push_back(describeCluster(cells, queue, box, width, options.include_points));
+    }
+  }
+  /** @brief 点数相同时保持发现顺序，即各簇首像素的原图行序。 */
+  std::stable_sort(out.clusters.begin(), out.clusters.end(), [](const auto & a, const auto & b) {
+    return a.point_count > b.point_count;
+  });
+  if (out.clusters.empty() || static_cast<double>(out.valid_points) / out.region_pixels < options.min_valid_fraction) {
+    out.code = Code::insufficient_support;
+  } else if (static_cast<double>(out.clusters.front().point_count) / out.valid_points < options.min_dominant_fraction) {
+    out.code = out.clusters.size() > 1 ? Code::ambiguous_region : Code::insufficient_support;
+  } else {
+    out.code = Code::ready;
+    out.representative = out.clusters.front().representative;
+  }
+  return out;
+}
+
 /** @brief 对掩膜内像素投影并分簇；bbox 和 polygon 共用所有质量判断。 */
 template<typename Mask>
 DepthRegionResult projectWindow(
@@ -161,31 +196,7 @@ DepthRegionResult projectWindow(
       return failed;
     }
   }
-  if (out.valid_points == 0) {
-    out.code = out.projection_failures > 0 ? Code::projection_failed : Code::no_valid_depth;
-    return out;
-  }
-  std::vector<std::size_t> queue;
-  for (std::size_t index = 0; index < cells.size(); ++index) {
-    if (cells[index].visited || cells[index].depth_m <= 0) {continue;}
-    collectCluster(cells, index, width, height, options.max_neighbor_depth_delta_m, queue);
-    if (queue.size() >= options.min_cluster_points) {
-      out.clusters.push_back(describeCluster(cells, queue, box, width, options.include_points));
-    }
-  }
-  /** @brief 点数相同时保持发现顺序，即各簇首像素的原图行序。 */
-  std::stable_sort(out.clusters.begin(), out.clusters.end(), [](const auto & a, const auto & b) {
-    return a.point_count > b.point_count;
-  });
-  if (out.clusters.empty() || static_cast<double>(out.valid_points) / out.region_pixels < options.min_valid_fraction) {
-    out.code = Code::insufficient_support;
-  } else if (static_cast<double>(out.clusters.front().point_count) / out.valid_points < options.min_dominant_fraction) {
-    out.code = out.clusters.size() > 1 ? Code::ambiguous_region : Code::insufficient_support;
-  } else {
-    out.code = Code::ready;
-    out.representative = out.clusters.front().representative;
-  }
-  return out;
+  return summarize(std::move(out), cells, box, options);
 }
 
 /** @brief 获取有限简单多边形的深度原图包围窗口；坐标均是整数像素中心。 */
@@ -352,6 +363,67 @@ DepthRegionResult projectDepthRegionToMap(
   /** @brief 复用已校验的顶点序列计算原图像素中心的掩膜。 */
   const auto mask = [&region](const DepthPixel & pixel) {return insidePolygon(region.vertices, pixel);};
   return projectWindow(depth, model, pose, map_frame, window, options, mask);
+}
+
+DepthRegionResult projectRgbRegionToMap(
+  const DepthFrame & depth, const CameraModel & depth_model, const TfPoseResult & depth_pose,
+  const CameraModel & rgb_model, const TfPoseResult & rgb_pose, std::string_view map_frame,
+  const DepthRegion & rgb_region, const DepthRegionOptions & options)
+{
+  DepthRegionResult out;
+  out.code = checkDepthRegionSelection(rgb_model.width, rgb_model.height, rgb_region, options);
+  if (out.code != Code::ready) {return out;}
+  const auto context = detail::checkDepthProjectionContext(depth, depth_model, depth_pose, map_frame);
+  if (context != PointCode::ready || !rgb_pose.ok() || !rgb_pose.time.covered() ||
+    rgb_pose.time.frames.empty() || rgb_pose.time.frames.front() != rgb_model.frame_id ||
+    rgb_pose.time.frames.back() != map_frame)
+  {
+    out.code = Code::invalid_input;
+    return out;
+  }
+
+  const auto * polygon = std::get_if<DepthPolygon>(&rgb_region);
+  const auto box = polygon ? *polygonWindow(rgb_model.width, rgb_model.height, *polygon) :
+    std::get<DepthBoundingBox>(rgb_region);
+  const auto width = static_cast<std::size_t>(box.u_end - box.u_min);
+  const auto height = static_cast<std::size_t>(box.v_end - box.v_min);
+  std::vector<std::size_t> winners(width * height, depth.depth_m.size());
+  std::vector<double> z_buffer(winners.size(), std::numeric_limits<double>::infinity());
+  for (std::size_t index = 0; index < winners.size(); ++index) {
+    if (!polygon || insidePolygon(polygon->vertices, sourcePixel(box, width, index))) {
+      ++out.region_pixels;
+    }
+  }
+
+  const DepthBoundingBox depth_box{0, 0, depth.width, depth.height};
+  if (depth.depth_m.size() > DepthLimits{}.max_pixels) {
+    out.code = Code::region_too_large;
+    return out;
+  }
+  std::vector<ProjectedCell> cells(depth.depth_m.size());
+  for (std::size_t index = 0; index < cells.size(); ++index) {
+    if (!std::isfinite(depth.depth_m[index]) || depth.depth_m[index] <= 0) {continue;}
+    const auto pixel = sourcePixel(depth_box, depth.width, index);
+    const auto point = projectDepthPixelToMap(depth, depth_model, depth_pose, map_frame, pixel.u, pixel.v);
+    if (!point.ok()) {continue;}
+    const auto rgb_point = inverseTransformTfPoint(*rgb_pose.pose, *point.point_map_m);
+    if (!rgb_point) {continue;}
+    const auto projected = cameraPointToPixel(rgb_model, *rgb_point);
+    if (!projected.ok()) {continue;}
+    const DepthPixel target{std::llround((*projected.pixel_uv)[0]), std::llround((*projected.pixel_uv)[1])};
+    if (target.u < box.u_min || target.u >= box.u_end || target.v < box.v_min || target.v >= box.v_end ||
+      (polygon && !insidePolygon(polygon->vertices, target))) {continue;}
+    const auto slot = static_cast<std::size_t>(target.v - box.v_min) * width +
+      static_cast<std::size_t>(target.u - box.u_min);
+    if ((*rgb_point)[2] >= z_buffer[slot]) {continue;}
+    if (winners[slot] == cells.size()) {++out.valid_points;}
+    else {cells[winners[slot]] = {};}
+    winners[slot] = index;
+    z_buffer[slot] = (*rgb_point)[2];
+    cells[index] = {*point.point_map_m, depth.depth_m[index]};
+  }
+  out.invalid_depth_pixels = out.region_pixels - out.valid_points;
+  return summarize(std::move(out), cells, depth_box, options);
 }
 
 }  // namespace vln_memory

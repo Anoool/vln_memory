@@ -51,6 +51,7 @@ find_package(OpenCV REQUIRED COMPONENTS core calib3d imgcodecs)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(SQLite3 REQUIRED)
+find_package(yaml-cpp REQUIRED)
 add_library(vln_memory_camera_model SHARED src/bag/camera_info/camera_model.cpp)
 add_library(vln_memory::vln_memory_camera_model ALIAS vln_memory_camera_model)
 target_link_libraries(vln_memory_camera_model PUBLIC vln_memory_camera_info PRIVATE opencv_core opencv_calib3d)
@@ -161,6 +162,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(vln_memory_observed_entity_store PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+find_package(CURL REQUIRED)
+add_executable(memory_engine src/apps/memory_engine_main.cpp
+  src/engine/observation_tools.cpp src/engine/entity_tools.cpp src/engine/memory_tools.cpp
+  src/engine/model_batches.cpp src/engine/responses_client.cpp)
+target_link_libraries(memory_engine PRIVATE vln_memory_observed_entity_store vln_memory_entity_builder
+  nlohmann_json::nlohmann_json yaml-cpp OpenSSL::Crypto CURL::libcurl)
+install(TARGETS memory_engine DESTINATION lib/${PROJECT_NAME})
+
 set(memory_export_targets vln_memory_entity_store vln_memory_observed_entity_store vln_memory_entity vln_memory_entity_builder vln_memory_observation_depth_region vln_memory_observation_dataset vln_memory_observation_builder vln_memory_observation vln_memory_build_input vln_memory_preparation_reader vln_memory_depth_projection vln_memory_camera_model vln_memory_rgb vln_memory_depth
   vln_memory_sensor_time vln_memory_camera_info vln_memory_tf vln_memory_rgbd_sync vln_memory_camera_info_index)
 
@@ -202,7 +211,6 @@ if(VLN_MEMORY_ENABLE_ROS)
   find_package(rosbag2_storage REQUIRED)
   find_package(rclcpp REQUIRED)
   find_package(rcutils REQUIRED)
-  find_package(yaml-cpp REQUIRED)
   find_package(OpenCV REQUIRED COMPONENTS core imgcodecs)
   find_package(cv_bridge REQUIRED)
   find_package(compressed_depth_image_transport REQUIRED)
@@ -231,9 +239,10 @@ if(VLN_MEMORY_ENABLE_ROS)
     target_compile_options(vln_memory_bag_builder PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_executable(bag_builder src/apps/bag_builder_main.cpp)
-  target_link_libraries(bag_builder PRIVATE vln_memory_bag_builder)
+  target_link_libraries(bag_builder PRIVATE vln_memory_bag_builder yaml-cpp)
   install(TARGETS bag_builder DESTINATION lib/${PROJECT_NAME})
-  install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+  install(DIRECTORY config DESTINATION share/${PROJECT_NAME}
+    PATTERN "api_key.yaml" EXCLUDE)
   list(APPEND memory_export_targets vln_memory_bag_builder)
   list(APPEND memory_export_targets vln_memory_rgb_ros vln_memory_depth_ros
     vln_memory_camera_info_ros vln_memory_tf_ros)
@@ -339,12 +348,20 @@ if(BUILD_TESTING)
     add_test(NAME observation_dataset COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/engine/check_observation_dataset.py
       --binary $<TARGET_FILE:memory_observation_dataset>
+      --bag-builder $<TARGET_FILE:bag_builder>
+      --engine $<TARGET_FILE:memory_engine>
       --reader $<TARGET_FILE:test_observation_dataset_reader>
       --store $<TARGET_FILE:test_entity_store>
       --semantic $<TARGET_FILE:memory_semantic_build>
       --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
       --output-parent ${CMAKE_CURRENT_BINARY_DIR}/observation_dataset_checks)
     set_tests_properties(observation_dataset PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
+    add_test(NAME model_batches COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/engine/check_model_batches.py
+      --engine $<TARGET_FILE:memory_engine>
+      --fixture-pointer ${CMAKE_CURRENT_BINARY_DIR}/test_artifacts
+      --output-parent ${CMAKE_CURRENT_BINARY_DIR}/model_batch_checks)
+    set_tests_properties(model_batches PROPERTIES FIXTURES_REQUIRED bag_builder_dataset)
     add_test(NAME observation_preparation COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/test/memory/check_preparation_observations.py
       --binary $<TARGET_FILE:test_observation_preparation>
@@ -373,7 +390,7 @@ endif()
 # Linux 安装后共享库按自身目录寻找兄弟依赖，包外消费者无需为本包手动补 LD_LIBRARY_PATH。
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set_target_properties(${memory_export_targets} PROPERTIES INSTALL_RPATH "$ORIGIN")
-  set_target_properties(preparation_compact memory_build_input memory_observation_dataset memory_semantic_build
+  set_target_properties(preparation_compact memory_build_input memory_observation_dataset memory_semantic_build memory_engine
     PROPERTIES INSTALL_RPATH "$ORIGIN/..")
   if(TARGET bag_builder)
     set_target_properties(bag_builder PROPERTIES INSTALL_RPATH "$ORIGIN/..")

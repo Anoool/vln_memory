@@ -22,4 +22,19 @@ std::optional<std::string> allocateEntityId()
   return id;
 }
 
+/** @brief 从工作库回读的已校验定位引用取得地图代表点。 */
+std::optional<std::array<double, 3>> selectedEntityPoint(const Entity & entity)
+{
+  if (!entity.location_observation) {return std::nullopt;}
+  for (const auto & ref : entity.observations) {
+    if (ref.observation_id != entity.location_observation->observation_id ||
+      ref.observation_revision != entity.location_observation->observation_revision) {continue;}
+    if (ref.object_selection && ref.object_selection->representative) {
+      return ref.object_selection->representative->point_map_m;
+    }
+    if (ref.region_interior && ref.region_interior->body_anchor) {return ref.region_interior->body_anchor->point_map_m;}
+  }
+  return std::nullopt;
+}
+
 }  // namespace vln_memory

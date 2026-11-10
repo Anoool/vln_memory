@@ -249,11 +249,164 @@ def check_direct(reader, semantic, root, fixture, legacy_output):
     subprocess.run([str(reader.resolve()), "--direct-corrupt", str(direct)], check=True)
 
 
+def check_project_bag_builder(binary, root, fixture):
+  """Run the single-YAML entry point with one good pair and one corrupt depth image."""
+  output = root / "project_memory"
+  config = root / "project.yaml"
+  # A JSON document is valid YAML and needs no test-only parser dependency.
+  config.write_text(json.dumps({
+      "dataset": {"bag_path": str(fixture / "bad_depth_compressed_bag"), "memory_dir": str(output),
+                  "map_id": "fixture", "geometry_revision": "v1", "map_basis": "Fixture recorded TF"},
+      "topics": {"rgb": "/rgb", "depth": "/depth", "rgb_camera_info": "/rgb_info",
+                 "depth_camera_info": "/depth_info", "tf": "/tf", "tf_static": "/tf_static"},
+      "frames": {"map": "map", "body": "base", "rgb_optical": "camera", "depth_optical": "camera"},
+      "preprocess": {"sync_tolerance_ms": 0, "depth_scale_to_m": 0.001},
+  }), encoding="utf-8")
+  result = subprocess.run([str(binary.resolve()), "--config", str(config)],
+                          check=True, text=True, capture_output=True)
+  report = json.loads(result.stdout)
+  records = rows(output / "observations.jsonl")
+  assert report["pairs"] == 2 and report["observations"] == len(records) == 1, report
+  summary = read_json(output / "evidence/summary.json")
+  assert summary["observations"] == len(records) and not summary["keyframes_selected"], summary
+  assert summary["pending_observations"] == report["pending_observations"], summary
+  record, = records
+  assert record["rgb_stamp"]["sec"] == record["depth_stamp"]["sec"] == 11
+  for field in ("rgb_media", "depth_media"):
+    assert (output / record[field]).is_file(), record[field]
+  issues = rows(output / "evidence/issues.jsonl")
+  assert any(item["code"] == "missing_rgbd_media" for item in issues)
+  pending = rows(output / "evidence/pending.jsonl")
+  assert {"invalid_frame", "unmatched_rgb", "unused_depth"} <= {item["kind"] for item in pending}
+
+
+def check_memory_engine(binary, root, fixture):
+  """Exercise the YAML tool entry point and verify the optional point artifact."""
+  dataset = root / "engine_dataset"
+  shutil.copytree(fixture / "direct_source_png16", dataset)
+  config = root / "engine.yaml"
+  config.write_text(json.dumps({"dataset": {"memory_dir": str(dataset)}}), encoding="utf-8")
+  observation = rows(dataset / "observations.jsonl")[0]
+  observation_id = observation["id"]
+  point = {"type": "point", "pixel_xy": [0, 0]}
+  requests = [
+      {"name": "get_observation", "arguments": json.dumps({"observation_id": observation_id})},
+      {"name": "project_depth", "arguments": {"observation_id": observation_id, "selector": point,
+                                               "include_points": True}},
+      {"name": "project_depth", "arguments": {"observation_id": observation_id,
+                                              "selector": {"type": "point", "pixel_xy": [1, 0],
+                                                           "image": "depth"}}},
+  ]
+  inputs = "".join(json.dumps(row) + "\n" for row in requests)
+  completed = subprocess.run([str(binary.resolve()), "--config", str(config)],
+                             input=inputs, text=True, capture_output=True, check=False)
+  assert completed.returncode == 1, (completed.stdout, completed.stderr)
+  info, projected, invalid = [json.loads(line) for line in completed.stdout.splitlines()]
+  assert info["status"] == "ok" and info["rgb_media"] == observation["rgb_media"]
+  assert info["depth_media"] == observation["depth_media"]
+  assert info["rgb_stamp"] == observation["rgb_stamp"] and info["depth_stamp"] == observation["depth_stamp"]
+  assert projected["status"] == "ok" and projected["depth_pixel_xy"] == [0, 0]
+  assert projected["optical_z_m"] == 1 and projected["sample_count"] == 1
+  assert rows(dataset / projected["points_path"])[0]["position_map"] == projected["position_map"]
+  assert invalid["status"] == "invalid_depth" and "position_map" not in invalid
+
+
+def check_entity_tools(binary, root, fixture):
+  """Build and reopen one memory, including stale updates and atomic rollback."""
+  dataset = root / "entity_tool_dataset"
+  shutil.copytree(fixture / "direct_source_png16", dataset)
+  config = root / "entity_tools.yaml"
+  config.write_text(json.dumps({"dataset": {"memory_dir": str(dataset)}}), encoding="utf-8")
+  first, second = [row["id"] for row in rows(dataset / "observations.jsonl")]
+
+  def run(name, args, status="ok"):
+    """Call the installed-style JSONL interface in a fresh process."""
+    request = json.dumps({"name": name, "arguments": args}) + "\n"
+    completed = subprocess.run([str(binary.resolve()), "--config", str(config)], input=request,
+                               text=True, capture_output=True, timeout=20, check=False)
+    result = json.loads(completed.stdout)
+    assert result["status"] == status, result
+    assert completed.returncode == (0 if status == "ok" else 1), completed.stderr
+    return result
+
+  def region(label):
+    """Create an area from an explicit interior confirmation."""
+    return run("create_entity", {"kind": "region", "semantic_label": label,
+               "add_observations": [{"observation_id": first, "confirmation_ref": "fixture/interior"}]})["entity"]
+
+  def view(observation, column):
+    """Select a valid pixel on the depth grid."""
+    return {"observation_id": observation, "selector": {"type": "point", "image": "depth", "pixel_xy": [column, 0]}}
+
+  def relation(kind, ids):
+    """Give a relation actual observation evidence."""
+    return {"type": kind, "entity_ids": ids, "evidence_observation_ids": [first]}
+
+  def spatial(kind, ids):
+    """Check one relation in the engine's view of the database."""
+    return run("spatial_query", {"operation": kind, "entity_ids": ids})
+
+  room, hall = region("room"), region("hall")
+  inside = relation("inside", ["$self", room["id"]])
+  printer = run("create_entity", {"kind": "object", "semantic_label": "printer",
+                "attributes": {"material": "plastic"}, "add_observations": [view(first, 0)],
+                "relations": [inside]})["entity"]
+  assert printer["region_id"] == room["id"] and printer["geometry_quality"] == "visible_surface_estimate"
+
+  cabinet = run("create_entity", {"kind": "object", "semantic_label": "cabinet",
+                 "add_observations": [view(second, 1)]})["entity"]
+  door = run("create_entity", {"kind": "object", "semantic_label": "door",
+              "add_observations": [view(second, 0)],
+              "relations": [relation("connects_regions", ["$self", room["id"], hall["id"]])]})["entity"]
+  assert cabinet["id"] != door["id"] and cabinet["position_map"] != door["position_map"]
+  assert spatial("connects_regions", [door["id"], hall["id"], room["id"]])["reused"]
+
+  edit = {"entity_id": printer["id"], "expected_revision": printer["revision"],
+          "set_fields": {"description": "office device", "attributes": {"color": "white"}},
+          "add_observations": [view(second, 0)],
+          "relations": [relation("on", ["$self", cabinet["id"]]),
+                        relation("hanging_on", ["$self", door["id"]]),
+                        relation("inside", ["$self", cabinet["id"]])]}
+  updated = run("update_entity", edit)["entity"]
+  assert updated["id"] == printer["id"] and updated["position_map"] == printer["position_map"]
+  assert updated["attributes"] == {"material": "plastic", "color": "white"}
+  assert [ref["observation_id"] for ref in updated["observation_refs"]] == [first, second]
+  assert updated["observation_refs"][1]["selector"] == view(second, 0)["selector"]
+  assert updated["region_id"] == room["id"]
+  run("update_entity", edit, "revision_conflict")
+  repeat = run("update_entity", {**edit, "expected_revision": updated["revision"]})["entity"]
+  assert repeat["revision"] == updated["revision"] and repeat["observation_refs"] == updated["observation_refs"]
+
+  run("update_entity", {"entity_id": printer["id"], "expected_revision": updated["revision"],
+      "set_fields": {"description": "must roll back"},
+      "relations": [relation("on", ["$self", "missing"])]}, "entity_not_found")
+  recovered = run("search_entities", {"query": "office device", "region_id": room["id"]})["entities"]
+  assert len(recovered) == 1 and recovered[0]["revision"] == updated["revision"]
+  for kind, target in (("inside", room), ("inside", cabinet), ("on", cabinet), ("hanging_on", door)):
+    result = spatial(kind, [printer["id"], target["id"]])
+    assert result["related"] and result["reused"] and result["relation"]["evidence_observation_ids"] == [first]
+  assert spatial("on", [cabinet["id"], printer["id"]])["related"] is None
+  near = spatial("near", [room["id"], hall["id"]])
+  assert near["distance_m"] == 0 and near["parameters"]["dimension"] == "xy" and not near["reused"]
+  reused = spatial("near", [hall["id"], room["id"]])
+  assert reused["reused"] and reused["distance_m"] == near["distance_m"]
+  assert reused["parameters"] == near["parameters"]
+  pending = run("create_entity", {"kind": "object", "semantic_label": "unlocated",
+                "add_observations": [view(first, 1)]}, "pending_location")
+  assert not run("search_entities", {"query": "unlocated"})["entities"]
+  with sqlite3.connect(dataset / "entities.sqlite3") as store:
+    payload, = store.execute("SELECT request_json FROM pending_entities WHERE pending_id=?",
+                             (pending["pending_id"],)).fetchone()
+  assert json.loads(payload)["location_pending_reason"] == "invalid_depth"
+
+
 def main():
   """Check happy path, bad depth, empty selection, atomic failure, and overwrite refusal."""
   parser = argparse.ArgumentParser()
   parser.add_argument("--binary", type=Path, required=True)
   parser.add_argument("--reader", type=Path, required=True)
+  parser.add_argument("--bag-builder", type=Path, required=True)
+  parser.add_argument("--engine", type=Path, required=True)
   parser.add_argument("--store", type=Path, required=True)
   parser.add_argument("--semantic", type=Path, required=True)
   parser.add_argument("--fixture-pointer", type=Path, required=True)
@@ -329,6 +482,9 @@ def main():
   check_reader(args.reader, root, source, good, expected, empty_output)
   check_bundle(args.binary, args.reader, args.store, args.semantic, root, source, expected)
   check_direct(args.reader, args.semantic, root, fixture, good)
+  check_project_bag_builder(args.bag_builder, root, fixture)
+  check_memory_engine(args.engine, root, fixture)
+  check_entity_tools(args.engine, root, fixture)
   failed_bundle = root / "failed_bundle"
   code, result = call(args.binary, damaged, failed_bundle, mode="bundle")
   assert code == 1 and result["code"] == "invalid_media" and not failed_bundle.exists(), result

@@ -106,4 +106,10 @@ DepthRegionResult projectDepthRegionToMap(
   const DepthFrame & depth, const CameraModel & model, const TfPoseResult & pose,
   std::string_view map_frame, const DepthPolygon & region, const DepthRegionOptions & options = {});
 
+/** @brief 用两图的历史位姿将 RGB 选区关联到真实深度点，再在深度图上分簇。 */
+DepthRegionResult projectRgbRegionToMap(
+  const DepthFrame & depth, const CameraModel & depth_model, const TfPoseResult & depth_pose,
+  const CameraModel & rgb_model, const TfPoseResult & rgb_pose, std::string_view map_frame,
+  const DepthRegion & rgb_region, const DepthRegionOptions & options = {});
+
 }  // namespace vln_memory

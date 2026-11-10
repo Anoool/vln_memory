@@ -188,9 +188,13 @@ bool validObject(
 /** @brief 编码前由工作库核对实体类型和证据，不写入点云或图像。 */
 std::string encodeEntityEvidence(const EntityObservationRef & ref)
 {
-  if (ref.object_selection) {return encodeObject(*ref.object_selection).dump();}
-  if (ref.region_interior) {return encodeRegion(*ref.region_interior).dump();}
-  return "null";
+  Json value = nullptr;
+  if (ref.object_selection) {value = encodeObject(*ref.object_selection);}
+  if (ref.region_interior) {value = encodeRegion(*ref.region_interior);}
+  if (ref.requested_selector_json) {
+    value["requested_selector"] = Json::parse(*ref.requested_selector_json);
+  }
+  return value.dump();
 }
 
 /** @brief 从同一 schema 版本的证据恢复独立数据。 */
@@ -198,6 +202,10 @@ void decodeEntityEvidence(std::string_view payload, EntityKind kind, EntityObser
 {
   const auto value = Json::parse(payload);
   if (value.is_null()) {return;}
+  if (value.contains("requested_selector")) {
+    ref.requested_selector_json = value.at("requested_selector").dump();
+    if (value.size() == 1) {return;}
+  }
   if (kind == EntityKind::object) {ref.object_selection = decodeObject(value);}
   else {ref.region_interior = decodeRegion(value);}
 }

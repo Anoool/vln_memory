@@ -1,33 +1,70 @@
-# bag_builder.hpp / bag_builder.cpp
+# BagBuilder
 
-## 用途与外部接口
+## 模块职责与边界
 
-[头](../../../include/vln_memory/bag/builder/bag_builder.hpp)、[实现](../../../src/bag/builder/bag_builder.cpp) 串联整个第一版；主接口为 BagBuildResult buildBag(const BagBuildOptions&)。
+读取项目的 ROS 2 SQLite RGB-D 录包，发布可独立回读的双图观测和证据。BagBuilder 负责时间配对、标定、历史位姿和关键帧，不负责语义识别、实体写入或模型分批。当前配置面向 `camera_record` 的 JPEG 彩色图、`compressedDepth`、两路 CameraInfo 和 TF。
 
-输入必须声明一个同钟数据段、话题/光学 frame、深度单位/注册依据及独立时间阈值。返回状态/错误/产物路径与数量，不返回整包像素。ok() 表示完整发布，可有 issues；prepared_pairs 只是传感器准备通过数量，不是已计算 map 几何。
+## 核心概念与整体设计
 
-## 调用路径
+~~~mermaid
+flowchart LR
+  A["ROS 2 bag + YAML"] --> B["扫描图像时间、标定与 TF"]
+  B --> C["按 header 配对并解码"]
+  C --> D["关键帧与正式 Observation"]
+  D --> E["原子发布观测目录"]
+  E --> F["MemoryEngine"]
+~~~
 
-配置检查 → 创建唯一工作目录 → 官方 reader 首遍索引/原始 CDR → rgbd_sync → CameraInfoIndex → 第二遍逐图 decodeRosRgb/decodeRosDepth、实际 RGB 网格核对、历史 TF 查询 → 媒体/JSONL → 引用/输入复核 → 完整 manifest/发布。
+以 RGB 为基准做单调一对一最近配对，同差优先较早的 Depth，同刻优先来源顺序。容差含边界，设为 `0` 只配原始时间完全相等的帧。关键帧由底盘位移或转角触发。RGB 和 Depth 分别按各自的原始时刻取相机位姿，底盘使用 RGB 时刻。时间接近只说明满足配对门限，配准与曝光同步依据单独记录。
 
-采样时间保留；RGB/Depth 分别查询自己时刻的 TF；body 在 RGB 时刻查询。CameraInfo 选择复用统一兼容/匹配规则并生成实际模型；现有 TF 索引提供数值 map 位姿和样本引用，关键帧及正式 observations.jsonl 待实现。
+## 数据结构
 
-## 失败和产物
+| 输入或产物 | 内容 |
+| --- | --- |
+| [vln_memory.yaml](../../../config/vln_memory.yaml) | `dataset` 给录包、输出目录、地图 ID/几何版本/依据。`topics`、`frames` 给实际话题和坐标系。`preprocess` 给配对容差（毫秒）、深度比例和可选位移/转角（米/度）。 |
+| `observations.jsonl` | 每行一个 [Observation](../memory/memory.md#数据结构)。直出记录均有 `rgb_media` 和 `depth_media`，路径相对于输出目录。 |
+| `evidence/` | 彩色 PNG、深度媒体、来源和观测清单、媒体 SHA-256 索引、`pending.jsonl` 和 `summary.json`。源 `16UC1` 深度使用无损 PNG，读取时按记录比例转为米制 optical-z。 |
+| 历史 preparation | `bag_manifest.json` 绑定 `messages.jsonl`、`frames.jsonl`、`rgbd_pairs.jsonl`、`camera_info.jsonl`、`tf.jsonl` 和报告。用 `pair_id` 回读保存的配对。v5–v7 兼容米制 NPY / 源 PNG；v7 的原始 CDR 可选，`bag.save_raw_cdr` 默认 `false`。 |
 
-输入与输出路径不得包含彼此，旧输出不覆盖。只在新建 .partial 工作目录中写入；失败返回 work_directory，正常输出路径不发布；成功清空 work_directory。发布保证完整目录的原子可见性，不是断电持久化事务。
+默认示例用 `30 ms`、`0.001`、`0.8 m` 和 `25°`。两项关键帧门限都省略时保留所有可回读的双图对。深度比例由录包实际单位决定，毫米用 `0.001`，米用 `1`。现有工程路径从启动目录解析。旧 `bag` 配置另见 [camera_record.yaml](../../../config/camera_record.yaml)。
 
-坏图像保留 raw/问题；全部无效深度不能准备通过；标定/TF/注册缺项使配对 pending。未使用 Depth 记录为 not_selected_by_policy，不单凭此当坏帧。不可反序列化 TF/标定、容量不足、存储错误或源变化属于整次失败。
+## 公共 API
 
-输出集合、参数格式和示例见 [接口文档](../../interfaces/bag_builder_api.md)；命令见 [CLI](bag_builder_main.md)，配置见 [配置说明](../../config/vln_memory.md)。测试见 [集成验证](tests/test_bag_builder.md)。
+| 入口 | 输入与返回 |
+| --- | --- |
+| `bag_builder --config FILE` | 项目 YAML → 正式观测目录。旧 `bag` YAML 可用 `--format preparation`。 |
+| [bag_builder.hpp](../../../include/vln_memory/bag/builder/bag_builder.hpp) | `buildBagObservations(options, context, selection)` 直出正式观测。`buildBag(options)` 发布 preparation。两者返回 `BagBuildResult`，含状态、原因、计数及目录。链接 `vln_memory::vln_memory_bag_builder`（ROS 构建）。 |
+| [bag_config.hpp](../../../include/vln_memory/bag/builder/bag_config.hpp) | `loadBagBuildOptions(path)` 加载旧 `bag` 格式。`validateBagBuildOptions(options)` 返回配置问题。 |
+| [rgbd_sync.hpp](../../../include/vln_memory/bag/builder/rgbd_sync.hpp) · [camera_info_index.hpp](../../../include/vln_memory/bag/builder/camera_info_index.hpp) | `pairRgbDepth(...)` 配对同一时钟段的流。`CameraInfoIndex::select(...)` 根据图像与声明选择标定。 |
+| [preparation_reader.hpp](../../../include/vln_memory/bag/builder/preparation_reader.hpp) | `openPreparation(root)` → `reader->pairs()` / `loadPair(id)` / `loadPairMetadata(id)`。`loadPreparedPair(root, id)` 可单独读一对。只读既有配对、标定、TF 和媒体，返回的配对独立拥有数据。链接 `vln_memory::vln_memory_preparation_reader`。 |
+| [preparation_compactor.hpp](../../../include/vln_memory/bag/builder/preparation_compactor.hpp) | 将旧 preparation 复制为新目录，去除原始 CDR，保留配对 ID、元数据和媒体。CLI 为 `preparation_compact`。 |
 
-审查更新：坏帧及数值质量不通过会有独立 pending 行；文件发布用 Linux renameat2(RENAME_NOREPLACE)，即使并发出现空目录也拒绝覆盖。numeric_quality_passed 不表示标定/TF/物理注册已经通过。
+底层读包、压缩解码与写入接口见 [builder 公开头文件](../../../include/vln_memory/bag/builder)。
 
-## 可配置最近配对（builder_version=3）
+## 快速开始与典型示例
 
-synchronize 将 sync_tolerance_ns 传入已有 pairRgbDepth，检查最大绝对差不超过门限；0 模式额外检查严格不变量。writePairs 按 delta_ns==0 填 exact，并保存 policy、sync_tolerance_ns、两个原始 stamp。RGB 是索引参考，两图标定/TF 分别查询自身时刻。
+从仓库根目录运行。填好 `dataset.bag_path` 和地图信息，`dataset.memory_dir` 指向尚不存在的目录。
 
-0 策略为 exact_header_one_to_one_v1，正门限为 rgb_reference_monotonic_nearest_one_to_one_v1；后者不保证全局最优，实际相等的一对仍 exact=true。summary/manifest/CLI 共用策略名接口，JSON schema 仍为 bag_preparation/1。
+~~~bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run vln_memory bag_builder --config config/vln_memory.yaml
+~~~
 
-empty_stream/partial/all_paired 仅说明有效时间索引覆盖；无对时零模式为 no_exact_pairs/问题 no_exact_rgbd_pairs，正门限为 no_pairs/问题 no_rgbd_pairs。capture_sync_status 保持 unknown。prepared_for_geometry 要求数值位姿及既有模型、注册声明和深度质量检查通过。运动补偿与曝光同步属于后续独立验证。
+构建后可在输出目录查看 `observations.jsonl` 和 `evidence/summary.json`。处理历史 preparation 时可用以下命令。
 
-两种图像均逐帧转换，坏帧不改配，未配对媒体仍保存。当前与历史结果见 [最近配对](../../reviews/rgbd_nearest_pairing_verification.md)、[历史零容差](../../reviews/rgbd_zero_tolerance_verification.md)。
+~~~bash
+ros2 run vln_memory bag_builder --config config/camera_record.yaml --format preparation
+ros2 run vln_memory preparation_compact --input old_preparation --output compact_preparation
+~~~
+
+## 错误处理
+
+| 情况 | 处理 |
+| --- | --- |
+| CLI 退出 `2` | 参数或配置错误。检查 YAML、录包路径和话题绑定。 |
+| CLI 退出 `1` | 整次构建失败。检查不支持的录包、来源变化、读写错误或输出已存在等原因。已有目录不被覆盖，失败工作目录供排查。 |
+| CLI 退出 `0`，但有坏帧或未配对帧 | 可回读的观测已经发布。查 `evidence/pending.jsonl` 和 `summary.json`。缺标定或位姿的双图观测可带 pending 原因，启用关键帧时缺底盘位姿的帧由选帧报告记录。 |
+| preparation 回读失败 | `pair_not_found` 查 ID，`invalid_reference` 查来源与引用，`invalid_media` 查载荷，`source_changed` 重新打开稳定的数据目录。 |
+
+录包验收和实际数值边界见 [验收记录](../../reviews/verification.md)。

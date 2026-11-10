@@ -30,7 +30,8 @@ using namespace vln_memory;
 using Json = nlohmann::json;
 enum class FixtureKind {
   normal, d8, wrong_type, tf_conflict, changed_calibration, time_reset, invalid_depth,
-  compressed, mixed_compressed, bad_compressed, offset_depth, near_depth, near_compressed, far_depth, storage_layout
+  compressed, mixed_compressed, bad_compressed, bad_depth_compressed, offset_depth,
+  near_depth, near_compressed, far_depth, storage_layout
 };
 
 /** @brief Release 同样检查测试条件，失败描述实际不符合的契约。 */
@@ -167,20 +168,26 @@ void writeMessage(
   writeBytes(writer, topic, record_ns, bytes.buffer, bytes.buffer_length);
 }
 
+/** @brief 返回两路图像均为 CompressedImage 的夹具类型。 */
+bool usesCompressedImages(FixtureKind kind)
+{
+  return kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed ||
+         kind == FixtureKind::bad_depth_compressed || kind == FixtureKind::near_compressed;
+}
+
 /** @brief 通过标准编码器写压缩或原 Image，损坏负载仍保留可读的 ROS header。 */
 void writeFixtureImage(
   rosbag2_cpp::Writer & writer, const std::string & topic, std::int64_t record_ns,
   const sensor_msgs::msg::Image & image, FixtureKind kind)
 {
-  bool compressed = kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed ||
-    kind == FixtureKind::near_compressed;
-  if (kind == FixtureKind::mixed_compressed && topic == "/depth") {compressed = true;}
+  const bool compressed = usesCompressedImages(kind) || (kind == FixtureKind::mixed_compressed && topic == "/depth");
   if (!compressed) {writeMessage(writer, topic, record_ns, image); return;}
   sensor_msgs::msg::CompressedImage message;
   if (topic == "/depth") {
     const auto encoded = compressed_depth_image_transport::encodeCompressedDepthImage(image, 10, 100, 1);
     expect(encoded != nullptr, "Fixture depth compression failed");
     message = *encoded;
+    if (kind == FixtureKind::bad_depth_compressed && image.header.stamp.sec == 10) {message.data.resize(3);}
   } else {
     message.header = image.header;
     message.format = "bgr8; jpeg compressed bgr8";
@@ -196,15 +203,9 @@ void createTopics(rosbag2_cpp::Writer & writer, FixtureKind kind)
 {
   std::string rgb_type = "sensor_msgs/msg/Image";
   if (kind == FixtureKind::wrong_type) {rgb_type = "std_msgs/msg/String";}
-  if (kind == FixtureKind::compressed || kind == FixtureKind::bad_compressed ||
-    kind == FixtureKind::near_compressed)
-  {
-    rgb_type = "sensor_msgs/msg/CompressedImage";
-  }
+  if (usesCompressedImages(kind)) {rgb_type = "sensor_msgs/msg/CompressedImage";}
   std::string depth_type = "sensor_msgs/msg/Image";
-  if (kind == FixtureKind::compressed || kind == FixtureKind::mixed_compressed ||
-    kind == FixtureKind::bad_compressed || kind == FixtureKind::near_compressed)
-  {
+  if (usesCompressedImages(kind) || kind == FixtureKind::mixed_compressed) {
     depth_type = "sensor_msgs/msg/CompressedImage";
   }
   writer.create_topic({"/rgb", rgb_type, "cdr", ""});
@@ -789,6 +790,7 @@ void integrationCases(const fs::path & root)
   failureAndQualityCases(root);
   sourceChangeCase(root);
   strictCompressedCases(root);
+  createFixture(root / "bad_depth_compressed_bag", FixtureKind::bad_depth_compressed);
   depthStorageCases(root);
   nearestCases(root);
   cameraCompatibilityCases(root);

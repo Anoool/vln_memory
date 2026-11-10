@@ -15,7 +15,7 @@ namespace vln_memory
  */
 BagBuildResult buildBag(const BagBuildOptions & options);
 
-/** @brief 直接发布 observations.jsonl 和 evidence；地图上下文由调用方显式声明。 */
+/** @brief 直接发布双图 observations.jsonl 和 evidence；地图上下文由调用方显式声明。 */
 BagBuildResult buildBagObservations(
   const BagBuildOptions & options, const ObservationBuildContext & context,
   const BuildInputOptions & selection = {});

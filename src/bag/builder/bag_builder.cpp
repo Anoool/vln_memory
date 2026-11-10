@@ -421,18 +421,19 @@ void writePairs(
 }
 
 /** @brief 未配对 RGB 有明确原因；unused Depth 单独记录，不伪装成坏帧。 */
-void writeUnmatched(const RgbdSyncReport & sync, OutputFiles & output, std::vector<BagIssue> & issues)
+void writeUnmatched(
+  const RgbdSyncReport & sync, OutputFiles & output, std::vector<BagIssue> & issues, const char * pending_path)
 {
   for (const auto & unmatched : sync.unmatched_rgb) {
     const auto code = rgbdUnmatchedReasonName(unmatched.reason);
     writeJsonLine(
-      output, "reports/pending.jsonl", {{"kind", "unmatched_rgb"},
+      output, pending_path, {{"kind", "unmatched_rgb"},
         {"message_id", unmatched.rgb.message_id}, {"stamp", stampJson(unmatched.rgb.stamp)}, {"reason", code}});
     issues.push_back({"sync", code, "RGB has no selected depth", unmatched.rgb.message_id, {}});
   }
   for (const auto & depth : sync.unused_depth) {
     writeJsonLine(
-      output, "reports/pending.jsonl", {{"kind", "unused_depth"}, {"message_id", depth.message_id},
+      output, pending_path, {{"kind", "unused_depth"}, {"message_id", depth.message_id},
         {"stamp", stampJson(depth.stamp)}, {"reason", "not_selected_by_policy"}, {"is_bad_frame", false}});
   }
 }
@@ -660,8 +661,8 @@ void writeDirectObservations(
     if (item.pending_reasons.empty()) {++result.prepared_pairs;}
     else {issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, item.pair_id});}
     if (rgb.camera_pose_ready && depth.camera_pose_ready && rgb.body_pose_ready) {++result.posed_pairs;}
-    if (selection.purpose != BuildInputPurpose::depth_map && rgb.media_path.empty()) {
-      item.eligibility_reasons.push_back("missing_rgb_media");
+    if (rgb.media_path.empty() || depth.media_path.empty()) {
+      item.eligibility_reasons.push_back("missing_rgbd_media");
     }
     if (selection.purpose != BuildInputPurpose::rgb &&
       (!depth.depth_storage || !depth.model || !depth.camera_pose)) {
@@ -677,7 +678,10 @@ void writeDirectObservations(
   selectBuildInputFrames(candidates, selection);
   for (const auto & item : candidates) {
     if (!item.selected) {
-      issues.push_back({"selection", item.selection_reason, "Pair excluded from direct observations", {}, item.pair_id});
+      if (item.selection_reason != "below_motion_threshold") {
+        const auto & reason = item.eligible ? item.selection_reason : item.eligibility_reasons.front();
+        issues.push_back({"selection", reason, "Pair excluded from direct observations", {}, item.pair_id});
+      }
       continue;
     }
     const auto & rgb = frames.at(item.rgb_message_id);
@@ -701,8 +705,8 @@ void writeDirectObservations(
     pair.depth_message_id = item.depth_message_id;
     pair.rgb_image = rgb.image;
     pair.depth_image = depth.image;
-    if (!rgb.media_path.empty()) {pair.rgb_media_relative = rgb.media_path;}
-    if (!depth.media_path.empty()) {pair.depth_media_relative = depth.media_path;}
+    pair.rgb_media_relative = rgb.media_path;
+    pair.depth_media_relative = depth.media_path;
     pair.rgb_model = rgb.model;
     pair.depth_model = depth.model;
     pair.rgb_pose = rgb.camera_pose;
@@ -823,10 +827,10 @@ void runBuild(
   }
   if (write_preparation) {
     writePairs(options, sync, frames, output, result, issues);
-    writeUnmatched(sync, output, issues);
   } else {
     writeDirectObservations(options, *context, selection, scan, sync, frames, work, output, result, issues);
   }
+  writeUnmatched(sync, output, issues, write_preparation ? "reports/pending.jsonl" : "evidence/pending.jsonl");
   for (const auto & issue : issues) {
     writeJsonLine(output, write_preparation ? "reports/issues.jsonl" : "evidence/issues.jsonl", issueJson(issue));
   }
@@ -834,8 +838,13 @@ void runBuild(
   result.status = BagBuildStatus::completed;
   if (!issues.empty()) {result.status = BagBuildStatus::completed_with_issues;}
   validateReferences(work, scan, frames);
-  writeJsonFile(output, write_preparation ? "reports/summary.json" : "evidence/summary.json",
-    summaryRecord(options, scan, sync, result));
+  auto summary = summaryRecord(options, scan, sync, result);
+  if (!write_preparation) {
+    summary["observations"] = result.observations;
+    summary["pending_observations"] = result.pending_observations;
+    summary["keyframes_selected"] = (selection.distance_m || selection.yaw_rad) && result.observations > 0;
+  }
+  writeJsonFile(output, write_preparation ? "reports/summary.json" : "evidence/summary.json", summary);
   output.close();
   if (write_preparation) {
     writeManifest(options, scan, result, automatic_tf_gap, detail::preparationFileSha256(work / media_index), output);

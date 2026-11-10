@@ -46,6 +46,9 @@ void restoreLegacyEntityTable(const fs::path & file)
     PRAGMA foreign_keys = OFF;
     BEGIN;
     DROP TABLE entity_relations;
+    DROP TABLE pending_entities;
+    DROP TABLE tool_calls;
+    DROP TABLE build_progress;
     CREATE TABLE legacy_entities(
       entity_id TEXT PRIMARY KEY NOT NULL,
       kind TEXT NOT NULL CHECK(kind IN ('object','region')),
