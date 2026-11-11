@@ -14,7 +14,7 @@ flowchart LR
 | 模块 | 文档 |
 | --- | --- |
 | BagBuilder | [录包、配置、RGB-D 配对与产物](modules/bag/bag_builder.md) |
-| MemoryEngine | [观测回读、定位、实体工具与模型批次](modules/engine/memory_engine.md) |
+| MemoryEngine | [手动工具、深度定位与自动写入批次](modules/engine/memory_engine.md) |
 | MemoryViewer | [检查界面和标注交接（规划）](modules/viewer/memory_viewer.md) |
 | Memory | [正式观测、实体与 SQLite 契约](modules/memory/memory.md) |
 | RGB | [彩色解码与 ROS 适配](modules/rgb/rgb.md) |

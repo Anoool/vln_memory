@@ -40,11 +40,10 @@ def run_recovery(binary, dataset, config_path):
   first = call_item("call_01", "create_entity", create("first", ids[0]))
   second = call_item("call_02", "create_entity", create("second", ids[1]))
   reasoning = {"type": "reasoning", "id": "rs_fixture", "summary": [], "encrypted_content": "fixture"}
-  search = call_item("call_03", "search_entities", {"query": "first"})
   posted = []
   authorization = []
   key_file = config_path.with_name("api_key.yaml")
-  replies = [(200, [reasoning, first, second]), (503, []), (200, [search]), (200, [message("Done")])]
+  replies = [(200, [reasoning, first, second]), (503, []), (200, []), (200, [message("Done")])]
 
   class Handler(BaseHTTPRequestHandler):
     """Capture the exact HTTP body and return one scripted result."""
@@ -112,8 +111,7 @@ def run_recovery(binary, dataset, config_path):
       assert len(posted) == 1
       path, first_body = posted[0]
       assert path == "/v1/responses" and first_body["store"] is False
-      assert {tool["name"] for tool in first_body["tools"]} == {
-          "get_observation", "project_depth", "search_entities", "create_entity", "update_entity", "spatial_query"}
+      assert {tool["name"] for tool in first_body["tools"]} == {"create_entity", "update_entity"}
       assert all(isinstance(tool["parameters"]["required"], list) for tool in first_body["tools"])
       original_content = first_body["input"][0]["content"]
       images = [item["image_url"] for item in original_content if item["type"] == "input_image"]
@@ -131,12 +129,19 @@ def run_recovery(binary, dataset, config_path):
       followup = posted[1][1]["input"]
       assert followup[0]["content"] == original_content and followup[1:4] == [reasoning, first, second]
       assert followup[4] == {"type": "function_call_output", "call_id": "call_01", "output": first_receipt}
-      assert json.loads(followup[5]["output"])["entity"]["semantic_label"] == "second"
+      first_entity = json.loads(first_receipt)["entity"]
+      second_entity = json.loads(followup[5]["output"])["entity"]
+      assert second_entity["semantic_label"] == "second"
+      update = call_item("call_03", "update_entity", {
+          "entity_id": first_entity["id"], "expected_revision": first_entity["revision"],
+          "relations": [{"type": "on", "entity_ids": ["$self", second_entity["id"]],
+                         "evidence_observation_ids": ids}]})
+      replies[2] = (200, [update])
 
       capped = run(1)
       assert "round limit" in capped.stderr
       progress, receipts, entities = state()
-      assert progress["active"]["pending"] == [search] and "call_03" not in receipts
+      assert progress["active"]["pending"] == [update] and "call_03" not in receipts
       assert entities == 2 and progress["next_observation"] == 0
 
       config["build"]["max_tool_rounds"] = 2
@@ -144,8 +149,11 @@ def run_recovery(binary, dataset, config_path):
       assert json.loads(finished.stdout)["processed_observations"] == 2
       progress, receipts, entities = state()
       assert progress == {"next_observation": 2, "active": None} and len(receipts) == 3 and entities == 2
-      assert len(posted) == 4 and posted[-1][1]["input"][-2] == search
+      assert len(posted) == 4 and posted[-1][1]["input"][-2] == update
       assert posted[-1][1]["input"][-1]["output"] == receipts["call_03"]
+      assert len(json.loads(receipts["call_03"])["relations"]) == 1
+      with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT predicate FROM entity_relations").fetchall() == [("on",)]
 
       assert authorization == ["Bearer fixture-key"] * len(posted)
       key_file.unlink()

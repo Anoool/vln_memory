@@ -130,7 +130,7 @@ Json MemoryTools::call(const Json & request)
   }
 }
 
-Json memoryToolDefinitions()
+Json modelWriteToolDefinitions()
 {
   const Json text{{"type", "string"}};
   const auto selector = Json::parse(R"json({
@@ -145,7 +145,6 @@ Json memoryToolDefinitions()
     },
     "required":["type"]
   })json");
-  const Json observation{{"observation_id", text}};
   const Json strings{{"type", "array"}, {"items", text}};
   const auto view = objectSchema({{"observation_id", text}, {"selector", selector},
     {"confirmation_ref", {{"type", "string"}, {"description", "Evidence that the robot was inside a region"}}}},
@@ -161,24 +160,12 @@ Json memoryToolDefinitions()
   create.update({{"kind", {{"enum", {"object", "region"}}}}, {"add_observations", observations},
     {"relations", relations}});
   return Json::array({
-    functionTool("get_observation", "Read original RGB-D references, image sizes, stamps and map poses.", observation,
-      {"observation_id"}),
-    functionTool("project_depth", "Locate a pixel or region in map coordinates using recorded depth.",
-      {{"observation_id", text}, {"selector", selector}, {"include_points", {{"type", "boolean"}}}},
-      {"observation_id", "selector"}),
-    functionTool("search_entities", "Find existing entity IDs and revisions before creating or updating.",
-      {{"query", text}, {"region_id", text}}, Json::array()),
-    functionTool("create_entity", "Create a located entity from observation evidence. Use $self for its relation endpoint.",
+    functionTool("create_entity", "Create an entity and project its selectors locally. Use $self for its relation endpoint.",
       create, {"kind", "semantic_label", "add_observations"}),
     functionTool("update_entity", "Reuse an existing entity ID and add evidence, fields or relations.",
       {{"entity_id", text}, {"expected_revision", {{"type", "integer"}, {"minimum", 1}}},
         {"set_fields", objectSchema(fields, Json::array())}, {"add_observations", observations}, {"relations", relations}},
-      {"entity_id", "expected_revision"}),
-    functionTool("spatial_query", "Read evidenced relations or compute representative-point near.",
-      {{"operation", {{"enum", {"near", "on", "hanging_on", "inside", "connects_regions"}}}}, {"entity_ids", strings},
-        {"parameters", objectSchema({{"dimension", {{"enum", {"xy", "xyz"}}}},
-          {"threshold_m", {{"type", "number"}, {"exclusiveMinimum", 0}}}}, Json::array())}},
-      {"operation", "entity_ids"})
+      {"entity_id", "expected_revision"})
   });
 }
 }  // namespace vln_memory

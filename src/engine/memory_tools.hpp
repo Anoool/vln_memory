@@ -24,6 +24,6 @@ private:
   std::unique_ptr<EntityStore> store_;
 };
 
-/** @brief Responses 函数定义与现有工具参数保持一致。 */
-nlohmann::json memoryToolDefinitions();
+/** @brief 生成自动构建请求中的实体写入工具定义。 */
+nlohmann::json modelWriteToolDefinitions();
 }  // namespace vln_memory
