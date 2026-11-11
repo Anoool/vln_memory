@@ -152,6 +152,22 @@ vln_memory::BagBuildResult runLegacy(
   args.try_emplace("--batch-size", "4");
   return vln_memory::buildBagObservations(options, context, cli::selectionOptions(args));
 }
+
+/** @brief 使用构建结果和本次生效的录包设置向 stdout 输出 JSON 报告。 */
+void printBuildReport(
+  const vln_memory::BagBuildResult & result, const vln_memory::BagBuildOptions & options)
+{
+  const nlohmann::json report{{"status", vln_memory::bagBuildStatusName(result.status)},
+    {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
+    {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},
+    {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
+    {"observations", result.observations}, {"pending_observations", result.pending_observations},
+    {"camera_models", result.camera_models}, {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
+    {"timestamp_match_policy", vln_memory::rgbdSyncPolicyName(options.sync_tolerance_ns)},
+    {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
+    {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"}};
+  std::cout << report.dump(2) << '\n';
+}
 }
 
 /** @brief 薄离线入口；0=完整发布（可带 issues），1=构建失败，2=参数/配置错误。 */
@@ -168,16 +184,7 @@ int main(int argc, char ** argv)
     const auto & path = cli::required(args, "--config");
     vln_memory::BagBuildOptions options;
     const auto result = args.size() == 1 ? runProject(path, options) : runLegacy(args, options);
-    const nlohmann::json report{{"status", vln_memory::bagBuildStatusName(result.status)},
-      {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
-      {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},
-      {"depth_frames", result.depth_frames}, {"decoded_frames", result.decoded_frames},
-      {"observations", result.observations}, {"pending_observations", result.pending_observations},
-      {"camera_models", result.camera_models}, {"pairs", result.pairs}, {"prepared_pairs", result.prepared_pairs}, {"issue_count", result.issue_count},
-      {"timestamp_match_policy", vln_memory::rgbdSyncPolicyName(options.sync_tolerance_ns)},
-      {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
-      {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"}};
-    std::cout << report.dump(2) << '\n';
+    printBuildReport(result, options);
     if (!result.ok()) {return 1;}
     return 0;
   } catch (const std::exception & error) {
