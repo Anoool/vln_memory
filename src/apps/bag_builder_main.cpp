@@ -21,6 +21,24 @@ void usage()
     << "  Legacy preparation: --config config/camera_record.yaml --format preparation\n";
 }
 
+enum class BagArgumentStatus {ready, help, invalid};
+
+/** @brief 按命令行顺序填入参数，遇到帮助或无效选项时停止扫描。 */
+BagArgumentStatus parseBagArguments(int argc, char ** argv, vln_memory::cli::Arguments & args)
+{
+  const std::set<std::string> allowed{"--config", "--bag", "--output", "--sync-tolerance-ms",
+    "--format", "--map-id", "--geometry-revision", "--map-basis", "--purpose", "--batch-size",
+    "--distance-m", "--yaw-deg", "--max-step-m", "--max-step-yaw-deg"};
+  for (int index = 1; index < argc; ++index) {
+    const std::string flag(argv[index]);
+    if (flag == "--help" || flag == "-h") {return BagArgumentStatus::help;}
+    if (!allowed.count(flag) || index + 1 >= argc || !args.emplace(flag, argv[++index]).second) {
+      return BagArgumentStatus::invalid;
+    }
+  }
+  return BagArgumentStatus::ready;
+}
+
 /** @brief 将显式整数毫秒转换为纳秒，拒绝负值、尾随字符和乘法溢出。 */
 std::int64_t toleranceNs(const std::string & value, const char * key)
 {
@@ -142,15 +160,10 @@ int main(int argc, char ** argv)
   try {
     namespace cli = vln_memory::cli;
     cli::Arguments args;
-    const std::set<std::string> allowed{"--config", "--bag", "--output", "--sync-tolerance-ms",
-      "--format", "--map-id", "--geometry-revision", "--map-basis", "--purpose", "--batch-size",
-      "--distance-m", "--yaw-deg", "--max-step-m", "--max-step-yaw-deg"};
-    for (int index = 1; index < argc; ++index) {
-      const std::string flag(argv[index]);
-      if (flag == "--help" || flag == "-h") {usage(); return 0;}
-      if (!allowed.count(flag) || index + 1 >= argc || !args.emplace(flag, argv[++index]).second) {
-        usage(); return 2;
-      }
+    const auto argument_status = parseBagArguments(argc, argv, args);
+    if (argument_status != BagArgumentStatus::ready) {
+      usage();
+      return argument_status == BagArgumentStatus::help ? 0 : 2;
     }
     const auto & path = cli::required(args, "--config");
     vln_memory::BagBuildOptions options;
