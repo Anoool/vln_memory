@@ -249,9 +249,26 @@ Json describeWrite(EntityStore & store, const std::string & id, const std::vecto
   return {{"status", "ok"}, {"entity", describeEntity(*entity.entity)}, {"relations", std::move(related)}};
 }
 
-/** @brief 以一条已定位观测创建永久实体，再在同一事务内写入其余证据。 */
+/** @brief 用已有距离阈值排除明显不一致的地图点。 */
+bool locationConflict(const Entity & anchor, const std::vector<Entity> & views, double threshold)
+{
+  const auto point = selectedEntityPoint(anchor);
+  if (!point) {return false;}
+  for (const auto & view : views) {
+    const auto candidate = selectedEntityPoint(view);
+    if (candidate && std::hypot((*point)[0] - (*candidate)[0], (*point)[1] - (*candidate)[1],
+      (*point)[2] - (*candidate)[2]) > threshold)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** @brief 以一条已定位观测创建实体，补定位时沿用待定位记录的 ID。 */
 Json createEntity(
-  EntityStore & store, const ObservationDatasetReader & dataset, const fs::path & root, const Json & args)
+  EntityStore & store, const ObservationDatasetReader & dataset, const fs::path & root,
+  const NearOptions & near, const Json & args, std::string_view pending_id = {})
 {
   const auto kind = args.at("kind").get<std::string>();
   if (kind != "object" && kind != "region") {throw std::invalid_argument("Expected object or region");}
@@ -268,13 +285,19 @@ Json createEntity(
       return view.status == EntityStatus::located;
     });
   if (anchor == views.end()) {
-    const auto id = views.front().entity_id;
+    const auto id = pending_id.empty() ? views.front().entity_id : std::string(pending_id);
     auto pending = args;
     pending["location_pending_reason"] = views.front().location_pending_reason.value_or("location_unavailable");
-    const auto saved = store.savePending(id, pending.dump());
-    if (!saved.ok()) {return failure(saved);}
+    if (pending_id.empty()) {
+      const auto saved = store.savePending(id, pending.dump());
+      if (!saved.ok()) {return failure(saved);}
+    }
     return {{"status", "pending_location"}, {"pending_id", id}, {"reason", pending.at("location_pending_reason")}};
   }
+  if (locationConflict(*anchor, views, near.threshold_m)) {
+    return failure({Code::evidence_conflict, "Observation positions conflict for this instance"});
+  }
+  if (!pending_id.empty()) {anchor->entity_id = pending_id;}
   const auto id = anchor->entity_id;
   anchor->details_json = details.dump();
   const auto relations = readRelations(dataset, args, id);
@@ -288,9 +311,35 @@ Json createEntity(
       if (!saved.ok()) {return saved;}
       if (saved.code == Code::ready) {++current_revision;}
     }
-    return writeRelations(store, relations);
+    const auto related = writeRelations(store, relations);
+    if (!related.ok() || pending_id.empty()) {return related;}
+    return store.removePending(pending_id);
   });
   return result.ok() ? describeWrite(store, id, relations) : failure(result);
+}
+
+/** @brief 在待定位记录上优先使用本次提交的证据，保留其他帧的引用。 */
+Json locatePendingEntity(
+  EntityStore & store, const ObservationDatasetReader & dataset, const fs::path & root,
+  const NearOptions & near, const Json & args, Json pending)
+{
+  const auto & views = args.at("add_observations");
+  if (!views.is_array() || views.empty()) {
+    throw std::invalid_argument("Pending entity needs new observation evidence");
+  }
+  auto combined = views;
+  for (const auto & view : pending.at("add_observations")) {
+    const auto same = std::any_of(views.begin(), views.end(), [&](const auto & current) {
+      return current.at("observation_id") == view.at("observation_id");
+    });
+    if (!same) {combined.push_back(view);}
+  }
+  const auto fields = args.value("set_fields", Json::object());
+  applyFields(pending, fields);
+  if (fields.contains("semantic_label")) {pending["semantic_label"] = fields.at("semantic_label");}
+  pending["add_observations"] = std::move(combined);
+  pending["relations"] = args.value("relations", Json::array());
+  return createEntity(store, dataset, root, near, pending, args.at("entity_id").get<std::string>());
 }
 
 /** @brief 在期望修订上追加证据并更新字段，已有定位优先保留。 */
@@ -301,6 +350,12 @@ Json updateEntity(
   const auto id = args.at("entity_id").get<std::string>();
   const auto expected = revision(args);
   const auto current = store.loadEntity(id);
+  if (current.code == Code::not_found) {
+    if (const auto pending = store.findPending(id)) {
+      if (expected != 1) {return failure({Code::revision_conflict, "Pending entity revision is 1"});}
+      return locatePendingEntity(store, dataset, root, near, args, Json::parse(*pending));
+    }
+  }
   if (!current.ok()) {return failure(current);}
   if (current.entity->revision != expected) {
     return failure({Code::revision_conflict, "Entity revision has changed"});
@@ -321,15 +376,15 @@ Json updateEntity(
   const auto views = buildViews(dataset, root, args.value("add_observations", Json::array()),
     current.entity->kind, label);
   const auto position = selectedEntityPoint(*current.entity);
-  if (position) {
+  if (position && current.entity->kind == EntityKind::object) {
     for (const auto & view : views) {
-      const auto candidate = selectedEntityPoint(view);
-      if (candidate && std::hypot((*position)[0] - (*candidate)[0], (*position)[1] - (*candidate)[1],
-        (*position)[2] - (*candidate)[2]) > near.threshold_m)
-      {
-        details["recognition_state"] = "needs_review";
+      if (view.status != EntityStatus::located) {
+        return failure({Code::location_unavailable, "New object evidence needs a located surface"});
       }
     }
+  }
+  if (locationConflict(*current.entity, views, near.threshold_m)) {
+    return failure({Code::evidence_conflict, "Observation positions conflict for this instance"});
   }
   const auto relations = readRelations(dataset, args, id);
   const auto result = store.writeAtomically([&]() -> EntityStoreResult {
@@ -452,7 +507,7 @@ Json runEntityTool(
   const NearOptions & near, std::string_view name, const Json & arguments)
 {
   if (name == "search_entities") {return searchEntities(store, arguments);}
-  if (name == "create_entity") {return createEntity(store, dataset, root, arguments);}
+  if (name == "create_entity") {return createEntity(store, dataset, root, near, arguments);}
   if (name == "update_entity") {return updateEntity(store, dataset, root, near, arguments);}
   if (name == "spatial_query") {return spatialQuery(store, near, arguments);}
   return {{"status", "unknown_tool"}, {"message", "Unknown entity tool"}};

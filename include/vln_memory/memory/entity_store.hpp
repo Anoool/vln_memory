@@ -6,6 +6,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <vln_memory/memory/entity.hpp>
 
@@ -145,6 +147,13 @@ public:
 
   /** @brief 保存未定位的新实体请求及证据，供后续复核。 */
   EntityStoreResult savePending(std::string_view pending_id, std::string_view request_json);
+
+  /** @brief 读取一条待定位请求，或按写入顺序倒序读取最近四条。 */
+  std::optional<std::string> findPending(std::string_view id) const;
+  std::vector<std::pair<std::string, std::string>> recentPending() const;
+
+  /** @brief 正式实体写入后，在同一事务中移除待定位请求。 */
+  EntityStoreResult removePending(std::string_view id);
 
   /** @brief 读取已经提交的工具调用。 */
   std::optional<ToolCallRecord> findToolCall(std::string_view call_id) const;

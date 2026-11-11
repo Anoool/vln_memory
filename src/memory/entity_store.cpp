@@ -1016,6 +1016,32 @@ EntityStoreResult EntityStore::savePending(std::string_view pending_id, std::str
   });
 }
 
+std::optional<std::string> EntityStore::findPending(std::string_view id) const
+{
+  Statement row(state_->db.get(), "SELECT request_json FROM pending_entities WHERE pending_id=?1");
+  row.bind(1, id);
+  if (!row.step()) {return std::nullopt;}
+  return row.text(0);
+}
+
+std::vector<std::pair<std::string, std::string>> EntityStore::recentPending() const
+{
+  Statement row(state_->db.get(), "SELECT pending_id,request_json FROM pending_entities ORDER BY rowid DESC LIMIT 4");
+  std::vector<std::pair<std::string, std::string>> requests;
+  while (row.step()) {requests.emplace_back(row.text(0), row.text(1));}
+  return requests;
+}
+
+EntityStoreResult EntityStore::removePending(std::string_view id)
+{
+  return writeAtomically([&]() -> EntityStoreResult {
+    Statement row(state_->db.get(), "DELETE FROM pending_entities WHERE pending_id=?1");
+    row.bind(1, id);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
 /** @brief 返回已提交工具调用的原参数和输出。 */
 std::optional<ToolCallRecord> EntityStore::findToolCall(std::string_view call_id) const
 {

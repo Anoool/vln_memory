@@ -68,17 +68,30 @@ Json batchContext(
   auto entities = Json::array();
   std::vector<std::string> historical;
   std::set<std::string> seen(current.begin(), current.end());
+  auto pending = Json::array();
+  for (const auto & [id, raw] : store.recentPending()) {
+    const auto request = Json::parse(raw);
+    const auto & view = request.at("add_observations").back();
+    const auto last = view.at("observation_id").get<std::string>();
+    pending.push_back({{"entity_id", id}, {"revision", 1},
+      {"semantic_label", request.at("semantic_label")}, {"description", request.value("description", std::string{})},
+      {"historical_observation_id", last}, {"historical_selector", view.value("selector", Json(nullptr))}});
+    if (historical.empty() && seen.insert(last).second) {historical.push_back(last);}
+  }
   for (const auto & candidate : nearby) {
     if (entities.size() == 8) {break;}
     const auto & entity = candidate.second;
-    const auto & last = entity.observations.back().observation_id;
+    const auto & view = entity.observations.back();
+    const auto & last = view.observation_id;
     const auto details = Json::parse(entity.details_json);
     entities.push_back({{"entity_id", entity.entity_id}, {"revision", entity.revision},
       {"semantic_label", entity.semantic_label}, {"description", details.value("description", std::string{})},
-      {"position_map", *selectedEntityPoint(entity)}, {"historical_observation_id", last}});
+      {"position_map", *selectedEntityPoint(entity)}, {"historical_observation_id", last},
+      {"historical_selector", view.requested_selector_json ? Json::parse(*view.requested_selector_json) : Json(nullptr)}});
     if (historical.size() < 2 && seen.insert(last).second) {historical.push_back(last);}
   }
-  return {{"observation_ids", current}, {"entities", std::move(entities)}, {"historical_ids", std::move(historical)}};
+  return {{"observation_ids", current}, {"entities", std::move(entities)},
+    {"pending_entities", std::move(pending)}, {"historical_ids", std::move(historical)}};
 }
 
 /** @brief 生成一条用户消息，图像按观察 ID 标注，恢复时从证据目录重读原图。 */
@@ -162,9 +175,10 @@ Name and describe entities using visible image evidence. Each image already
 has an observation ID and its original dimensions. If the batch has no
 recognizable target, finish without writing.
 
-Inspect the full image and choose up to two clear, distinct targets per batch.
-Prefer targets with a clearly visible solid surface away from image borders.
-When several targets qualify, prefer a pair with a visible relation.
+Inspect the full image and initially choose up to two clear, distinct targets.
+Prefer nearby targets with solid, opaque surfaces away from image borders.
+Skip distant, reflective, or heavily occluded targets when closer ones are
+available. Prefer a pair seen together with a clear supported relation.
 Treat visible parts of one object as one entity: a chair's seat, base and
 wheels belong to the same chair. Include all visible parts when judging the
 object's extent, using only what is visible for cropped or occluded objects.
@@ -180,10 +194,14 @@ RGB image.
 
 Start by writing the chosen targets. Call create_entity for a new target or
 update_entity with the known ID and revision for a confirmed match. Use the
-nearby summaries and historical views to compare identity. Include multiple
-views only when they support the same instance. Leave uncertain matches
-unwritten. The write tools project selectors using recorded depth. If a write
-returns pending_location, move on to the next target.
+nearby summaries and the exact historical selector to compare identity.
+For repeated objects, check distinctive details and scene placement. Include
+multiple views only when they support the same instance. Leave uncertain
+matches unwritten. For a confirmed match in pending_entities, use its ID and
+revision 1 in update_entity with a clear selector from a current view.
+The write tools project selectors locally. If a write returns evidence_conflict
+or location_unavailable, stop trying to link that view to the same entity.
+If fewer than two targets are located, try one different clear target at most.
 
 When creating an entity or changing its label, set recognition_state explicitly.
 Use supported for a clearly evidenced label and tentative for a plausible but

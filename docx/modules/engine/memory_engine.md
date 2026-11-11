@@ -21,6 +21,10 @@ flowchart LR
 
 自动构建只向模型提供 `create_entity` 和 `update_entity`，提交选区时由本地执行定位，实体 ID 齐全后可用这两个工具写入关系。
 
+后续批次提供附近实体和最近四条待定位请求的 ID、修订、描述及历史选区。历史 RGB 最多两张。模型确认同一实例后用 `update_entity` 提交当前帧的选区。给已定位物品追加的选区须有有效地图代表点。无位置返回 `location_unavailable`，位置明显冲突返回 `evidence_conflict`，两种情况均不写入该次更新。此处复用现有 `geometry.near_threshold_m` 作为三维距离上限，身份仍须有视觉依据。
+
+待定位请求用原 `pending_id` 作为 `entity_id`、`expected_revision: 1`，通过 `update_entity` 提交新的 `add_observations`。定位成功后沿用该 ID 转为正式实体，保留其他帧的证据，并在同一事务移除待定位请求。
+
 构建提示词要求模型看整图，把同一物体的可见部件归到一个实体，并结合整图判断实体关系，记录支持关系的观测 ID。物品的 `selector` 使用原始 RGB 上同一块可见、连续表面内的小框，避开轮廓、空隙和遮挡边缘。标签、描述和属性记录整个物体。确认跨帧身份后才追加观测，新建实体或改标签时显式提供 `recognition_state`。没有可辨认的实体时允许完成空批。
 
 ## 数据结构
@@ -73,6 +77,8 @@ ros2 run vln_memory memory_engine --config config/vln_memory.yaml --build
 ~~~
 
 合成双图验收使用的是 `base_url: https://api.deepseek.com` 和 `model: deepseek-flash`。也可配置其他兼容服务的 API 基地址或完整 `/responses` 地址。
+
+固定真图验收使用同一录包的 RGB 消息 1564、1578、1607、1633，每两帧一批，从空库运行默认构建提示词。帧的原始时间、配对、媒体摘要和几何版本见[样本清单](../../../test/engine/real_camera_record_frames.json)。
 
 终端给出 `status`、`total_observations`、`resumed_from`、`processed_observations`。实体和详细回执查 `entities.sqlite3`，例如执行 `SELECT label, revision, status FROM entities;`。
 

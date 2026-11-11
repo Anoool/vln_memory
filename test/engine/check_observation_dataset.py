@@ -399,6 +399,28 @@ def check_entity_tools(binary, root, fixture):
                              (pending["pending_id"],)).fetchone()
   assert json.loads(payload)["location_pending_reason"] == "invalid_depth"
 
+  evidence = {"entity_id": pending["pending_id"], "expected_revision": 1,
+              "add_observations": [view(second, 0)]}
+  run("update_entity", {**evidence, "expected_revision": 2}, "revision_conflict")
+  located = run("update_entity", evidence)["entity"]
+  assert located["id"] == pending["pending_id"] and located["position_map"] is not None
+  assert [ref["observation_id"] for ref in located["observation_refs"]] == [second, first]
+  with sqlite3.connect(dataset / "entities.sqlite3") as store:
+    assert store.execute("SELECT count(*) FROM pending_entities").fetchone()[0] == 0
+
+  missing_depth = {"entity_id": cabinet["id"], "expected_revision": cabinet["revision"],
+                   "add_observations": [view(first, 1)]}
+  run("update_entity", missing_depth, "location_unavailable")
+
+  config.write_text(json.dumps({"dataset": {"memory_dir": str(dataset)},
+                                "geometry": {"near_threshold_m": 0.001}}), encoding="utf-8")
+  conflict = {"entity_id": cabinet["id"], "expected_revision": cabinet["revision"],
+              "add_observations": [view(first, 0)], "set_fields": {"description": "must roll back"}}
+  run("update_entity", conflict, "evidence_conflict")
+  unchanged, = run("search_entities", {"query": "cabinet"})["entities"]
+  assert unchanged["revision"] == cabinet["revision"] and "description" not in unchanged
+  assert len(unchanged["observation_refs"]) == 1
+
 
 def main():
   """Check happy path, bad depth, empty selection, atomic failure, and overwrite refusal."""

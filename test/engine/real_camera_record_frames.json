@@ -1,0 +1,107 @@
+{
+  "source_bag": "camera_record_0.db3",
+  "source_sha256": "5704b033b590e01151bb56534c3068ea817f90836744975c51ef70b7dbc5890d",
+  "observations_per_batch": 2,
+  "frames": [
+    {
+      "note": "多把相似转椅和白色桌腿。",
+      "observation_id": "obs1:64:67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f0279:p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_156477:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_156477:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_153136:recorded_ros_header_epoch_hypothesis30:camera_record_single_recording",
+      "pair_id": "p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1564",
+      "rgb_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1564",
+      "depth_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_1531",
+      "rgb_stamp": {
+        "nanosec": 164954880,
+        "sec": 1793283818
+      },
+      "depth_stamp": {
+        "nanosec": 189323008,
+        "sec": 1793283818
+      },
+      "delta_ns": "24368128",
+      "source_manifest_sha256": "bb3ffac2b1ad66a3acb830a54a696ab92fbb1fac005e9fda49e331a4da58c138",
+      "map_id": "site_s4",
+      "geometry_revision": "recorded-v1",
+      "pending_reasons": [
+        "depth_rgb_alignment_unverified",
+        "capture_sync_unverified"
+      ],
+      "rgb_sha256": "f6b8b75afbeb60b3aecdbcfcace538b8c06fed151df3e251db92e1718ae3e750",
+      "depth_sha256": "f911925c844e45bf800b300451d751db55243d5844cc2090291c95caa8574093"
+    },
+    {
+      "note": "视角转动，前景椅子靠右，背景出现显示器。",
+      "observation_id": "obs1:64:67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f0279:p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_157877:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_157877:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_154536:recorded_ros_header_epoch_hypothesis30:camera_record_single_recording",
+      "pair_id": "p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1578",
+      "rgb_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1578",
+      "depth_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_1545",
+      "rgb_stamp": {
+        "nanosec": 96450048,
+        "sec": 1793283819
+      },
+      "depth_stamp": {
+        "nanosec": 126269952,
+        "sec": 1793283819
+      },
+      "delta_ns": "29819904",
+      "source_manifest_sha256": "bb3ffac2b1ad66a3acb830a54a696ab92fbb1fac005e9fda49e331a4da58c138",
+      "map_id": "site_s4",
+      "geometry_revision": "recorded-v1",
+      "pending_reasons": [
+        "depth_rgb_alignment_unverified",
+        "capture_sync_unverified"
+      ],
+      "rgb_sha256": "2d0ae92b4241b4b120ddd1736d47e38466e152de13b89aa8cbdae87f417abec0",
+      "depth_sha256": "05ad8c3b1ecfc37c54c24d77ccde0058eb0481554cb4e9fc04844aea30b29a09"
+    },
+    {
+      "note": "过道视角，显示器、带背包的转椅与桌子。",
+      "observation_id": "obs1:64:67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f0279:p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_160777:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_160777:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_157536:recorded_ros_header_epoch_hypothesis30:camera_record_single_recording",
+      "pair_id": "p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1607",
+      "rgb_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1607",
+      "depth_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_1575",
+      "rgb_stamp": {
+        "nanosec": 161570048,
+        "sec": 1793283821
+      },
+      "depth_stamp": {
+        "nanosec": 190723072,
+        "sec": 1793283821
+      },
+      "delta_ns": "29153024",
+      "source_manifest_sha256": "bb3ffac2b1ad66a3acb830a54a696ab92fbb1fac005e9fda49e331a4da58c138",
+      "map_id": "site_s4",
+      "geometry_revision": "recorded-v1",
+      "pending_reasons": [
+        "depth_rgb_alignment_unverified",
+        "capture_sync_unverified"
+      ],
+      "rgb_sha256": "e9cf37939439bdacc39fa5f76e0602a15008080088f67c3c83aa420e32cc2deb",
+      "depth_sha256": "e9479d201d7d409d28f4c41c32f2a031b7c6e5eef3ad9a2557ba2a814544b747"
+    },
+    {
+      "note": "继续观察显示器和带背包的转椅，用于跨帧比较。",
+      "observation_id": "obs1:64:67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f0279:p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_163377:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_163377:m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_159736:recorded_ros_header_epoch_hypothesis30:camera_record_single_recording",
+      "pair_id": "p_m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1633",
+      "rgb_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t1_1633",
+      "depth_message_id": "m_67e0041748055606016e1740f1cbcf171ebc61fa69a12d164c387f39b3446f02_f0_t3_1597",
+      "rgb_stamp": {
+        "nanosec": 962216960,
+        "sec": 1793283822
+      },
+      "depth_stamp": {
+        "nanosec": 985649920,
+        "sec": 1793283822
+      },
+      "delta_ns": "23432960",
+      "source_manifest_sha256": "bb3ffac2b1ad66a3acb830a54a696ab92fbb1fac005e9fda49e331a4da58c138",
+      "map_id": "site_s4",
+      "geometry_revision": "recorded-v1",
+      "pending_reasons": [
+        "depth_rgb_alignment_unverified",
+        "capture_sync_unverified"
+      ],
+      "rgb_sha256": "a7218ad44774aeb37e677f942ecd2a3b77ddb8e9bfcc6863346958c106920d7b",
+      "depth_sha256": "fd971dadaa6fc690101261cf930c9815a2ef592637b480b8105ef981072d6517"
+    }
+  ]
+}
