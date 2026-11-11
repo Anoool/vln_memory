@@ -625,6 +625,18 @@ std::string writeDirectSource(
   return detail::preparationFileSha256(work / detail::kDirectObservationSource);
 }
 
+/** @brief 只对实测的 camera_record 及其 30 ms 配对附加验收结论。 */
+bool hasCameraRecordRgbdAudit(const BagScan & scan, const BagBuildOptions & options)
+{
+  return options.sync_tolerance_ns == 30000000 && options.depth.input_unit == DepthUnit::millimeters &&
+    options.rgb_camera.image_topic == "/camera/color/image_raw/compressed" &&
+    options.depth_camera.image_topic == "/camera/depth/image_raw/compressedDepth" &&
+    options.rgb_camera.optical_frame == "camera_color_optical_frame" &&
+    options.depth_camera.optical_frame == "camera_color_optical_frame" &&
+    scan.source_files.size() == 1 &&
+    scan.source_files.front().sha256 == "5704b033b590e01151bb56534c3068ea817f90836744975c51ef70b7dbc5890d";
+}
+
 /** @brief 按已固定配对和候选顺序组装正式记录；只借用当前运行中的元数据。 */
 void writeDirectObservations(
   const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection,
@@ -632,6 +644,7 @@ void writeDirectObservations(
   const fs::path & work, OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
 {
   const auto source_digest = writeDirectSource(options, scan, work, output);
+  const bool audited_rgbd = hasCameraRecordRgbdAudit(scan, options);
   std::map<std::string, const BagMessageRef *> messages;
   for (const auto & message : scan.messages) {messages.emplace(message.message_id, &message);}
   std::map<std::string, const BagCameraInfoRecord *> calibrations;
@@ -717,6 +730,12 @@ void writeDirectObservations(
     pair.depth_storage = depth.depth_storage;
     pair.depth_alignment = depth.depth_alignment;
     pair.alignment_basis = depth.alignment_basis;
+    if (audited_rgbd && pair.depth_alignment == DepthAlignment::unknown) {
+      pair.alignment_basis = "camera_record RGB-D audit: the low-motion sample did not meet the "
+        "5 px edge criterion (RGB messages 2701, 3374, 3360). See the BagBuilder audit.";
+      pair.capture_sync_basis = "camera_record RGB-D audit: 30 ms original-header pairing and separate "
+        "optical poses; dual-time TF reduces some edge offsets, exposure synchronization is unverified.";
+    }
     pair.tf_max_gap_ns = *options.tf_max_gap_ns;
     pair.tf_jump_limits = options.tf_jump_limits;
 

@@ -17,6 +17,18 @@ flowchart LR
 
 以 RGB 为基准做单调一对一最近配对，同差优先较早的 Depth，同刻优先来源顺序。容差含边界，设为 `0` 只配原始时间完全相等的帧。关键帧由底盘位移或转角触发。RGB 和 Depth 分别按各自的原始时刻取相机位姿，底盘使用 RGB 时刻。时间接近只说明满足配对门限，配准与曝光同步依据单独记录。
 
+## 当前录包的 RGB-D 验收
+
+`camera_record_0.db3` 中，彩色与深度图均为 1280×720，使用彩色光学坐标系和同一有效相机模型。三张低运动帧的四条边缘剖面在原像素网格上的偏差中位数为 14.5 px，高于本次的 5 px 验收线。`635` 帧只有 17 个两侧深度均有效的跳变像素，未用于剖面量化。将深度临时按无畸变网格解释也无法消除低运动帧的偏差。
+
+运动样本 `1578` 的椅座底部边缘在双时刻 TF 重投影后由 8.50 px 降到 2.01 px，`1633` 的桌腿边缘由 5.50 px 降到 2.13 px。测量值来自指定剖面。原始两路图像 header 没有完全相同的时间戳，122 条关键帧配对的绝对时间差中位数为 25.2 ms。
+
+BagBuilder 对实测源文件及原 30 ms 配置写入 `alignment_basis` 和 `capture_sync_basis`。该录包的 `depth_alignment` 和 `capture_sync_status` 均保留 `unknown`。原图、原始 header、配对及双时刻位姿可以继续用于重投影。用以下脚本复查指定帧的叠加图和剖面测量。
+
+~~~bash
+python3 test/bag/builder/audit_camera_record_rgbd.py /path/to/observations build/rgbd-audit
+~~~
+
 ## 数据结构
 
 | 输入或产物 | 内容 |
