@@ -59,6 +59,22 @@ vln_memory::ModelBuildOptions modelOptions(
   }
   return options;
 }
+
+/** @brief 读取并校验 near 的距离维度和阈值（米），缺项沿用默认值。 */
+vln_memory::NearOptions readNearOptions(const YAML::Node & config)
+{
+  vln_memory::NearOptions near;
+  if (const auto geometry = config["geometry"]) {
+    near.dimension = geometry["near_dimension"].as<std::string>(near.dimension);
+    near.threshold_m = geometry["near_threshold_m"].as<double>(near.threshold_m);
+  }
+  if ((near.dimension != "xy" && near.dimension != "xyz") || !std::isfinite(near.threshold_m) ||
+    near.threshold_m <= 0)
+  {
+    throw std::invalid_argument("geometry needs near_dimension xy or xyz and positive near_threshold_m");
+  }
+  return near;
+}
 }  // namespace
 
 /** @brief 从统一 YAML 打开 BagBuilder 产物，按所选模式执行单条工具或离线模型批次。 */
@@ -80,16 +96,7 @@ int main(int argc, char ** argv)
     if (!opened.reader->info().direct_evidence) {
       throw std::runtime_error("Expected a direct BagBuilder dataset");
     }
-    vln_memory::NearOptions near;
-    if (const auto geometry = config["geometry"]) {
-      near.dimension = geometry["near_dimension"].as<std::string>(near.dimension);
-      near.threshold_m = geometry["near_threshold_m"].as<double>(near.threshold_m);
-    }
-    if ((near.dimension != "xy" && near.dimension != "xyz") || !std::isfinite(near.threshold_m) ||
-      near.threshold_m <= 0)
-    {
-      throw std::invalid_argument("geometry needs near_dimension xy or xyz and positive near_threshold_m");
-    }
+    const auto near = readNearOptions(config);
     vln_memory::MemoryTools tools(*opened.reader, root, near);
     if (!build) {return runTools(tools);}
     std::cout << vln_memory::runModelBatches(*opened.reader, tools, modelOptions(config, argv[2])).dump() << '\n';
