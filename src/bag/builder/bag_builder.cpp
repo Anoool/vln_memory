@@ -637,19 +637,15 @@ bool hasCameraRecordRgbdAudit(const BagScan & scan, const BagBuildOptions & opti
     scan.source_files.front().sha256 == "5704b033b590e01151bb56534c3068ea817f90836744975c51ef70b7dbc5890d";
 }
 
-/** @brief 按已固定配对和候选顺序组装正式记录；只借用当前运行中的元数据。 */
-void writeDirectObservations(
-  const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection,
-  const BagScan & scan, const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
-  const fs::path & work, OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
+/**
+ * @brief 从已有配对收集选帧候选，累计就绪计数和问题。
+ * @note 仅借用扫描结果与帧元数据，返回自有的候选列表。
+ */
+std::vector<BuildInputFrame> collectObservationCandidates(
+  const BagBuildOptions & options, BuildInputPurpose purpose, const BagScan & scan,
+  const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
+  BagBuildResult & result, std::vector<BagIssue> & issues)
 {
-  const auto source_digest = writeDirectSource(options, scan, work, output);
-  const bool audited_rgbd = hasCameraRecordRgbdAudit(scan, options);
-  std::map<std::string, const BagMessageRef *> messages;
-  for (const auto & message : scan.messages) {messages.emplace(message.message_id, &message);}
-  std::map<std::string, const BagCameraInfoRecord *> calibrations;
-  for (const auto & calibration : scan.calibrations) {calibrations.emplace(calibration.source.message_id, &calibration);}
-
   std::vector<BuildInputFrame> candidates;
   candidates.reserve(sync.pairs.size());
   for (const auto & pair : sync.pairs) {
@@ -677,16 +673,33 @@ void writeDirectObservations(
     if (rgb.media_path.empty() || depth.media_path.empty()) {
       item.eligibility_reasons.push_back("missing_rgbd_media");
     }
-    if (selection.purpose != BuildInputPurpose::rgb &&
+    if (purpose != BuildInputPurpose::rgb &&
       (!depth.depth_storage || !depth.model || !depth.camera_pose)) {
       item.eligibility_reasons.push_back("missing_depth_geometry");
     }
-    if (selection.purpose == BuildInputPurpose::prepared_rgbd && !item.pending_reasons.empty()) {
+    if (purpose == BuildInputPurpose::prepared_rgbd && !item.pending_reasons.empty()) {
       item.eligibility_reasons.push_back("pair_not_prepared");
     }
     item.eligible = item.eligibility_reasons.empty();
     candidates.push_back(std::move(item));
   }
+  return candidates;
+}
+
+/** @brief 按已固定配对和候选顺序组装正式记录；只借用当前运行中的元数据。 */
+void writeDirectObservations(
+  const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection,
+  const BagScan & scan, const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
+  const fs::path & work, OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
+{
+  const auto source_digest = writeDirectSource(options, scan, work, output);
+  const bool audited_rgbd = hasCameraRecordRgbdAudit(scan, options);
+  std::map<std::string, const BagMessageRef *> messages;
+  for (const auto & message : scan.messages) {messages.emplace(message.message_id, &message);}
+  std::map<std::string, const BagCameraInfoRecord *> calibrations;
+  for (const auto & calibration : scan.calibrations) {calibrations.emplace(calibration.source.message_id, &calibration);}
+
+  auto candidates = collectObservationCandidates(options, selection.purpose, scan, sync, frames, result, issues);
   result.pairs = candidates.size();
   selectBuildInputFrames(candidates, selection);
   for (const auto & item : candidates) {
