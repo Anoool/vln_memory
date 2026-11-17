@@ -39,7 +39,7 @@ Follow `.editorconfig`: UTF-8, LF, two-space indentation. Use `snake_case` filen
 
 - Avoid deeply nested data structures and nested `struct` definitions; prefer flat contracts.
 - Do not use nested generator expressions or comprehensions; expand them into explicit `for` loops.
-- Do not nest ternary expressions; use `if`/`else` branches.
+- Do not use ternary expressions (`?:`). Use explicit `if`/`else` branches.
 - Keep functions short and focused; split long flows into coherent helpers.
 - Name variables for their roles, meaning, and units; avoid vague abbreviations.
 - Add function-level comments to every function, including helpers: explain purpose, inputs, outputs, and relevant ownership, units, and failures.
@@ -55,6 +55,8 @@ Analyze time and space complexity; optimize unnecessary scans, repeated computat
 CTest runs C++ check programs: `test_<module>.cpp`, with `_ros` for real-message adapters. Cover changed behavior, invalid inputs, ownership, and numerical boundaries. Validate exported headers/targets through installed consumers. Do not describe synthetic tests as real-bag validation. No coverage threshold is configured.
 
 ## Commit & Pull Request Guidelines
+
+Use `/home/dev/agent/vln_memory` as the only working directory for editing, building, and testing this project. Manage versions with branches and commits in this repository. Do not copy or clone the repository to another directory, or create an extra Git worktree, unless the owner explicitly requests one. Preserve existing local changes and stage only the intended edits. Verify the changes before pushing the branch to GitHub.
 
 Use imperative commit subjects, following history: `Add TF coverage index and observation layer audit`. Use `codex/` branches, stage completed work, preserve unrelated edits, and leave merging for owner review. PRs should describe behavior, interfaces, validation, limitations, and relevant issues/documentation.
 

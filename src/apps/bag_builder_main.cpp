@@ -154,7 +154,12 @@ int main(int argc, char ** argv)
     }
     const auto & path = cli::required(args, "--config");
     vln_memory::BagBuildOptions options;
-    const auto result = args.size() == 1 ? runProject(path, options) : runLegacy(args, options);
+    vln_memory::BagBuildResult result;
+    if (args.size() == 1) {
+      result = runProject(path, options);
+    } else {
+      result = runLegacy(args, options);
+    }
     const nlohmann::json report{{"status", vln_memory::bagBuildStatusName(result.status)},
       {"code", result.code}, {"message", result.message}, {"output_directory", result.output_directory},
       {"work_directory", result.work_directory}, {"rgb_frames", result.rgb_frames},

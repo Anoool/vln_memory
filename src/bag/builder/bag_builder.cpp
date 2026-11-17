@@ -167,10 +167,23 @@ ConvertedFrame convertDepth(
   const auto & frame = *decoded.frame;
   const bool store_source_png = options.depth_storage == BagDepthStorage::source_png16 &&
     frame.source_numeric_type == DepthNumericType::uint16;
+  PreparedDepthStorage storage{"npy", "float32", DepthUnit::meters, 1.0, "nan",
+    frame.source_encoding, frame.source_unit, frame.source_scale_to_m, frame.min_depth_m,
+    std::nullopt, frame.valid_pixels, frame.invalid_pixels, false};
+  const char * storage_unit = "m";
   if (store_source_png) {
     result.media_path = writeDepthPng16(output, image.source.message_id, message);
+    storage.format = "png";
+    storage.dtype = "uint16";
+    storage.unit = frame.source_unit;
+    storage.scale_to_m = frame.source_scale_to_m;
+    storage.invalid_rule = "zero_or_out_of_range_to_nan";
+    storage_unit = depthUnitName(storage.unit);
   } else {
     result.media_path = writeDepth(output, image.source.message_id, frame);
+  }
+  if (std::isfinite(frame.max_depth_m)) {
+    storage.max_depth_m = frame.max_depth_m;
   }
   result.depth_quality = frame.valid_pixels > 0 && frame.valid_ratio >= options.min_valid_depth_ratio;
   result.details = {{"encoding", "32FC1"}, {"unit", "meters"}, {"convention", "optical_z"},
@@ -182,19 +195,10 @@ ConvertedFrame convertDepth(
     {"nonfinite_pixels", frame.nonfinite_pixels}, {"out_of_range_pixels", frame.out_of_range_pixels},
     {"unrepresentable_pixels", frame.unrepresentable_pixels}, {"alignment_basis", frame.alignment_basis}};
   result.details["storage"] = {
-    {"format", store_source_png ? "png" : "npy"},
-    {"dtype", store_source_png ? "uint16" : "float32"},
-    {"unit", store_source_png ? depthUnitName(frame.source_unit) : "m"},
-    {"scale_to_m", store_source_png ? frame.source_scale_to_m : 1.0},
-    {"invalid_rule", store_source_png ? "zero_or_out_of_range_to_nan" : "nan"},
+    {"format", storage.format}, {"dtype", storage.dtype}, {"unit", storage_unit},
+    {"scale_to_m", storage.scale_to_m}, {"invalid_rule", storage.invalid_rule},
     {"min_depth_m", frame.min_depth_m}, {"max_depth_m", frame.max_depth_m}};
-  result.depth_storage = PreparedDepthStorage{store_source_png ? "png" : "npy",
-    store_source_png ? "uint16" : "float32", store_source_png ? frame.source_unit : DepthUnit::meters,
-    store_source_png ? frame.source_scale_to_m : 1.0,
-    store_source_png ? "zero_or_out_of_range_to_nan" : "nan", frame.source_encoding, frame.source_unit,
-    frame.source_scale_to_m, frame.min_depth_m,
-    std::isfinite(frame.max_depth_m) ? std::optional<double>(frame.max_depth_m) : std::nullopt,
-    frame.valid_pixels, frame.invalid_pixels, false};
+  result.depth_storage = std::move(storage);
   const auto grid = rgb_grids.find(image.source.message_id);
   result.details["alignment_code"] = "not_checked_no_pair";
   if (grid != rgb_grids.end()) {
@@ -304,7 +308,10 @@ void reportConversionIssues(
   const BagImageRecord & image, bool metadata_available, const ConvertedFrame & converted,
   OutputFiles & output, std::vector<BagIssue> & issues, bool write_preparation)
 {
-  const auto * pending_path = write_preparation ? "reports/pending.jsonl" : "evidence/pending.jsonl";
+  const char * pending_path = "evidence/pending.jsonl";
+  if (write_preparation) {
+    pending_path = "reports/pending.jsonl";
+  }
   if (converted.media_path.empty()) {
     if (metadata_available) {
       issues.push_back({"decode", converted.code, converted.message, image.source.message_id, {}});
@@ -474,15 +481,20 @@ Json effectiveOptions(const BagBuildOptions & options)
   if (options.depth.alignment == DepthAlignment::aligned_to_rgb) {
     depth["alignment"] = "aligned_to_rgb";
   } else if (options.depth.alignment == DepthAlignment::not_aligned) {depth["alignment"] = "not_aligned";}
+  Json translation_step = nullptr;
+  if (options.tf_jump_limits.translation_m) {
+    translation_step = *options.tf_jump_limits.translation_m;
+  }
+  Json rotation_step = nullptr;
+  if (options.tf_jump_limits.rotation_rad) {
+    rotation_step = *options.tf_jump_limits.rotation_rad;
+  }
   return {{"clock_id", options.clock_id}, {"clock_basis", options.clock_basis}, {"clock_relation", "same_clock"},
     {"segment_id", options.segment_id}, {"segment_basis", options.segment_basis},
     {"map_frame", options.map_frame}, {"body_frame", options.body_frame},
     {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
     {"tf_max_gap_ns", std::to_string(options.tf_max_gap_ns.value())},
-    {"tf_max_translation_step_m", options.tf_jump_limits.translation_m ?
-        Json(*options.tf_jump_limits.translation_m) : Json(nullptr)},
-    {"tf_max_rotation_step_rad", options.tf_jump_limits.rotation_rad ?
-        Json(*options.tf_jump_limits.rotation_rad) : Json(nullptr)},
+    {"tf_max_translation_step_m", translation_step}, {"tf_max_rotation_step_rad", rotation_step},
     {"max_header_reorder_ns", std::to_string(options.max_header_reorder_ns)},
     {"rgb_camera", camera(options.rgb_camera)}, {"depth_camera", camera(options.depth_camera)}, {"depth", depth},
     {"depth_storage", bagDepthStorageName(options.depth_storage)},
@@ -549,6 +561,10 @@ void writeManifest(
         {"offered_qos_profiles", topic.offered_qos_profiles}, {"declared_count", std::to_string(topic.declared_count)},
         {"scanned_count", std::to_string(topic.scanned_count)}, {"selected", topic.selected}});
   }
+  const char * tf_gap_policy = "explicit";
+  if (automatic_tf_gap) {
+    tf_gap_policy = "twice_lower_median_v1";
+  }
   writeJsonFile(
     output, "bag_manifest.json", {{"artifact_kind", "bag_preparation"}, {"builder_version", 7},
       {"status", bagBuildStatusName(result.status)}, {"bag_id", scan.bag_id}, {"input_scope", scan.input_scope},
@@ -559,7 +575,7 @@ void writeManifest(
       {"media_integrity", {{"schema_version", detail::kPreparationMediaIndexSchema},
           {"baseline", "exported"}, {"index_sha256", media_index_sha256}}},
       {"effective_options", effectiveOptions(options)}, {"tf_coverage", coverageReports(options, scan)},
-      {"tf_gap_policy", automatic_tf_gap ? "twice_lower_median_v1" : "explicit"},
+      {"tf_gap_policy", tf_gap_policy},
       {"files", {"messages.jsonl", "frames.jsonl", "rgbd_pairs.jsonl", "camera_info.jsonl", "tf.jsonl",
           "reports/issues.jsonl", "reports/pending.jsonl", "reports/summary.json",
           detail::kPreparationMediaIndexFile}},
@@ -669,10 +685,14 @@ void writeDirectObservations(
     item.delta_ns = pair.delta_ns;
     item.capture_sync_status = "unknown";
     item.pending_reasons = pairReasons(rgb, depth);
-    item.pair_status = item.pending_reasons.empty() ? "prepared_for_geometry" : "pending";
     if (rgb.body_pose) {item.body_pose_map = rgb.body_pose->pose;}
-    if (item.pending_reasons.empty()) {++result.prepared_pairs;}
-    else {issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, item.pair_id});}
+    if (item.pending_reasons.empty()) {
+      item.pair_status = "prepared_for_geometry";
+      ++result.prepared_pairs;
+    } else {
+      item.pair_status = "pending";
+      issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, item.pair_id});
+    }
     if (rgb.camera_pose_ready && depth.camera_pose_ready && rgb.body_pose_ready) {++result.posed_pairs;}
     if (rgb.media_path.empty() || depth.media_path.empty()) {
       item.eligibility_reasons.push_back("missing_rgbd_media");
@@ -692,8 +712,11 @@ void writeDirectObservations(
   for (const auto & item : candidates) {
     if (!item.selected) {
       if (item.selection_reason != "below_motion_threshold") {
-        const auto & reason = item.eligible ? item.selection_reason : item.eligibility_reasons.front();
-        issues.push_back({"selection", reason, "Pair excluded from direct observations", {}, item.pair_id});
+        const auto * reason = &item.selection_reason;
+        if (!item.eligible) {
+          reason = &item.eligibility_reasons.front();
+        }
+        issues.push_back({"selection", *reason, "Pair excluded from direct observations", {}, item.pair_id});
       }
       continue;
     }
@@ -791,10 +814,17 @@ void runBuild(
   result.work_directory = work.string();
   OutputFiles output(work, options.max_output_bytes);
   const bool write_preparation = context == nullptr;
-  const auto * media_index = write_preparation ?
-    detail::kPreparationMediaIndexFile : detail::kDirectObservationMediaIndex;
-  if (write_preparation) {initializeOutput(output);}
-  else {
+  const char * media_index = detail::kDirectObservationMediaIndex;
+  const char * pending_path = "evidence/pending.jsonl";
+  const char * issues_path = "evidence/issues.jsonl";
+  const char * summary_path = "evidence/summary.json";
+  if (write_preparation) {
+    media_index = detail::kPreparationMediaIndexFile;
+    pending_path = "reports/pending.jsonl";
+    issues_path = "reports/issues.jsonl";
+    summary_path = "reports/summary.json";
+    initializeOutput(output);
+  } else {
     output.ensureLines(detail::kObservationDatasetRows);
     output.ensureLines(media_index);
   }
@@ -818,8 +848,14 @@ void runBuild(
     options, scan, [&](const auto & image, const auto * message) {
       const bool is_rgb = image.source.topic == options.rgb_camera.image_topic;
       if (is_rgb) {++result.rgb_frames;} else {++result.depth_frames;}
-      if (!write_preparation && !(is_rgb ? paired_rgb.count(image.source.message_id) :
-        rgb_grids.count(image.source.message_id))) {return;}
+      if (!write_preparation) {
+        const auto & message_id = image.source.message_id;
+        if (is_rgb) {
+          if (!paired_rgb.count(message_id)) {return;}
+        } else {
+          if (!rgb_grids.count(message_id)) {return;}
+        }
+      }
       auto prepared = processImage(
         image, message, options, scan, calibrations, rgb_grids, output, issues, write_preparation);
       if (!prepared.media_path.empty()) {
@@ -849,9 +885,9 @@ void runBuild(
   } else {
     writeDirectObservations(options, *context, selection, scan, sync, frames, work, output, result, issues);
   }
-  writeUnmatched(sync, output, issues, write_preparation ? "reports/pending.jsonl" : "evidence/pending.jsonl");
+  writeUnmatched(sync, output, issues, pending_path);
   for (const auto & issue : issues) {
-    writeJsonLine(output, write_preparation ? "reports/issues.jsonl" : "evidence/issues.jsonl", issueJson(issue));
+    writeJsonLine(output, issues_path, issueJson(issue));
   }
   result.issue_count = issues.size();
   result.status = BagBuildStatus::completed;
@@ -863,7 +899,7 @@ void runBuild(
     summary["pending_observations"] = result.pending_observations;
     summary["keyframes_selected"] = (selection.distance_m || selection.yaw_rad) && result.observations > 0;
   }
-  writeJsonFile(output, write_preparation ? "reports/summary.json" : "evidence/summary.json", summary);
+  writeJsonFile(output, summary_path, summary);
   output.close();
   if (write_preparation) {
     writeManifest(options, scan, result, automatic_tf_gap, detail::preparationFileSha256(work / media_index), output);
