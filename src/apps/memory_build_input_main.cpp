@@ -29,7 +29,10 @@ int main(int argc, char ** argv)
       {"batches", result.batches}, {"output_directory", result.output_directory.string()},
       {"work_directory", result.work_directory.string()}};
     std::cout << report.dump(2) << '\n';
-    return result.ok() ? 0 : 1;
+    if (!result.ok()) {
+      return 1;
+    }
+    return 0;
   } catch (const std::exception & error) {
     std::cerr << error.what() << '\n';
     usage(std::cerr);

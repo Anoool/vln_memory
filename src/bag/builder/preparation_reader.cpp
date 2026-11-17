@@ -342,8 +342,14 @@ void checkEdge(const TfSelectedEdge & edge, const std::string & from, const std:
   const SensorStamp & stamp)
 {
   const auto & a = edge.before;
-  const auto & child = edge.inverted ? to : from;
-  const auto & parent = edge.inverted ? from : to;
+  const auto * child_frame = &from;
+  const auto * parent_frame = &to;
+  if (edge.inverted) {
+    child_frame = &to;
+    parent_frame = &from;
+  }
+  const auto & child = *child_frame;
+  const auto & parent = *parent_frame;
   require(a.child_frame == child && a.parent_frame == parent, Code::invalid_reference,
     "TF endpoint does not join the saved pose chain");
   const auto t = stampNs(stamp);
@@ -412,7 +418,10 @@ std::optional<CameraModel> readModel(
   model.frame_id = image.frame_id;
   const auto domain = j.at("image_domain");
   require(domain == "raw" || domain == "rectified", Code::invalid_metadata, "Unsupported camera model domain");
-  model.image_domain = domain == "raw" ? CameraImageDomain::raw : CameraImageDomain::rectified;
+  model.image_domain = CameraImageDomain::rectified;
+  if (domain == "raw") {
+    model.image_domain = CameraImageDomain::raw;
+  }
   model.distortion_model = j.at("distortion_model").get<std::string>();
   require(j.at("d").is_array() && j.at("k").is_array() && j.at("k").size() == 9 &&
     j.at("r").is_array() && j.at("r").size() == 9 && j.at("p").is_array() && j.at("p").size() == 12,

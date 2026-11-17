@@ -122,10 +122,16 @@ CameraInfoMatchOptions selectionOptions(const Json & value)
   out.binding_basis = value.at("binding_basis").get<std::string>();
   const auto domain = value.at("image_domain").get<std::string>();
   require(domain == "raw" || domain == "rectified", Code::invalid_metadata, "Unknown image domain");
-  out.image_domain = domain == "raw" ? CameraImageDomain::raw : CameraImageDomain::rectified;
+  out.image_domain = CameraImageDomain::rectified;
+  if (domain == "raw") {
+    out.image_domain = CameraImageDomain::raw;
+  }
   const auto policy = value.at("time_policy").get<std::string>();
   require(policy == "synchronized" || policy == "static_calibration", Code::invalid_metadata, "Unknown calibration time policy");
-  out.time_policy = policy == "synchronized" ? CameraInfoTimePolicy::synchronized : CameraInfoTimePolicy::static_calibration;
+  out.time_policy = CameraInfoTimePolicy::static_calibration;
+  if (policy == "synchronized") {
+    out.time_policy = CameraInfoTimePolicy::synchronized;
+  }
   out.max_delta_ns = decimal<std::int64_t>(value.at("max_delta_ns"));
   out.compatibility = compatibility(value.at("compatibility"));
   out.clock_relation = SensorClockRelation::same_clock;
@@ -228,7 +234,10 @@ bool readPreparationLine(std::istream & input, std::string & line)
     const auto count = static_cast<std::size_t>(input.gcount());
     require(!input.bad(), Code::io_error, "Cannot read preparation JSONL");
     const bool complete = !input.fail() && !input.eof();
-    const auto data_count = complete ? count - 1 : count;
+    auto data_count = count;
+    if (complete) {
+      --data_count;
+    }
     require(data_count <= kMaxPreparationJsonBytes - line.size(), Code::invalid_metadata,
       "Preparation JSONL row exceeds size limit");
     line.append(chunk.data(), data_count);

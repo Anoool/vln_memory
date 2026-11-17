@@ -38,7 +38,10 @@ std::uint32_t readBits(const std::uint8_t * data, std::size_t byte_count, bool i
 {
   std::uint32_t result = 0;
   for (std::size_t index = 0; index < byte_count; ++index) {
-    const auto offset = is_big_endian ? index : byte_count - 1 - index;
+    auto offset = index;
+    if (!is_big_endian) {
+      offset = byte_count - 1 - index;
+    }
     result = (result << 8U) | static_cast<std::uint32_t>(data[offset]);
   }
   return result;

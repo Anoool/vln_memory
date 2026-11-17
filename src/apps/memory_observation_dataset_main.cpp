@@ -42,7 +42,10 @@ int main(int argc, char ** argv)
       {"candidates", result.candidates}, {"observations", result.observations}, {"batches", result.batches},
       {"pending", result.pending}, {"issues", result.issues}, {"verified_depth_payloads", result.verified_depth_payloads}};
     std::cout << report.dump(2) << '\n';
-    return result.ok() ? 0 : 1;
+    if (!result.ok()) {
+      return 1;
+    }
+    return 0;
   } catch (const std::exception & error) {
     std::cerr << error.what() << '\n';
     usage(std::cerr);

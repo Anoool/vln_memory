@@ -204,7 +204,10 @@ std::string writeDepthPng16(
     throw BagBuildError("invalid_frame", "Invalid source layout for 16UC1 PNG");
   }
   cv::Mat pixels(static_cast<int>(source.height), static_cast<int>(source.width), CV_16UC1);
-  const std::size_t high_byte = source.is_bigendian ? 0U : 1U;
+  std::size_t high_byte = 1;
+  if (source.is_bigendian) {
+    high_byte = 0;
+  }
   for (std::size_t row = 0; row < source.height; ++row) {
     const auto * source_row = source.data.data() + row * source.step;
     auto * output_row = pixels.ptr<std::uint16_t>(static_cast<int>(row));

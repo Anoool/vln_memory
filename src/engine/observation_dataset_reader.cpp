@@ -76,7 +76,10 @@ auto parseChecked(Code invalid, Action action)
   } catch (const Json::exception & error) {
     throw ReadError(invalid, error.what());
   } catch (const detail::PreparationMetadataError & error) {
-    const auto code = error.code == PreparationReadCode::io_error ? Code::io_error : invalid;
+    auto code = invalid;
+    if (error.code == PreparationReadCode::io_error) {
+      code = Code::io_error;
+    }
     throw ReadError(code, error.what());
   }
 }
@@ -165,7 +168,10 @@ DatasetManifest readManifest(const fs::path & path)
   info.schema_version = version.get<std::string>();
   info.dataset_manifest_sha256 = out.sha256;
   info.direct_evidence = direct;
-  const auto preparation = direct ? std::string{} : row.at("preparation_root").get<std::string>();
+  std::string preparation;
+  if (!direct) {
+    preparation = row.at("preparation_root").get<std::string>();
+  }
   info.preparation_root = preparation;
   if (!direct && row.contains("preparation_mode")) {
     const auto & mode = row.at("preparation_mode");
@@ -202,10 +208,14 @@ DatasetManifest readManifest(const fs::path & path)
   const auto issue_count = count(row.at("issues"), Code::invalid_manifest);
   out.batch_count = count(row.at("batches"), Code::invalid_manifest);
   out.batch_size = count(row.at("selection_options").at("batch_size"), Code::invalid_manifest);
+  const char * expected_status = "completed";
+  if (issue_count != 0) {
+    expected_status = "completed_with_issues";
+  }
   require(out.batch_size > 0 && info.observation_count <= count(row.at("candidates"), Code::invalid_manifest) &&
     info.pending_count <= info.observation_count && info.pending_count <= issue_count &&
     out.batch_count <= info.observation_count &&
-    row.at("status") == (issue_count ? "completed_with_issues" : "completed"),
+    row.at("status") == expected_status,
     Code::invalid_manifest, "Dataset status or counts contradict");
   const auto & files = row.at("files");
   require(files.is_object() && files.size() == detail::kObservationDatasetFiles.size(), Code::invalid_manifest,
@@ -310,9 +320,13 @@ std::map<std::string, RowLocation, std::less<>> indexObservations(
           const auto & reference = row.at(std::string(kind) + "_media");
           const auto message = row.at(std::string(kind) + "_message_id").get<std::string>();
           const auto bound = media->find(message);
-          require(reference.is_null() ? bound == media->end() :
-            bound != media->end() && reference == bound->second.path,
-            Code::invalid_observation, "Observation media differs from sealed index");
+          bool matches;
+          if (reference.is_null()) {
+            matches = bound == media->end();
+          } else {
+            matches = bound != media->end() && reference == bound->second.path;
+          }
+          require(matches, Code::invalid_observation, "Observation media differs from sealed index");
         }
         if (batches.empty() || batches.back().observation_ids.size() == manifest.batch_size) {
           batches.push_back({batches.size(), {}});
@@ -535,7 +549,10 @@ PreparationOpenResult ObservationDatasetReader::openSourcePreparation(const fs::
       return {PreparationReadCode::unsupported_dataset, "Direct observations contain their own evidence", nullptr};
     }
     const auto & hint = state_->info.preparation_root;
-    const auto root = override_root.empty() ? state_->root / hint : override_root;
+    auto root = override_root;
+    if (root.empty()) {
+      root = state_->root / hint;
+    }
     auto opened = openPreparation(root);
     if (!opened.ok()) {return opened;}
     const auto & source = *opened.reader;
@@ -567,7 +584,10 @@ ObservationDatasetOpenResult openObservationDataset(const fs::path & root)
       state->root = fs::canonical(root);
       const auto direct_path = state->root / detail::kDirectObservationManifest;
       const bool direct = fs::exists(fs::symlink_status(direct_path));
-      const auto manifest_path = direct ? direct_path : state->root / detail::kObservationDatasetManifest;
+      auto manifest_path = direct_path;
+      if (!direct) {
+        manifest_path = state->root / detail::kObservationDatasetManifest;
+      }
       state->files.push_back(snapshot(manifest_path));
       const auto manifest = parseChecked(Code::invalid_manifest, [&] {return readManifest(manifest_path);});
       require(direct == manifest.info.direct_evidence, Code::invalid_manifest, "Manifest is at the wrong path");

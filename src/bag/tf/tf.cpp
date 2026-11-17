@@ -366,13 +366,21 @@ TfChainReport TfIndex::findChain(const std::string & target, const std::string &
     return report;
   }
   if (!isValidFrame(target) || !isValidFrame(source)) {
-    report.failed_frame = isValidFrame(target) ? source : target;
+    if (isValidFrame(target)) {
+      report.failed_frame = source;
+    } else {
+      report.failed_frame = target;
+    }
     report.code = TfChainCode::invalid_frame;
     report.message = "Query frames are invalid";
     return report;
   }
   if (frames_.count(target) == 0 || frames_.count(source) == 0) {
-    report.failed_frame = frames_.count(target) == 0 ? target : source;
+    if (frames_.count(target) == 0) {
+      report.failed_frame = target;
+    } else {
+      report.failed_frame = source;
+    }
     report.code = TfChainCode::unknown_frame;
     report.message = "A requested frame is absent from accepted TF records";
     return report;

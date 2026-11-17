@@ -21,5 +21,8 @@ int main(int argc, char ** argv)
     {"work_directory", result.work_directory.string()}, {"messages", result.messages},
     {"pairs_checked", result.pairs_checked}, {"raw_bytes_omitted", result.raw_bytes_omitted}};
   std::cout << report.dump(2) << '\n';
-  return result.ok() ? 0 : 1;
+  if (!result.ok()) {
+    return 1;
+  }
+  return 0;
 }

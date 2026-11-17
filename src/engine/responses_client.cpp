@@ -75,7 +75,10 @@ nlohmann::json requestResponse(const ModelBuildOptions & options, const nlohmann
   if (key.find_first_of("\r\n") != std::string::npos) {
     throw std::invalid_argument("Model key contains a line break");
   }
-  const auto authorization = key.empty() ? std::string{} : "Authorization: Bearer " + key;
+  std::string authorization;
+  if (!key.empty()) {
+    authorization = "Authorization: Bearer " + key;
+  }
   auto * list = curl_slist_append(nullptr, "Content-Type: application/json");
   if (!list) {throw std::runtime_error("Cannot allocate HTTP headers");}
   std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers(list, curl_slist_free_all);

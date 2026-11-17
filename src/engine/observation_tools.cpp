@@ -147,8 +147,11 @@ Json project(
     return {{"status", "missing_camera_model"}, {"message", "Camera model is missing"}};
   }
 
-  const auto & model = rgb ? *obs.rgb_model : *obs.depth_model;
-  const auto region = selection(selector, model.width, model.height);
+  const auto * model = &*obs.depth_model;
+  if (rgb) {
+    model = &*obs.rgb_model;
+  }
+  const auto region = selection(selector, model->width, model->height);
   const bool point = selector.at("type") == "point";
   DepthRegionOptions options;
   if (point) {options.min_cluster_points = 1;}
@@ -173,8 +176,12 @@ Json project(
   const auto * status = depthRegionCodeName(result.code);
   if (result.ok()) {status = "ok";}
   if (result.code == DepthRegionCode::no_valid_depth) {status = "invalid_depth";}
+  const char * method = "pixel_depth";
+  if (rgb) {
+    method = "depth_reprojection";
+  }
   Json output{{"status", status}, {"selector_image", image},
-    {"method", rgb ? "depth_reprojection" : "pixel_depth"},
+    {"method", method},
     {"sample_count", result.valid_points}, {"region_pixels", result.region_pixels},
     {"cluster_count", result.clusters.size()}, {"capture_sync_status", obs.capture_sync_status},
     {"pending_reasons", obs.pending_reasons}};
@@ -213,8 +220,10 @@ Json runObservationTool(
       const auto id = arguments.at("observation_id").get<std::string>();
       const auto loaded = dataset.loadObservation(id);
       if (!loaded.ok()) {
-        const auto * status = loaded.code == ObservationDatasetReadCode::observation_not_found ?
-          "observation_not_found" : "observation_read_failed";
+        const char * status = "observation_read_failed";
+        if (loaded.code == ObservationDatasetReadCode::observation_not_found) {
+          status = "observation_not_found";
+        }
         result = {{"status", status}, {"message", loaded.message}};
       } else if (name == "get_observation") {
         result = observationInfo(*loaded.observation);

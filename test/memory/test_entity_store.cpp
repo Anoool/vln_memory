@@ -375,9 +375,13 @@ void published(const fs::path & root, std::int64_t u, std::int64_t v, const fs::
   const auto & observation = batch.observations.front();
   const auto & batches = dataset.reader->batches();
   expect(batch.observations.size() > 1 || batches.size() > 1, "At least two observations are required");
-  const auto & second_id = batch.observations.size() > 1 ?
-    batch.observations[1].id : batches[1].observation_ids.front();
-  const auto second = dataset.reader->loadObservation(second_id);
+  const std::string * second_id = nullptr;
+  if (batch.observations.size() > 1) {
+    second_id = &batch.observations[1].id;
+  } else {
+    second_id = &batches[1].observation_ids.front();
+  }
+  const auto second = dataset.reader->loadObservation(*second_id);
   expect(second.ok(), second.message);
   const EntityObservationRef next_view{
     second.observation->id, second.observation->revision, second.observation->source_manifest_sha256,

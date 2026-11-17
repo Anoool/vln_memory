@@ -50,6 +50,10 @@ nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record)
 {
   const auto & data = record.data;
   const auto & roi = data.roi;
+  nlohmann::json effective_distortion = nullptr;
+  if (record.normalized) {
+    effective_distortion = record.normalized->d;
+  }
   return {{"calibration_id", record.source.message_id}, {"source", sourceJson(record.source)},
     {"stamp", stampJson(data.stamp)}, {"frame_id", data.frame_id}, {"width", data.width}, {"height", data.height},
     {"distortion_model", data.distortion_model}, {"d", data.d}, {"k", data.k}, {"r", data.r}, {"p", data.p},
@@ -61,7 +65,7 @@ nlohmann::json cameraInfoJson(const BagCameraInfoRecord & record)
     {"compatibility", cameraInfoCompatibilityName(record.compatibility)},
     {"normalization_applied", record.normalization_applied},
     {"normalized_code", cameraInfoErrorCodeName(record.normalized_code)},
-    {"effective_d", record.normalized ? nlohmann::json(record.normalized->d) : nlohmann::json(nullptr)},
+    {"effective_d", effective_distortion},
     {"source_nonfinite", nonfinite(data.d) || nonfinite(data.k) || nonfinite(data.r) || nonfinite(data.p)}};
 }
 

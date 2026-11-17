@@ -51,7 +51,11 @@ void checkRejections(const PreparationReader & reader, const Observation & obser
     "Wrong source fingerprint was accepted");
   changed = observation;
   auto & hash = changed.evidence.front().payload_sha256;
-  hash.front() = hash.front() == '0' ? '1' : '0';
+  if (hash.front() == '0') {
+    hash.front() = '1';
+  } else {
+    hash.front() = '0';
+  }
   result = projectObservationDepthRegion(reader, changed, shape);
   expect(result.code == ObservationDepthRegionCode::source_mismatch && !result.projection,
     "Wrong source evidence was accepted");

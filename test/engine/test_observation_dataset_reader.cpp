@@ -76,7 +76,10 @@ void changedAfterOpen(const fs::path & root, bool change_manifest)
 {
   const auto opened = openObservationDataset(root);
   expect(opened.ok() && !opened.reader->batches().empty(), opened.message);
-  const auto file = change_manifest ? "observation_manifest.json" : "observations.jsonl";
+  const char * file = "observations.jsonl";
+  if (change_manifest) {
+    file = "observation_manifest.json";
+  }
   changeFixtureText(root / file);
   const auto batch = opened.reader->loadBatch(0);
   expect(!batch.ok() && batch.code == Code::source_changed && batch.observations.empty(),
@@ -159,7 +162,11 @@ int main(int argc, char ** argv)
     expect(argc >= 3, "Expected MODE DATASET [OPTIONS]");
     const std::string_view mode(argv[1]);
     if (mode == "--verify" && (argc == 5 || argc == 6)) {
-      verify(argv[2], std::stoull(argv[3]), std::string_view(argv[4]) == "v2", argc == 6 ? fs::path(argv[5]) : fs::path{});
+      fs::path source;
+      if (argc == 6) {
+        source = argv[5];
+      }
+      verify(argv[2], std::stoull(argv[3]), std::string_view(argv[4]) == "v2", source);
     } else if (mode == "--direct" && argc == 5) {
       verifyDirect(argv[2], false, std::stoll(argv[3]), std::stoll(argv[4]));
     } else if (mode == "--direct-corrupt" && argc == 3) {

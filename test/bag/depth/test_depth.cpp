@@ -43,7 +43,7 @@ vln_memory::DepthImageView makeDepthView(
   result.height = height;
   result.encoding = encoding;
   result.step = step;
-  result.is_bigendian = big_endian ? 1 : 0;
+  result.is_bigendian = big_endian;
   result.data = data.data();
   result.data_size = data.size();
   return result;
@@ -77,7 +77,11 @@ void expectValue(float actual, float expected)
 void storeBits(Bytes & data, std::size_t offset, std::uint32_t bits, std::size_t bytes, bool is_big_endian)
 {
   for (std::size_t index = 0; index < bytes; ++index) {
-    const auto shift = static_cast<unsigned int>((is_big_endian ? bytes - 1 - index : index) * 8);
+    auto byte_index = index;
+    if (is_big_endian) {
+      byte_index = bytes - 1 - index;
+    }
+    const auto shift = static_cast<unsigned int>(byte_index * 8);
     data[offset + index] = static_cast<std::uint8_t>((bits >> shift) & 0xFFU);
   }
 }
@@ -137,12 +141,19 @@ void testKnownEndianValues()
   const Bytes little32{0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x20, 0x40};
   const Bytes big32{0x3F, 0x80, 0x00, 0x00, 0x40, 0x20, 0x00, 0x00};
   for (const bool is_big_endian : {false, true}) {
-    auto result = vln_memory::decodeDepth(makeDepthView(is_big_endian ? big16 : little16, 2, 1, "16UC1", 4, is_big_endian), makeDepthOptions());
+    const auto * input16 = &little16;
+    const auto * input32 = &little32;
+    if (is_big_endian) {
+      input16 = &big16;
+      input32 = &big32;
+    }
+    auto result = vln_memory::decodeDepth(
+      makeDepthView(*input16, 2, 1, "16UC1", 4, is_big_endian), makeDepthOptions());
     expect(result.ok(), result.message);
     expectValue(result.frame->depth_m[0], 1.0F);
     expectValue(result.frame->depth_m[1], 2.0F);
     result = vln_memory::decodeDepth(
-      makeDepthView(is_big_endian ? big32 : little32, 2, 1, "32FC1", 8, is_big_endian), makeDepthOptions(DepthUnit::meters));
+      makeDepthView(*input32, 2, 1, "32FC1", 8, is_big_endian), makeDepthOptions(DepthUnit::meters));
     expect(result.ok(), result.message);
     expectValue(result.frame->depth_m[0], 1.0F);
     expectValue(result.frame->depth_m[1], 2.5F);
@@ -408,7 +419,14 @@ void testGeneratedSamples()
       for (std::uint32_t sample = 0; sample < 150; ++sample) {
         const auto width = 1U + static_cast<std::uint32_t>(random() % 13U);
         const auto height = 1U + static_cast<std::uint32_t>(random() % 7U);
-        const auto bytes = floating ? 4U : 2U;
+        unsigned int bytes = 2;
+        const char * encoding = "16UC1";
+        auto unit = DepthUnit::millimeters;
+        if (floating) {
+          bytes = 4;
+          encoding = "32FC1";
+          unit = DepthUnit::meters;
+        }
         const auto step = width * bytes + static_cast<std::uint32_t>(random() % 5U);
         Bytes source(static_cast<std::size_t>(step) * height, 0xDA);
         std::vector<float> expected;
@@ -421,13 +439,16 @@ void testGeneratedSamples()
               value = static_cast<float>(raw) / 4.0F;
               std::memcpy(&bits, &value, sizeof(bits));
             }
-            expected.push_back(raw == 0 ? std::numeric_limits<float>::quiet_NaN() : value);
+            if (raw == 0) {
+              expected.push_back(std::numeric_limits<float>::quiet_NaN());
+            } else {
+              expected.push_back(value);
+            }
             storeBits(source, row * step + column * bytes, bits, bytes, is_big_endian);
           }
         }
         const auto result = vln_memory::decodeDepth(
-          makeDepthView(source, width, height, floating ? "32FC1" : "16UC1", step, is_big_endian),
-          makeDepthOptions(floating ? DepthUnit::meters : DepthUnit::millimeters));
+          makeDepthView(source, width, height, encoding, step, is_big_endian), makeDepthOptions(unit));
         expect(result.ok(), result.message);
         for (std::size_t i = 0; i < expected.size(); ++i) {expectValue(result.frame->depth_m[i], expected[i]);}
         checkStatistics(result.frame.value());

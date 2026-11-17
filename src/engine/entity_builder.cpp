@@ -161,10 +161,17 @@ EntityBuildResult createObject(
       return {Code::projection_failed, reason, std::nullopt};
     default: break;
   }
-  const auto leading_count = result.clusters.empty() ? 0 : result.clusters.front().point_count;
+  std::size_t leading_count = 0;
+  if (!result.clusters.empty()) {
+    leading_count = result.clusters.front().point_count;
+  }
+  const char * failure_reason = nullptr;
+  if (!result.ok()) {
+    failure_reason = reason;
+  }
   return finishObject(observation, semantic_label,
     ObjectSelectionEvidence{*selection, point_options, result.code, result.region_pixels,
-      result.valid_points, leading_count, result.representative}, result.ok() ? nullptr : reason);
+      result.valid_points, leading_count, result.representative}, failure_reason);
 }
 
 /** @brief 复用空间待定位语义，以已核验的底盘原点写入实际锚点。 */
@@ -222,7 +229,10 @@ EntityBuildResult createRegionEntity(
   if (!stable.ok()) {return {Code::preparation_read_failed, stable.message, std::nullopt};}
 
   const auto & body = loaded.pair->body_pose;
-  return finishRegion(observation, semantic_label, confirmation, body ? &*body : nullptr);
+  if (body) {
+    return finishRegion(observation, semantic_label, confirmation, &*body);
+  }
+  return finishRegion(observation, semantic_label, confirmation, nullptr);
 }
 
 /** @brief 对已由直出清单核验的观测复用物品证据和待定位处理。 */
@@ -254,7 +264,10 @@ EntityBuildResult createRegionEntity(
     return {Code::invalid_region_confirmation, "Confirmation reference or region, observation, and map scope mismatch",
       std::nullopt};
   }
-  return finishRegion(obs, label, confirmation, obs.body_pose_map ? &*obs.body_pose_map : nullptr);
+  if (obs.body_pose_map) {
+    return finishRegion(obs, label, confirmation, &*obs.body_pose_map);
+  }
+  return finishRegion(obs, label, confirmation, nullptr);
 }
 
 }  // namespace vln_memory

@@ -43,7 +43,10 @@ SensorTimeCheck checkSensorTimes(
     candidate.nanosec;
   const std::int64_t delta = candidate_ns - reference_ns;
   const bool within = delta >= -options.max_delta_ns && delta <= options.max_delta_ns;
-  return {within ? SensorTimeCode::matched : SensorTimeCode::outside_tolerance, delta};
+  if (within) {
+    return {SensorTimeCode::matched, delta};
+  }
+  return {SensorTimeCode::outside_tolerance, delta};
 }
 
 }  // namespace vln_memory

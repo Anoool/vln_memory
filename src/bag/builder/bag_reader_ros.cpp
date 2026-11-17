@@ -396,9 +396,14 @@ void indexCompressedImage(const RawMessage & raw, BagImageRecord & record, const
   record.compressed_format = image->format;
   record.data_bytes = image->data.size();
   const bool depth_stream = record.source.topic == options.depth_camera.image_topic;
-  const auto role = depth_stream ? BagImageRole::depth : BagImageRole::rgb;
-  const auto max_pixels = depth_stream ? options.depth_limits.max_pixels : options.rgb_limits.max_pixels;
-  const auto max_bytes = depth_stream ? options.depth_limits.max_input_bytes : options.rgb_limits.max_input_bytes;
+  auto role = BagImageRole::rgb;
+  auto max_pixels = options.rgb_limits.max_pixels;
+  auto max_bytes = options.rgb_limits.max_input_bytes;
+  if (depth_stream) {
+    role = BagImageRole::depth;
+    max_pixels = options.depth_limits.max_pixels;
+    max_bytes = options.depth_limits.max_input_bytes;
+  }
   const auto info = inspectCompressedImage(*image, role, max_pixels, max_bytes);
   record.width = info.width;
   record.height = info.height;
@@ -571,9 +576,14 @@ void consumeCompressedImage(
   const auto message = deserialize<sensor_msgs::msg::CompressedImage>(raw, error);
   if (!message) {throw BagBuildError("source_changed", "Previously readable CompressedImage failed: " + error);}
   const bool depth_stream = record.source.topic == options.depth_camera.image_topic;
-  const auto role = depth_stream ? BagImageRole::depth : BagImageRole::rgb;
-  const auto max_pixels = depth_stream ? options.depth_limits.max_pixels : options.rgb_limits.max_pixels;
-  const auto max_bytes = depth_stream ? options.depth_limits.max_input_bytes : options.rgb_limits.max_input_bytes;
+  auto role = BagImageRole::rgb;
+  auto max_pixels = options.rgb_limits.max_pixels;
+  auto max_bytes = options.rgb_limits.max_input_bytes;
+  if (depth_stream) {
+    role = BagImageRole::depth;
+    max_pixels = options.depth_limits.max_pixels;
+    max_bytes = options.depth_limits.max_input_bytes;
+  }
   const auto decoded = decodeCompressedImage(*message, role, max_pixels, max_bytes);
   if (!decoded.ok()) {
     record.payload_error_code = decoded.code;

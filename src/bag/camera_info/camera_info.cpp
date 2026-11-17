@@ -49,7 +49,10 @@ bool isRotationMatrix(const std::array<double, 9> & matrix)
       for (std::size_t column = 0; column < 3; ++column) {
         dot_product += matrix[first_row * 3 + column] * matrix[second_row * 3 + column];
       }
-      const double expected_dot_product = first_row == second_row ? 1.0 : 0.0;
+      double expected_dot_product = 0.0;
+      if (first_row == second_row) {
+        expected_dot_product = 1.0;
+      }
       if (!isNear(dot_product, expected_dot_product, 1e-5)) {
         return false;
       }
@@ -136,8 +139,14 @@ CameraInfoValidation validateImageGrid(const CameraInfoData & info)
     return {Code::invalid_roi,
       "ROI must be default full frame or a non-empty window inside calibration dimensions"};
   }
-  const auto binning_x = info.binning_x == 0 ? 1U : info.binning_x;
-  const auto binning_y = info.binning_y == 0 ? 1U : info.binning_y;
+  auto binning_x = info.binning_x;
+  if (binning_x == 0) {
+    binning_x = 1;
+  }
+  auto binning_y = info.binning_y;
+  if (binning_y == 0) {
+    binning_y = 1;
+  }
   if (roi_width % binning_x != 0 || roi_height % binning_y != 0) {
     return {Code::unsupported_binning,
       "ROI dimensions must divide exactly by binning; driver rounding is not assumed"};

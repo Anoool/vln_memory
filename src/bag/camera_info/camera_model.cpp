@@ -38,8 +38,14 @@ bool validModel(const CameraModel & model)
 /** @brief 先裁剪后 binning；原始矩阵与参数均不修改。 */
 void adjustGrid(CameraModel & model, const CameraInfoData & info)
 {
-  const double bx = info.binning_x == 0 ? 1.0 : static_cast<double>(info.binning_x);
-  const double by = info.binning_y == 0 ? 1.0 : static_cast<double>(info.binning_y);
+  auto bx = static_cast<double>(info.binning_x);
+  if (bx == 0.0) {
+    bx = 1.0;
+  }
+  auto by = static_cast<double>(info.binning_y);
+  if (by == 0.0) {
+    by = 1.0;
+  }
   model.k[2] -= info.roi.x_offset;
   model.k[5] -= info.roi.y_offset;
   model.p[2] -= info.roi.x_offset;

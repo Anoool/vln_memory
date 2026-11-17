@@ -31,7 +31,10 @@ TfTransform sample(
   result.child_frame = child;
   result.stamp = stamp;
   result.kind = kind;
-  result.source_topic = kind == TfKind::dynamic ? "/tf" : "/tf_static";
+  result.source_topic = "/tf_static";
+  if (kind == TfKind::dynamic) {
+    result.source_topic = "/tf";
+  }
   result.source_message_id = "bag_1_message_1";
   result.source_transform_index = 0;
   return result;
@@ -166,7 +169,10 @@ void testConflictsAndLimits()
 {
   for (const auto conflict_kind : {0, 1, 2, 3, 4}) {
     TfIndex index(scope);
-    const auto kind = conflict_kind == 2 ? TfKind::static_transform : TfKind::dynamic;
+    auto kind = TfKind::dynamic;
+    if (conflict_kind == 2) {
+      kind = TfKind::static_transform;
+    }
     auto first = sample("map", "base", {}, kind);
     add(index, first);
     auto contradictory = first;
@@ -192,8 +198,11 @@ void testConflictsAndLimits()
     }
     expect(index.insert(contradictory).code == expected, "TF contradiction was silently overwritten");
     const auto blocked = index.inspectChain("map", "base", {});
-    expect(blocked.code == TfChainCode::topology_conflict &&
-      blocked.failed_frame == (conflict_kind == 4 ? "map" : "base"),
+    const char * failed_frame = "base";
+    if (conflict_kind == 4) {
+      failed_frame = "map";
+    }
+    expect(blocked.code == TfChainCode::topology_conflict && blocked.failed_frame == failed_frame,
       "Rejected contradictory TF left the old version usable or lost the conflicting frame");
     add(index, sample("separate_root", "separate_leaf", {}, TfKind::static_transform));
     expect(index.inspectChain("separate_root", "separate_leaf", {}).chainExists(),

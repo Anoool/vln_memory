@@ -247,8 +247,10 @@ void runCompact(const fs::path & requested_source, const fs::path & requested_ou
     media_file << detail::preparationMediaRow(id, name, digest->second).dump() << '\n';
   }
   closeOutput(media_file, detail::kPreparationMediaIndexFile);
-  const auto baseline = source_media ? manifest.at("media_integrity").at("baseline").get<std::string>() :
-    std::string("legacy_conversion");
+  std::string baseline = "legacy_conversion";
+  if (source_media) {
+    baseline = manifest.at("media_integrity").at("baseline").get<std::string>();
+  }
   manifest["media_integrity"] = {{"schema_version", detail::kPreparationMediaIndexSchema},
     {"baseline", baseline}, {"index_sha256", detail::preparationFileSha256(work / detail::kPreparationMediaIndexFile)}};
   retained_files.push_back(detail::kPreparationMediaIndexFile);

@@ -156,9 +156,15 @@ public:
     if (op == "resolve_location") {
       const auto id = requiredText(request, "entity_id");
       const auto resolved = resolveEntityLocation(store(), dataset_, id, expectedRevision(request), ref);
-      return resolved.ok() ? entity(id) : result(resolved);
+      if (resolved.ok()) {
+        return entity(id);
+      }
+      return result(resolved);
     }
-    return op == "create" ? create(request, obs) : append(request, obs);
+    if (op == "create") {
+      return create(request, obs);
+    }
+    return append(request, obs);
   }
 
 private:
@@ -182,7 +188,12 @@ private:
   {
     if (!store_) {
       if (database_.empty()) {throw std::invalid_argument("--store is required for entity operations");}
-      auto opened = fs::exists(database_) ? openEntityStore(database_) : createObservedEntityStore(database_, dataset_);
+      EntityStoreOpenResult opened;
+      if (fs::exists(database_)) {
+        opened = openEntityStore(database_);
+      } else {
+        opened = createObservedEntityStore(database_, dataset_);
+      }
       if (!opened.ok()) {throw std::runtime_error(opened.message);}
       if (opened.store->context().dataset_manifest_sha256 != dataset_.info().dataset_manifest_sha256) {
         throw std::invalid_argument("Work store belongs to a different observation dataset");
@@ -222,8 +233,11 @@ private:
     const auto kind = requiredText(request, "kind");
     if (kind != "object" && kind != "region") {throw std::invalid_argument("Expected object or region");}
     const auto id = stableEntityId(dataset_.info().dataset_manifest_sha256, requiredText(request, "entity_key"));
-    auto built = build(request, obs, kind == "object" ? EntityKind::object : EntityKind::region,
-      requiredText(request, "label"));
+    auto entity_kind = EntityKind::region;
+    if (kind == "object") {
+      entity_kind = EntityKind::object;
+    }
+    auto built = build(request, obs, entity_kind, requiredText(request, "label"));
     if (!built.ok()) {return {{"ok", false}, {"code", "entity_build_failed"}, {"message", built.message}};}
     built.entity->entity_id = id;
     const auto inserted = insertObservedEntity(store(), dataset_, *built.entity);
@@ -243,7 +257,10 @@ private:
     auto built = build(request, obs, current.entity->kind, current.entity->semantic_label);
     if (!built.ok()) {return {{"ok", false}, {"code", "entity_build_failed"}, {"message", built.message}};}
     const auto appended = appendObservedEvidence(store(), dataset_, id, revision, built.entity->observations.front());
-    return appended.ok() ? entity(id) : result(appended);
+    if (appended.ok()) {
+      return entity(id);
+    }
+    return result(appended);
   }
 
   /** @brief 回读实体身份、观测引用、当前定位和归属。 */
@@ -261,10 +278,20 @@ private:
       location = {{"observation_id", item.location_observation->observation_id},
         {"observation_revision", item.location_observation->observation_revision}};
     }
+    const char * kind = "region";
+    if (item.kind == EntityKind::object) {
+      kind = "object";
+    }
+    const char * status = "pending_location";
+    if (item.status == EntityStatus::located) {
+      status = "located";
+    }
+    Json region_id = nullptr;
+    if (item.region_id) {
+      region_id = *item.region_id;
+    }
     return {{"ok", true}, {"entity_id", item.entity_id}, {"label", item.semantic_label},
-      {"kind", item.kind == EntityKind::object ? "object" : "region"},
-      {"revision", item.revision}, {"status", item.status == EntityStatus::located ? "located" : "pending_location"},
-      {"region_id", item.region_id ? Json(*item.region_id) : Json(nullptr)},
+      {"kind", kind}, {"revision", item.revision}, {"status", status}, {"region_id", region_id},
       {"location_observation", std::move(location)}, {"observations", std::move(observations)}};
   }
 
@@ -311,7 +338,10 @@ int main(int argc, char ** argv)
       failed = failed || !output.at("ok").get<bool>();
       std::cout << output.dump(-1, ' ', false, Json::error_handler_t::replace) << std::endl;
     }
-    return failed || std::cin.bad() ? 1 : 0;
+    if (failed || std::cin.bad()) {
+      return 1;
+    }
+    return 0;
   } catch (const std::exception & error) {
     std::cerr << error.what() << '\n';
     return 1;

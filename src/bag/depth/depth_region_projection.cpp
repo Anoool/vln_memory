@@ -40,7 +40,10 @@ Code checkBox(std::uint32_t width, std::uint32_t height, const DepthBoundingBox 
     box.u_end > width || box.v_end > height) {return Code::invalid_region;}
   const auto columns = static_cast<std::size_t>(box.u_end - box.u_min);
   const auto rows = static_cast<std::size_t>(box.v_end - box.v_min);
-  return columns > options.max_region_pixels / rows ? Code::region_too_large : Code::ready;
+  if (columns > options.max_region_pixels / rows) {
+    return Code::region_too_large;
+  }
+  return Code::ready;
 }
 
 /** @brief 将临时网格的行优先索引转换为可回查的原图像素。 */
@@ -130,7 +133,10 @@ DepthRegionResult summarize(
   const auto width = static_cast<std::size_t>(box.u_end - box.u_min);
   const auto height = static_cast<std::size_t>(box.v_end - box.v_min);
   if (out.valid_points == 0) {
-    out.code = out.projection_failures > 0 ? Code::projection_failed : Code::no_valid_depth;
+    out.code = Code::no_valid_depth;
+    if (out.projection_failures > 0) {
+      out.code = Code::projection_failed;
+    }
     return out;
   }
   std::vector<std::size_t> queue;
@@ -148,7 +154,10 @@ DepthRegionResult summarize(
   if (out.clusters.empty() || static_cast<double>(out.valid_points) / out.region_pixels < options.min_valid_fraction) {
     out.code = Code::insufficient_support;
   } else if (static_cast<double>(out.clusters.front().point_count) / out.valid_points < options.min_dominant_fraction) {
-    out.code = out.clusters.size() > 1 ? Code::ambiguous_region : Code::insufficient_support;
+    out.code = Code::insufficient_support;
+    if (out.clusters.size() > 1) {
+      out.code = Code::ambiguous_region;
+    }
   } else {
     out.code = Code::ready;
     out.representative = out.clusters.front().representative;
@@ -383,8 +392,12 @@ DepthRegionResult projectRgbRegionToMap(
   }
 
   const auto * polygon = std::get_if<DepthPolygon>(&rgb_region);
-  const auto box = polygon ? *polygonWindow(rgb_model.width, rgb_model.height, *polygon) :
-    std::get<DepthBoundingBox>(rgb_region);
+  DepthBoundingBox box;
+  if (polygon) {
+    box = *polygonWindow(rgb_model.width, rgb_model.height, *polygon);
+  } else {
+    box = std::get<DepthBoundingBox>(rgb_region);
+  }
   const auto width = static_cast<std::size_t>(box.u_end - box.u_min);
   const auto height = static_cast<std::size_t>(box.v_end - box.v_min);
   std::vector<std::size_t> winners(width * height, depth.depth_m.size());

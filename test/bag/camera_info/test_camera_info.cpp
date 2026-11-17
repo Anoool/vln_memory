@@ -80,7 +80,11 @@ void testCalibration()
   for (const auto & model : {std::string("equidistant"), std::string("rational_polynomial")}) {
     input = calibration();
     input.distortion_model = model;
-    input.d.assign(model == "equidistant" ? 4U : 8U, 0.0);
+    std::size_t coefficient_count = 8;
+    if (model == "equidistant") {
+      coefficient_count = 4;
+    }
+    input.d.assign(coefficient_count, 0.0);
     expect(decodeCameraInfo(input).ok(), "Supported model was rejected");
   }
   input = calibration();

@@ -68,8 +68,10 @@ Json writeObservations(
   std::set<std::string> observation_ids;
   for (const auto & frame : selection.frames) {
     if (!frame.eligible) {
-      const auto * code = frame.read_code == PreparationReadCode::ready ?
-        "selection_ineligible" : detail::preparationReadCodeName(frame.read_code);
+      const char * code = "selection_ineligible";
+      if (frame.read_code != PreparationReadCode::ready) {
+        code = detail::preparationReadCodeName(frame.read_code);
+      }
       writeIssue(issues, frame, code, frame.read_message, frame.eligibility_reasons);
       ++result.issues;
       continue;
@@ -133,11 +135,19 @@ void writeDatasetIndex(
     files[name] = relative;
     file_sha256[name] = detail::preparationFileSha256(work / relative);
   }
+  const char * status = "completed";
+  if (result.issues != 0) {
+    status = "completed_with_issues";
+  }
+  const char * preparation_mode = "reference";
+  if (mode == ObservationPreparationMode::bundle) {
+    preparation_mode = "bundle";
+  }
   const Json manifest{
     {"schema_version", detail::kObservationDatasetVersion}, {"observation_schema_version", kObservationSchemaVersion},
-    {"artifact_kind", "observation_dataset"}, {"status", result.issues == 0 ? "completed" : "completed_with_issues"},
+    {"artifact_kind", "observation_dataset"}, {"status", status},
     {"preparation_root", preparation_hint.generic_string()},
-    {"preparation_mode", mode == ObservationPreparationMode::bundle ? "bundle" : "reference"},
+    {"preparation_mode", preparation_mode},
     {"source_manifest_sha256", reader.manifestSha256()},
     {"map_id", context.map_id}, {"geometry_revision", context.geometry_revision}, {"map_frame", context.map_frame},
     {"map_basis", context.map_basis}, {"revision", std::to_string(context.revision)},

@@ -73,8 +73,11 @@ void testPaddedColorRows()
   const Bytes rgb{255, 0, 0, 0, 255, 0, 17, 19, 0, 0, 255, 255, 255, 255, 23, 29};
   const Bytes bgr{0, 0, 255, 0, 255, 0, 31, 37, 255, 0, 0, 255, 255, 255, 41, 43};
   for (const auto encoding : {"rgb8", "bgr8"}) {
-    const auto & data = std::string_view(encoding) == "rgb8" ? rgb : bgr;
-    const auto result = vln_memory::decodeRgb(view(data, 2, 2, encoding, 8));
+    const auto * data = &bgr;
+    if (std::string_view(encoding) == "rgb8") {
+      data = &rgb;
+    }
+    const auto result = vln_memory::decodeRgb(view(*data, 2, 2, encoding, 8));
     expect(result.ok(), result.message);
     expect(result.frame->pixels == expected, "Padding or color channels were exported as pixels");
     expect(result.frame->step == 6 && result.frame->source_step == 8, "Stride metadata wrong");
@@ -210,7 +213,10 @@ void testRandomColorSamples()
       const auto height = 1U + static_cast<std::uint32_t>(random() % 9U);
       const auto padding = static_cast<std::uint32_t>(random() % 7U);
       const bool mono = std::string_view(encoding) == "mono8";
-      const auto channels = mono ? 1U : 3U;
+      unsigned int channels = 3;
+      if (mono) {
+        channels = 1;
+      }
       const auto step = width * channels + padding;
       Bytes source(static_cast<std::size_t>(step) * height, 0xDA);
       Bytes expected;
@@ -218,8 +224,12 @@ void testRandomColorSamples()
       for (std::size_t row = 0; row < height; ++row) {
         for (std::size_t column = 0; column < width; ++column) {
           const auto red = static_cast<std::uint8_t>(random() % 256U);
-          const auto green = mono ? red : static_cast<std::uint8_t>(random() % 256U);
-          const auto blue = mono ? red : static_cast<std::uint8_t>(random() % 256U);
+          auto green = red;
+          auto blue = red;
+          if (!mono) {
+            green = static_cast<std::uint8_t>(random() % 256U);
+            blue = static_cast<std::uint8_t>(random() % 256U);
+          }
           expected.insert(expected.end(), {red, green, blue});
           const auto offset = row * step + column * channels;
           if (mono) {
