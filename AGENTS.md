@@ -8,7 +8,7 @@ Tests mirror modules under `test/bag/`; `test/install_consumer/` validates insta
 
 ## Scope & Development Workflow
 
-Read `docx/project/sections_1_2_scope.md` and `docx/project/system_plan.md` before extending functionality. Scope: design sections 1–2; distinguish implementation from plans.
+Read `docx/project/sections_1_2_scope.md` and `docx/project/system_plan.md` before extending functionality. Read `docx/project/rag_plan.md` before extending retrieval. Scope covers the existing offline builder and the RAG stages listed there. Distinguish implementation from plans.
 
 Plan inputs, outputs, ownership, dependencies, and errors; implement incrementally and review the full call path. Add same-stem module documentation and update `docx/README.md`.
 
@@ -56,7 +56,7 @@ CTest runs C++ check programs: `test_<module>.cpp`, with `_ros` for real-message
 
 ## Commit & Pull Request Guidelines
 
-Use `/home/dev/agent/vln_memory` as the only working directory for editing, building, and testing this project. Manage versions with branches and commits in this repository. Do not copy or clone the repository to another directory, or create an extra Git worktree, unless the owner explicitly requests one. Preserve existing local changes and stage only the intended edits. Verify the changes before pushing the branch to GitHub.
+Use `/home/dev/agent/vln_memory_RAG` as the working directory for editing, building, and testing this copy. Manage versions with branches and commits in this repository. Do not copy or clone the repository to another directory, or create an extra Git worktree, unless the owner explicitly requests one. Preserve existing local changes and stage only the intended edits. Verify the changes before pushing the branch to GitHub.
 
 Use imperative commit subjects, following history: `Add TF coverage index and observation layer audit`. Use `codex/` branches, stage completed work, preserve unrelated edits, and leave merging for owner review. PRs should describe behavior, interfaces, validation, limitations, and relevant issues/documentation.
 

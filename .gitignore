@@ -2,3 +2,4 @@
 /install/
 /log/
 /config/api_key.yaml
+__pycache__/

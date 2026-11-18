@@ -1,4 +1,6 @@
-# 离线构建实施规划
+# 系统实施规划
+
+## 离线构建
 
 按《VLN_SPATIAL_SEMANTIC_MEMORY_DESIGN.md》第 2 部分交付离线构建。第 1 部分的数据、证据和发布边界见[设计条款对照](sections_1_2_scope.md)。
 
@@ -11,4 +13,14 @@
 | B4 · 纠错、标注、发布 | 已实现 [`memory_engine --publish`](../modules/engine/memory_publication.md)，从工作库原子发布版本。已实现 [`memory_annotate`](../modules/engine/memory_annotate.md) 保存和发布人工标注。已实现 [`correct_memory`](../modules/engine/correct_memory.md) 的 update/merge/split/retract，保留证据和修改理由。 |
 | C · [MemoryViewer](../modules/viewer/memory_viewer.md) | 待实现。验收从同一真实录包构建、检查地图、按实体/关系/时间回查原图和选区、提交标注再重开回读。 |
 
-BagBuilder 和 MemoryEngine 共用 [vln_memory.yaml](../../config/vln_memory.yaml)，以 `dataset.memory_dir` 交接。项目录包固定包含彩色和深度图。地图、时钟段、深度比例和几何版本应明确，采样时间相近不能作为物理配准或曝光同步的证据。第 3 部分的完整在线查询和导航接入另行处理。
+BagBuilder 和 MemoryEngine 共用 [vln_memory.yaml](../../config/vln_memory.yaml)，以 `dataset.memory_dir` 交接。项目录包固定包含彩色和深度图。地图、时钟段、深度比例和几何版本应明确，采样时间相近不能作为物理配准或曝光同步的证据。
+
+## RAG 查询与 Agent 接入
+
+| 阶段 | 状态与验收 |
+| --- | --- |
+| R1 · [本地索引与检索](../modules/engine/memory_rag.md) | 已实现。E5-small 完成实体检索，发布中文名称和别名后可精确区分两个背包。 |
+| R2 · [回查关系与证据](../modules/engine/memory_rag.md) | 已实现。用四帧发布版验证 `hanging_on`、定位引用与原图回读。 |
+| R3 · [接入 vln_agent](../modules/engine/memory_rag.md#接入-vln_agent) | 已实现。常驻 ROS 服务复用本地索引与编码器，`search_memory` 通过现有工具和会话接口返回证据。 |
+
+R1 和 R2 共用独立 CLI。在线导航单独验收。详细接口和任务见 [RAG 实施方案](rag_plan.md)。

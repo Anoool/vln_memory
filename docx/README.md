@@ -1,4 +1,4 @@
-# vln_memory 文档
+# vln_memory_RAG 文档
 
 ~~~mermaid
 flowchart LR
@@ -6,7 +6,10 @@ flowchart LR
   S["RGB / Depth / CameraInfo / TF"] --> B
   B -->|"双图 Observation + evidence"| E["MemoryEngine"]
   E -->|"实体、关系、证据、回执"| W["SQLite 工作库"]
-  E -.->|"完整记忆版本：规划"| V["MemoryViewer：规划"]
+  W -->|"版本发布"| R["已发布记忆"]
+  R -.-> V["MemoryViewer：规划"]
+  R --> Q["本地 RAG 实体检索"]
+  Q --> A2["vln_agent 搜索工具"]
 ~~~
 
 从 [项目 README](../README.md) 安装和启动。模块文档统一包含职责与边界、整体设计图、数据结构、公共 API、调用示例和错误处理。
@@ -16,6 +19,7 @@ flowchart LR
 | BagBuilder | [录包、配置、观测编号与 RGB-D 验收](modules/bag/bag_builder.md) |
 | MemoryEngine | [手动工具、深度定位与自动写入批次](modules/engine/memory_engine.md) · [人工标注](modules/engine/memory_annotate.md) · [实体纠错](modules/engine/correct_memory.md) · [记忆版本发布](modules/engine/memory_publication.md) |
 | MemoryViewer | [检查界面和标注交接（规划）](modules/viewer/memory_viewer.md) |
+| RAG 查询 | [本地索引与查询](modules/engine/memory_rag.md) · [实施与验收](project/rag_plan.md) |
 | Memory | [正式观测、实体与 SQLite 契约](modules/memory/memory.md) |
 | RGB | [彩色解码与 ROS 适配](modules/rgb/rgb.md) |
 | Depth | [米制解码、重投影与区域定位](modules/depth/depth.md) |

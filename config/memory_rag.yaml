@@ -1,0 +1,6 @@
+# 相对路径以本文件所在目录为基准。
+release: ../build/rag/r2/site_s4-model-zh-v1
+index_dir: ../build/rag/r2/index
+model_dir: ../build/rag/e5-small
+top_k: 3
+service_name: /vln_memory/search_memory
