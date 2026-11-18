@@ -98,7 +98,8 @@ vln_memory::BagBuildResult runProject(const std::string & path, vln_memory::BagB
 
   const ObservationBuildContext context{
     dataset["map_id"].as<std::string>(), dataset["geometry_revision"].as<std::string>(),
-    options.map_frame, dataset["map_basis"].as<std::string>(), 1, {}};
+    options.map_frame, dataset["map_basis"].as<std::string>(), 1, {},
+    dataset["recording_id"].as<std::string>("")};
   BuildInputOptions selection;
   selection.batch_size = 4;
   if (const auto distance = preprocess["keyframe_distance_m"]) {selection.distance_m = distance.as<double>();}

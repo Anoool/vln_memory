@@ -65,7 +65,11 @@ bool relativePath(const std::string & path)
   std::size_t start = 0;
   while (start < path.size()) {
     const auto end = path.find('/', start);
-    const auto part = path.substr(start, end == std::string::npos ? end : end - start);
+    auto length = std::string::npos;
+    if (end != std::string::npos) {
+      length = end - start;
+    }
+    const auto part = path.substr(start, length);
     if (part.empty() || part == "." || part == "..") {return false;}
     if (end == std::string::npos) {break;}
     start = end + 1;
@@ -218,8 +222,14 @@ void insertEndpoint(
   const std::string & source, const std::string & target, bool inverted)
 {
   checkReference(evidence, endpoint.source_message_id, endpoint.source_topic);
-  require(endpoint.parent_frame == (inverted ? source : target) &&
-    endpoint.child_frame == (inverted ? target : source), Code::invalid_pose, "TF endpoint does not join saved chain");
+  const auto * parent_frame = &target;
+  const auto * child_frame = &source;
+  if (inverted) {
+    parent_frame = &source;
+    child_frame = &target;
+  }
+  require(endpoint.parent_frame == *parent_frame && endpoint.child_frame == *child_frame,
+    Code::invalid_pose, "TF endpoint does not join saved chain");
   const auto inserted = index.insert(endpoint);
   require(inserted.accepted(), Code::invalid_pose, "TF endpoint: " + inserted.message);
 }
@@ -324,9 +334,47 @@ const char * observationCodeName(ObservationCode code) noexcept
   return "unknown";
 }
 
-/** @brief 不用可碰撞分隔拼接或不稳定 std::hash，长度元组明确保存身份边界。 */
+/** @brief 提取消息 ID 中的分卷、话题和序号，供 obs2 使用。 */
+static std::string messageCoordinates(std::string_view message, const std::string & bag_id)
+{
+  const auto prefix = "m_" + bag_id + "_f";
+  if (message.substr(0, prefix.size()) != prefix) {
+    throw std::invalid_argument("Observation message ID has a different bag or invalid format");
+  }
+  message.remove_prefix(prefix.size());
+  const auto topic = message.find("_t");
+  auto ordinal = std::string_view::npos;
+  if (topic != std::string_view::npos) {
+    ordinal = message.find('_', topic + 2);
+  }
+  if (ordinal == std::string_view::npos) {
+    throw std::invalid_argument("Observation message ID lacks file, topic or ordinal");
+  }
+  std::string coordinates;
+  for (const auto part : {message.substr(0, topic), message.substr(topic + 2, ordinal - topic - 2),
+      message.substr(ordinal + 1)}) {
+    if (part.empty() || (part.size() > 1 && part.front() == '0') ||
+      part.find_first_not_of("0123456789") != std::string_view::npos) {
+      throw std::invalid_argument("Invalid observation message coordinates");
+    }
+    if (!coordinates.empty()) {coordinates += '.';}
+    coordinates += part;
+  }
+  return coordinates;
+}
+
+/** @brief 生成可重算的观测 ID，保留旧记录使用的长度编码。 */
 std::string makeObservationId(const Observation & observation)
 {
+  if (!observation.recording_id.empty()) {
+    if (!identity(observation.recording_id) || observation.recording_id.find_first_not_of(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos) {
+      throw std::invalid_argument("recording_id must contain only ASCII letters, digits, underscores or hyphens");
+    }
+    return "obs2:" + observation.recording_id +
+           ":r" + messageCoordinates(observation.rgb_message_id, observation.bag_id) +
+           ":d" + messageCoordinates(observation.depth_message_id, observation.bag_id);
+  }
   std::string id = "obs1:";
   for (const auto * value : {&observation.bag_id, &observation.pair_id, &observation.rgb_message_id,
     &observation.depth_message_id, &observation.clock_id, &observation.segment_id}) {
@@ -380,9 +428,13 @@ ObservationCheck validateObservation(const Observation & observation)
     checkImage(observation.depth_image);
     const auto time = checkSensorTimes(observation.rgb_image.stamp, observation.depth_image.stamp,
       {SensorClockRelation::same_clock, observation.sync_tolerance_ns});
+    const char * expected_time_match = "approximate";
+    if (observation.delta_ns == 0) {
+      expected_time_match = "exact";
+    }
     require(time.matched() && *time.delta_ns == observation.delta_ns &&
       sameStamp(observation.stamp, observation.rgb_image.stamp) &&
-      observation.time_match == (observation.delta_ns == 0 ? "exact" : "approximate") &&
+      observation.time_match == expected_time_match &&
       text(observation.pairing_policy), Code::invalid_time, "Reference stamp/delta/tolerance/time match contradict");
     require(observation.tf_max_gap_ns >= 0, Code::invalid_pose, "Negative TF interpolation gap");
     for (const auto & limit : {observation.tf_jump_limits.translation_m, observation.tf_jump_limits.rotation_rad}) {
@@ -411,6 +463,8 @@ ObservationCheck validateObservation(const Observation & observation)
     return {Code::ready, ""};
   } catch (const CheckError & error) {
     return {error.code, error.what()};
+  } catch (const std::invalid_argument & error) {
+    return {Code::invalid_identity, error.what()};
   }
 }
 

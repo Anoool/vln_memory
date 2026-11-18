@@ -71,7 +71,7 @@ Json batchContext(
   auto pending = Json::array();
   for (const auto & [id, raw] : store.recentPending()) {
     const auto request = Json::parse(raw);
-    const auto & view = request.at("add_observations").back();
+    const auto & view = request.at("add_observations").front();
     const auto last = view.at("observation_id").get<std::string>();
     pending.push_back({{"entity_id", id}, {"revision", 1},
       {"semantic_label", request.at("semantic_label")}, {"description", request.value("description", std::string{})},
@@ -84,10 +84,14 @@ Json batchContext(
     const auto & view = entity.observations.back();
     const auto & last = view.observation_id;
     const auto details = Json::parse(entity.details_json);
+    Json historical_selector = nullptr;
+    if (view.requested_selector_json) {
+      historical_selector = Json::parse(*view.requested_selector_json);
+    }
     entities.push_back({{"entity_id", entity.entity_id}, {"revision", entity.revision},
       {"semantic_label", entity.semantic_label}, {"description", details.value("description", std::string{})},
       {"position_map", *selectedEntityPoint(entity)}, {"historical_observation_id", last},
-      {"historical_selector", view.requested_selector_json ? Json::parse(*view.requested_selector_json) : Json(nullptr)}});
+      {"historical_selector", std::move(historical_selector)}});
     if (historical.size() < 2 && seen.insert(last).second) {historical.push_back(last);}
   }
   return {{"observation_ids", current}, {"entities", std::move(entities)},
@@ -123,8 +127,12 @@ std::vector<Json> checkedCalls(const Json & output)
     const auto type = item.at("type").get<std::string>();
     if (type == "function_call") {
       const auto id = item.at("call_id").get<std::string>();
+      const auto name = item.at("name").get<std::string>();
+      if (name != "create_entity" && name != "update_entity") {
+        throw std::runtime_error("Model called an unavailable memory tool: " + name);
+      }
       if (id.empty() || !call_ids.insert(id).second || !item.at("arguments").is_string() ||
-        item.at("name").get<std::string>().empty() || item.value("status", std::string("completed")) != "completed")
+        item.value("status", std::string("completed")) != "completed")
       {
         throw std::runtime_error("Responses returned an invalid or duplicate tool call");
       }
@@ -142,6 +150,19 @@ std::vector<Json> checkedCalls(const Json & output)
   if (calls.empty() && !has_text) {throw std::runtime_error("Model returned no completion message");}
   return calls;
 }
+/** @brief 仅限制带定位证据的实体更新，关系和文字修订仍按原流程处理。 */
+std::string evidenceUpdateId(const Json & call)
+{
+  if (call.at("name") != "update_entity") {return {};}
+  const auto args = Json::parse(call.at("arguments").get<std::string>(), nullptr, false);
+  if (!args.is_object() || !args.contains("entity_id") || !args.at("entity_id").is_string() ||
+    !args.contains("add_observations") || !args.at("add_observations").is_array() ||
+    args.at("add_observations").empty())
+  {
+    return {};
+  }
+  return args.at("entity_id").get<std::string>();
+}
 }  // namespace
 
 Json runModelBatches(
@@ -152,7 +173,12 @@ Json runModelBatches(
   if (committed && !options.resume) {
     throw std::runtime_error("Build progress exists. Set build.resume: true to continue in this directory.");
   }
-  auto progress = committed ? Json::parse(*committed) : Json{{"next_observation", 0}, {"active", nullptr}};
+  Json progress;
+  if (committed) {
+    progress = Json::parse(*committed);
+  } else {
+    progress = {{"next_observation", 0}, {"active", nullptr}};
+  }
   /** @brief 只有当前恢复点仍未被其他进程修改，才提交本次推进。 */
   const auto save = [&]() {
       const auto payload = progress.dump();
@@ -167,6 +193,7 @@ Json runModelBatches(
   auto next = progress.at("next_observation").get<std::size_t>();
   if (next > ids.size()) {throw std::runtime_error("Build progress exceeds the observation count");}
   const auto resumed_from = next;
+  std::size_t deferred_batches = 0;
   const auto definitions = modelWriteToolDefinitions();
   constexpr char instructions[] = R"prompt(Build indoor spatial memory from the current RGB observations. Use historical
 views only to compare against existing entities.
@@ -180,7 +207,9 @@ Prefer nearby targets with solid, opaque surfaces away from image borders.
 Skip distant, reflective, or heavily occluded targets when closer ones are
 available. Prefer a pair seen together with a clear supported relation.
 Treat visible parts of one object as one entity: a chair's seat, base and
-wheels belong to the same chair. Include all visible parts when judging the
+wheels belong to the same chair. A bag hung on the chair is a separate object.
+If both have a clear surface, write them separately and record their relation.
+Include all visible parts when judging the
 object's extent, using only what is visible for cropped or occluded objects.
 
 For each object observation, set selector to a small RGB bbox inside one
@@ -199,8 +228,13 @@ For repeated objects, check distinctive details and scene placement. Include
 multiple views only when they support the same instance. Leave uncertain
 matches unwritten. For a confirmed match in pending_entities, use its ID and
 revision 1 in update_entity with a clear selector from a current view.
-The write tools project selectors locally. If a write returns evidence_conflict
-or location_unavailable, stop trying to link that view to the same entity.
+The write tools project selectors locally. When a write returns pending_location,
+use its pending_id and expected_revision 1 with update_entity for any retry
+of that same object, including a better patch in the same observation.
+For invalid depth on a shiny, narrow, or occluded surface, choose a visible
+solid surface on the same object or wait for another view. Never create it
+again. After one failed retry, leave it pending. If a write returns
+evidence_conflict or location_unavailable, stop linking that view.
 If fewer than two targets are located, try one different clear target at most.
 
 When creating an entity or changing its label, set recognition_state explicitly.
@@ -230,6 +264,8 @@ summary after the relevant writes.)prompt";
     const auto count = active.at("context").at("observation_ids").size();
     if (count == 0 || count > ids.size() - next) {throw std::runtime_error("Invalid saved batch size");}
     const auto initial = initialMessage(dataset, active.at("context"));
+    if (!active.contains("failed_updates")) {active["failed_updates"] = Json::object();}
+    auto & failed_updates = active.at("failed_updates");
 
     for (;;) {
       auto & pending = active.at("pending");
@@ -259,16 +295,46 @@ summary after the relevant writes.)prompt";
         throw std::runtime_error("Tool round limit reached. Increase build.max_tool_rounds and resume.");
       }
       auto & history = active.at("history");
+      bool all_deferred = true;
       for (const auto & item : pending) {history.push_back(item);}
       for (const auto & call : calls) {
-        const auto output = tools.call(call);
+        const auto entity_id = evidenceUpdateId(call);
+        int failures = 0;
+        if (!entity_id.empty()) {
+          failures = failed_updates.value(entity_id, 0);
+        }
+        const bool deferred = failures >= 2;
+        Json output;
+        if (deferred) {
+          output = {{"status", "update_deferred"}, {"entity_id", entity_id},
+            {"message", "Two evidence updates failed for this entity in this batch. Continue with another target."}};
+        } else {
+          output = tools.call(call);
+        }
         const auto status = output.at("status").get<std::string>();
         if (status == "storage_error" || status == "tool_error" || status == "call_id_conflict") {
           throw std::runtime_error("Tool call " + call.at("call_id").get<std::string>() + " failed: " + status +
             ": " + output.value("message", std::string{}));
         }
+        all_deferred = all_deferred && deferred;
+        if (!entity_id.empty() && !deferred) {
+          if (status == "location_unavailable" || status == "evidence_conflict" || status == "pending_location") {
+            failed_updates[entity_id] = failures + 1;
+          } else if (status == "ok") {
+            failed_updates.erase(entity_id);
+          }
+        }
         history.push_back({{"type", "function_call_output"}, {"call_id", call.at("call_id")},
           {"output", output.dump(-1, ' ', false, Json::error_handler_t::replace)}});
+      }
+      // 只有已被限制的更新时，保留已提交的结果并进入下一批。
+      if (all_deferred) {
+        ++deferred_batches;
+        next += count;
+        progress["next_observation"] = next;
+        progress["active"] = nullptr;
+        save();
+        break;
       }
       active["rounds"] = rounds + 1;
       pending = nullptr;
@@ -276,6 +342,6 @@ summary after the relevant writes.)prompt";
     }
   }
   return {{"status", "ok"}, {"total_observations", ids.size()}, {"resumed_from", resumed_from},
-    {"processed_observations", next - resumed_from}};
+    {"processed_observations", next - resumed_from}, {"deferred_batches", deferred_batches}};
 }
 }  // namespace vln_memory

@@ -164,6 +164,34 @@ def run_recovery(binary, dataset, config_path):
       conflict = run(1, {**first, "arguments": create("different", ids[0])})
       assert json.loads(conflict.stdout)["status"] == "call_id_conflict"
       assert state()[2] == 2
+
+      # Continue with an existing entity and two single-observation batches.
+      key_file.write_text('api_key: "fixture-key"\n', encoding="utf-8")
+      with sqlite3.connect(database) as connection:
+        connection.execute("DELETE FROM build_progress")
+      config["build"].update(observations_per_batch=1, max_tool_rounds=4)
+      bad_update = {
+          "entity_id": first_entity["id"], "expected_revision": json.loads(receipts["call_03"])["entity"]["revision"],
+          "add_observations": [{"observation_id": ids[0],
+                                "selector": {"type": "point", "image": "depth", "pixel_xy": [1, 0]}}]}
+      replies.extend([
+          (200, [call_item("reject_1", "update_entity", bad_update)]),
+          (503, []),
+          (200, [call_item("reject_2", "update_entity", bad_update)]),
+          (200, [call_item("deferred_3", "update_entity", bad_update)]),
+          (200, [call_item("next_batch", "create_entity", create("next batch", ids[1]))]),
+          (200, [message("Done")]),
+      ])
+      assert "503" in run(1).stderr
+      progress, receipts, _ = state()
+      assert progress["active"]["failed_updates"] == {first_entity["id"]: 1}
+      finished = json.loads(run(0).stdout)
+      assert finished["processed_observations"] == 2 and finished["deferred_batches"] == 1
+      progress, receipts, entities = state()
+      assert progress == {"next_observation": 2, "active": None}
+      assert all(json.loads(receipts[key])["status"] == "location_unavailable" for key in ("reject_1", "reject_2"))
+      assert "deferred_3" not in receipts and json.loads(receipts["next_batch"])["status"] == "ok"
+      assert entities == 3 and len(posted) == 10
     finally:
       server.shutdown()
       thread.join()

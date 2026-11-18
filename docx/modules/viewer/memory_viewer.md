@@ -13,18 +13,18 @@ flowchart LR
   B --> C
   C --> D["RGB、Depth 与证据选区"]
   D --> E["人工标注"]
-  E --> F["MemoryEngine 标注接口（规划）"]
+  E --> F["MemoryEngine 标注接口"]
 ~~~
 
 检查入口共享同一个记忆版本。点选地图实体或关系时沿证据引用回到原始观测。标注写入交给 Engine，提交后回读新版本确认。
 
 ## 数据结构
 
-计划读取 `manifest.json`、实体/观测/关系/标注 JSONL、`evidence/` 和索引。地图图层使用 `map_id`、`frame_id`、`geometry_revision`；图像及选区使用 `observation_id` 和观测修订；标注挂到稳定实体 ID。完整发布待 Engine 实现。
+计划读取 `manifest.json`、实体/观测/关系/标注 JSONL、`evidence/` 和索引。地图图层使用 `map_id`、`frame_id`、`geometry_revision`；图像及选区使用 `observation_id` 和观测修订；标注挂到稳定实体 ID。Engine 已提供[版本发布](../engine/memory_publication.md)，发布目录中的标注按实体 ID 关联。
 
 ## 公共 API
 
-计划提供 `memory_viewer --config FILE`。标注计划通过 Engine 的 `memory_annotate` 处理名称、别名和备注。两者均尚未实现。
+计划提供 `memory_viewer --config FILE`。Engine 已提供 [`memory_annotate`](../engine/memory_annotate.md) 处理名称、别名和备注，Viewer 界面待实现。
 
 ## 快速开始与典型示例
 

@@ -2,7 +2,7 @@
 
 ## 模块职责与边界
 
-从 BagBuilder 的双图目录回读观测、用深度计算地图坐标，并在观测目录维护 `entities.sqlite3`。可逐行调用工具，也可运行 Responses 视觉模型批次。模型提交语义判断和选区，坐标由本地计算。手动 JSONL 提供六项工具，纠错、人工标注和完整版本发布见[实施规划](../../project/system_plan.md)。
+从 BagBuilder 的双图目录回读观测、用深度计算地图坐标，并在观测目录维护 `entities.sqlite3`。可逐行调用工具，也可运行 Responses 视觉模型批次。模型提交语义判断和选区，坐标由本地计算。手动 JSONL 提供八项工具，包括[实体纠错](correct_memory.md)，工作库可[发布记忆版本](memory_publication.md)。
 
 ## 核心概念与整体设计
 
@@ -17,13 +17,13 @@ flowchart LR
 
 定位使用原图坐标。彩色选区用两图各自的模型和历史位姿做 Depth→RGB 重投影，落入同一彩色像素时取 RGB 相机中最近的深度点。分簇和定位依据保留在原深度像素上。物品用实测可见表面点，空间用经确认在内部的底盘位置。
 
-批次按发布顺序取 1–4 条观测，附原始 RGB 和最多两张相关历史彩色图。每轮先保存模型输出，再执行工具。业务写入与 `call_id` 回执在同一事务提交，批次完成才推进观测位置。已处理的观测在恢复时跳过。
+批次按发布顺序取 1–4 条观测，附原始 RGB 和最多两张相关历史彩色图。每轮先保存模型输出，再执行工具。业务写入与 `call_id` 回执在同一事务提交，批次完成才推进观测位置。已处理的观测在恢复时跳过。 同一批内同一实体的定位更新连续失败两次后，暂停该实体的定位更新。如果模型只重复提交已暂停的更新，保留已写入的结果并进入下一批。CLI 用 `deferred_batches` 报告本次因此提前结束的批次数。
 
 自动构建只向模型提供 `create_entity` 和 `update_entity`，提交选区时由本地执行定位，实体 ID 齐全后可用这两个工具写入关系。
 
 后续批次提供附近实体和最近四条待定位请求的 ID、修订、描述及历史选区。历史 RGB 最多两张。模型确认同一实例后用 `update_entity` 提交当前帧的选区。给已定位物品追加的选区须有有效地图代表点。无位置返回 `location_unavailable`，位置明显冲突返回 `evidence_conflict`，两种情况均不写入该次更新。此处复用现有 `geometry.near_threshold_m` 作为三维距离上限，身份仍须有视觉依据。
 
-待定位请求用原 `pending_id` 作为 `entity_id`、`expected_revision: 1`，通过 `update_entity` 提交新的 `add_observations`。定位成功后沿用该 ID 转为正式实体，保留其他帧的证据，并在同一事务移除待定位请求。
+待定位请求用原 `pending_id` 作为 `entity_id`、`expected_revision: 1`，通过 `update_entity` 提交新的 `add_observations`。同一物品换框重试也使用原 ID。定位仍失败时保存本次选区和其他帧证据，供下一批比较。定位成功后沿用该 ID 转为正式实体，保留其他帧的证据，并在同一事务移除待定位请求。
 
 构建提示词要求模型看整图，把同一物体的可见部件归到一个实体，并结合整图判断实体关系，记录支持关系的观测 ID。物品的 `selector` 使用原始 RGB 上同一块可见、连续表面内的小框，避开轮廓、空隙和遮挡边缘。标签、描述和属性记录整个物体。确认跨帧身份后才追加观测，新建实体或改标签时显式提供 `recognition_state`。没有可辨认的实体时允许完成空批。
 
@@ -33,12 +33,12 @@ flowchart LR
 | --- | --- |
 | JSONL 请求 | `name`、`arguments`，可选 `call_id`。每条请求对应一行结果。 |
 | 像素选择器 `selector` | `image` 默认为 `rgb`，也可用 `depth`。`point` 用 `pixel_xy`，`bbox` 用右、下端不包含的 `xyxy_px`，`polygon` 用 `vertices_xy_px`。 |
-| 工具结果 | `status` 和业务字段。正常业务响应携带 `frame_id`、`map_id`、`geometry_revision`，完整版本发布前 `memory_version` 为 `null`。 |
+| 工具结果 | `status` 和业务字段。正常业务响应携带 `frame_id`、`map_id`、`geometry_revision`，工作库工具的 `memory_version` 为 `null`，发布命令返回所生成的版本编号。 |
 | SQLite | 工作库按观测清单摘要绑定。实体、观测证据、关系、待定位请求、回执和进度的字段见[记忆数据与存储](../memory/memory.md)。 |
 
 ## 公共 API
 
-`memory_engine --config FILE` 接收 JSONL，追加 `--build` 时运行模型批次。
+`memory_engine --config FILE` 接收 JSONL，追加 `--build` 时运行模型批次，追加 `--publish OUTPUT_DIR` 时[发布记忆版本](memory_publication.md)。
 
 | 工具 | 请求 | 返回与作用 |
 | --- | --- | --- |
@@ -48,6 +48,8 @@ flowchart LR
 | `create_entity` | `kind`、`semantic_label`、`add_observations`；可附描述、属性、关系 | 创建物品或空间。物品证据附 `selector`，空间证据附 `confirmation_ref`。定位不足可返回 `pending_location`。 |
 | `update_entity` | `entity_id`、`expected_revision`；可附 `set_fields`、`add_observations`、`relations` | 在同一 ID 上更新字段、证据或关系，返回最新修订。重复证据不会创建第二份。 |
 | `spatial_query` | `operation`、`entity_ids`；`near` 可用 `parameters.dimension`（`xy/xyz`）和 `parameters.threshold_m` | 查询 `inside/on/hanging_on/connects_regions` 等已存证据，或计算 `near`。数值距离默认取 YAML 中 `geometry.near_dimension` / `near_threshold_m`。 |
+| `memory_annotate` | `entity_id`、`expected_annotation_revision`，可设置名称、别名或备注 | 保存人工标注并返回新修订。人工名称和别名可用于搜索，详见[标注文档](memory_annotate.md)。 |
+| `correct_memory` | `operation`、`entity_id`、`expected_revision`、`reason` | 修正、撤回、合并或拆分实体，保留纠错历史。详见[纠错文档](correct_memory.md)。 |
 
 关系写入的条目含 `type`、`entity_ids`、`evidence_observation_ids`，`$self` 表示当前写入实体。`inside` 从被包含实体提交。缺可靠关系证据时返回 `related: null`。几何版本、维度和阈值都匹配时才复用数值 `near`。
 

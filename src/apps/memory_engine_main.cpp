@@ -1,3 +1,4 @@
+#include "../engine/memory_publication.hpp"
 #include "../engine/model_batches.hpp"
 
 #include <cmath>
@@ -29,7 +30,10 @@ int runTools(vln_memory::MemoryTools & tools)
     failed = failed || output.at("status") != "ok";
     std::cout << output.dump(-1, ' ', false, Json::error_handler_t::replace) << '\n';
   }
-  return failed || std::cin.bad() || !std::cout ? 1 : 0;
+  if (failed || std::cin.bad() || !std::cout) {
+    return 1;
+  }
+  return 0;
 }
 
 /** @brief 读取批次和模型参数，密钥文件以主配置的目录为基准。 */
@@ -61,17 +65,19 @@ vln_memory::ModelBuildOptions modelOptions(
 }
 }  // namespace
 
-/** @brief 从统一 YAML 打开 BagBuilder 产物，按所选模式执行单条工具或离线模型批次。 */
+/** @brief 从统一 YAML 打开观测，按模式调用工具、构建或发布版本。 */
 int main(int argc, char ** argv)
 {
   try {
+    constexpr char usage[] = "Usage: memory_engine --config FILE [--build | --publish OUTPUT_DIR]";
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
-      std::cout << "Usage: memory_engine --config config/vln_memory.yaml [--build]\n";
+      std::cout << usage << '\n';
       return 0;
     }
     const bool build = argc == 4 && std::string_view(argv[3]) == "--build";
-    if ((argc != 3 && !build) || std::string_view(argv[1]) != "--config") {
-      throw std::invalid_argument("Expected --config FILE [--build]");
+    const bool publish = argc == 5 && std::string_view(argv[3]) == "--publish";
+    if ((argc != 3 && !build && !publish) || std::string_view(argv[1]) != "--config") {
+      throw std::invalid_argument(usage);
     }
     const auto config = YAML::LoadFile(argv[2]);
     const auto root = config["dataset"]["memory_dir"].as<std::string>();
@@ -79,6 +85,14 @@ int main(int argc, char ** argv)
     if (!opened.ok()) {throw std::runtime_error(opened.message);}
     if (!opened.reader->info().direct_evidence) {
       throw std::runtime_error("Expected a direct BagBuilder dataset");
+    }
+    const auto published = vln_memory::publishedMemoryVersion(opened.reader->info(), root);
+    if (published && (publish || build)) {
+      throw std::invalid_argument("Use the working dataset for --build or --publish");
+    }
+    if (publish) {
+      std::cout << vln_memory::publishMemoryVersion(opened.reader->info(), root, argv[4]).dump() << '\n';
+      return 0;
     }
     vln_memory::NearOptions near;
     if (const auto geometry = config["geometry"]) {
@@ -90,7 +104,7 @@ int main(int argc, char ** argv)
     {
       throw std::invalid_argument("geometry needs near_dimension xy or xyz and positive near_threshold_m");
     }
-    vln_memory::MemoryTools tools(*opened.reader, root, near);
+    vln_memory::MemoryTools tools(*opened.reader, root, near, published);
     if (!build) {return runTools(tools);}
     std::cout << vln_memory::runModelBatches(*opened.reader, tools, modelOptions(config, argv[2])).dump() << '\n';
     return 0;

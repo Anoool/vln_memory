@@ -2,6 +2,7 @@
 
 #include "observation_tools.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -43,14 +44,20 @@ Json functionTool(const char * name, const char * description, Json properties, 
 }  // namespace
 
 /** @brief 持有同一个只读观测索引和工作目录，数据库按需打开。 */
-MemoryTools::MemoryTools(const ObservationDatasetReader & dataset, std::filesystem::path root, NearOptions near)
-: dataset_(dataset), root_(std::move(root)), near_(std::move(near)) {}
+MemoryTools::MemoryTools(const ObservationDatasetReader & dataset, std::filesystem::path root,
+  NearOptions near, std::optional<std::string> published_version)
+: dataset_(dataset), root_(std::move(root)), near_(std::move(near)), published_version_(std::move(published_version)) {}
 
 EntityStore & MemoryTools::store()
 {
   if (!store_) {
     const auto path = root_ / "entities.sqlite3";
-    auto opened = std::filesystem::exists(path) ? openEntityStore(path) : createObservedEntityStore(path, dataset_);
+    EntityStoreOpenResult opened;
+    if (std::filesystem::exists(path)) {
+      opened = openEntityStore(path);
+    } else {
+      opened = createObservedEntityStore(path, dataset_);
+    }
     if (!opened.ok()) {throw std::runtime_error(opened.message);}
     if (opened.store->context().dataset_manifest_sha256 != dataset_.info().dataset_manifest_sha256) {
       throw std::runtime_error("Work store belongs to a different observation dataset");
@@ -63,13 +70,27 @@ EntityStore & MemoryTools::store()
 Json MemoryTools::execute(std::string_view name, const Json & arguments)
 {
   try {
-    const auto args = arguments.is_string() ? Json::parse(arguments.get<std::string>()) : arguments;
+    Json args;
+    if (arguments.is_string()) {
+      args = Json::parse(arguments.get<std::string>());
+    } else {
+      args = arguments;
+    }
     if (!args.is_object()) {throw std::invalid_argument("arguments must be an object");}
     if (name == "get_observation" || name == "project_depth") {
-      return runObservationTool(dataset_, root_, name, args);
+      if (published_version_ && name == "project_depth" && args.value("include_points", false)) {
+        return errorResult("read_only_memory", "Use a working dataset to write projected point files");
+      }
+      auto result = runObservationTool(dataset_, root_, name, args);
+      if (published_version_ && result.at("status") == "ok") {result["memory_version"] = *published_version_;}
+      return result;
     }
-    if (name != "search_entities" && name != "create_entity" && name != "update_entity" && name != "spatial_query") {
+    if (name != "search_entities" && name != "create_entity" && name != "update_entity" &&
+      name != "spatial_query" && name != "memory_annotate" && name != "correct_memory") {
       return errorResult("unknown_tool", "Unknown memory tool");
+    }
+    if (published_version_) {
+      return errorResult("read_only_memory", "Use the working dataset for entity tools; see published entities.jsonl");
     }
     auto result = runEntityTool(store(), dataset_, root_, near_, name, args);
     result["frame_id"] = dataset_.info().map_frame;
@@ -94,10 +115,11 @@ Json MemoryTools::call(const Json & request)
     if (!request.contains("call_id")) {return execute(name, arguments);}
     const auto id = request.at("call_id").get<std::string>();
     if (id.find_first_not_of(' ') == std::string::npos || id.size() > 4096 ||
-      id.find_first_of("\r\n\t") != std::string::npos)
+      std::any_of(id.begin(), id.end(), [](unsigned char byte) {return byte < 32 || byte == 127;}))
     {
       return errorResult("invalid_request", "Invalid call_id");
     }
+    if (published_version_) {return execute(name, arguments);}
     if (arguments.is_string()) {
       auto parsed = Json::parse(arguments.get<std::string>(), nullptr, false);
       if (!parsed.is_discarded()) {arguments = std::move(parsed);}

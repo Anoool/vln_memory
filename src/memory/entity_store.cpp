@@ -23,11 +23,13 @@ using Json = nlohmann::json;
 using Db = std::unique_ptr<sqlite3, decltype(&sqlite3_close)>;
 
 constexpr int kApplicationId = 0x564c4e45;
-constexpr int kSchemaVersion = 6;
+constexpr int kBuildSchemaVersion = 6;
+constexpr int kAnnotationSchemaVersion = 7;
+constexpr int kSchemaVersion = 8;
 
 constexpr char kSchema[] = R"sql(
   PRAGMA application_id = 0x564c4e45;
-  PRAGMA user_version = 6;
+  PRAGMA user_version = 8;
   CREATE TABLE store_meta(
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     dataset_manifest_sha256 TEXT NOT NULL, source_manifest_sha256 TEXT NOT NULL,
@@ -82,12 +84,36 @@ constexpr char kBuildSchema[] = R"sql(
   );
 )sql";
 
+constexpr char kAnnotationSchema[] = R"sql(
+  CREATE TABLE entity_annotations(
+    entity_id TEXT PRIMARY KEY NOT NULL REFERENCES entities(entity_id),
+    annotation_revision INTEGER NOT NULL CHECK(annotation_revision > 0),
+    display_name TEXT,
+    aliases_json TEXT NOT NULL,
+    note TEXT
+  );
+)sql";
+
+constexpr char kCorrectionSchema[] = R"sql(
+  ALTER TABLE entities ADD COLUMN retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0,1));
+  CREATE TABLE memory_corrections(correction_id INTEGER PRIMARY KEY, record_json TEXT NOT NULL);
+)sql";
+
+/** @brief 优先读取当前连接的 SQLite 诊断，无连接时按错误码取描述。 */
+const char * sqliteErrorMessage(sqlite3 * db, int result)
+{
+  if (db) {
+    return sqlite3_errmsg(db);
+  }
+  return sqlite3_errstr(result);
+}
+
 struct SqlError : std::runtime_error
 {
   int code;
   /** @brief 保留 SQLite 扩展错误码及连接上的诊断。 */
   SqlError(sqlite3 * db, int result)
-  : std::runtime_error(db ? sqlite3_errmsg(db) : sqlite3_errstr(result)), code(result) {}
+  : std::runtime_error(sqliteErrorMessage(db, result)), code(result) {}
 };
 
 /** @brief 检查 SQLite 操作是否完成。 */
@@ -117,8 +143,11 @@ public:
   /** @brief 按字节绑定字符串，SQLite 复制内容。 */
   void bind(int column, std::string_view value)
   {
-    check(db_, sqlite3_bind_text64(stmt_.get(), column, value.empty() ? "" : value.data(),
-      value.size(), SQLITE_TRANSIENT, SQLITE_UTF8));
+    const char * text = "";
+    if (!value.empty()) {
+      text = value.data();
+    }
+    check(db_, sqlite3_bind_text64(stmt_.get(), column, text, value.size(), SQLITE_TRANSIENT, SQLITE_UTF8));
   }
 
   /** @brief 绑定 SQLite 有符号整数，用于实体修订。 */
@@ -208,14 +237,21 @@ public:
   /** @brief 先取得写锁，在一个事务中维护实体和证据。 */
   explicit Transaction(sqlite3 * db) : db_(db), nested_(!sqlite3_get_autocommit(db))
   {
-    execute(db_, nested_ ? "SAVEPOINT entity_write" : "BEGIN IMMEDIATE");
+    if (nested_) {
+      execute(db_, "SAVEPOINT entity_write");
+    } else {
+      execute(db_, "BEGIN IMMEDIATE");
+    }
   }
 
   /** @brief 任何未提交路径都回滚。 */
   ~Transaction()
   {
     if (!committed_) {
-      const auto * rollback = nested_ ? "ROLLBACK TO entity_write; RELEASE entity_write" : "ROLLBACK";
+      const char * rollback = "ROLLBACK";
+      if (nested_) {
+        rollback = "ROLLBACK TO entity_write; RELEASE entity_write";
+      }
       sqlite3_exec(db_, rollback, nullptr, nullptr, nullptr);
     }
   }
@@ -223,7 +259,11 @@ public:
   /** @brief 仅在 SQLite 确认提交后标记成功。 */
   void commit()
   {
-    execute(db_, nested_ ? "RELEASE entity_write" : "COMMIT");
+    if (nested_) {
+      execute(db_, "RELEASE entity_write");
+    } else {
+      execute(db_, "COMMIT");
+    }
     committed_ = true;
   }
 
@@ -376,6 +416,15 @@ std::int64_t pragma(sqlite3 * db, const char * sql)
   return query.integer(0);
 }
 
+/** @brief 判断实体是否已撤回，旧库尚无该状态。 */
+bool entityRetired(sqlite3 * db, std::string_view id)
+{
+  if (pragma(db, "PRAGMA user_version") < kSchemaVersion) {return false;}
+  Statement row(db, "SELECT retired FROM entities WHERE entity_id=?1");
+  row.bind(1, id);
+  return row.step() && row.integer(0) != 0;
+}
+
 /** @brief 读取并验证绑定，先释放查询再执行可能需要的 schema 迁移。 */
 EntityStoreContext readContext(sqlite3 * db)
 {
@@ -388,14 +437,14 @@ EntityStoreContext readContext(sqlite3 * db)
 }
 
 /** @brief 在一个事务内升级旧库，补齐定位引用和关系表。 */
-void upgradeSchema(sqlite3 * db)
+void upgradeSchema(sqlite3 * db, int target = kSchemaVersion)
 {
   Transaction transaction(db);
   const auto version = pragma(db, "PRAGMA user_version");
   if (version < 1 || version > kSchemaVersion) {
     throw std::invalid_argument("Unsupported entity store format");
   }
-  if (version == kSchemaVersion) {
+  if (version >= target) {
     transaction.commit();
     return;
   }
@@ -428,8 +477,14 @@ void upgradeSchema(sqlite3 * db)
       )sql");
     }
   }
-  execute(db, kBuildSchema);
-  execute(db, "PRAGMA user_version = 6");
+  if (version < kBuildSchemaVersion) {execute(db, kBuildSchema);}
+  if (version < kAnnotationSchemaVersion) {execute(db, kAnnotationSchema);}
+  if (target == kSchemaVersion) {
+    execute(db, kCorrectionSchema);
+    execute(db, "PRAGMA user_version = 8");
+  } else {
+    execute(db, "PRAGMA user_version = 7");
+  }
   transaction.commit();
 }
 
@@ -440,6 +495,32 @@ struct EntityStoreState
   Db db{nullptr, sqlite3_close};
   EntityStoreContext context;
 };
+
+namespace
+{
+/** @brief 核对已有库并按模式开启稳定快照或升级旧 schema。 */
+std::unique_ptr<EntityStoreState> readStore(const std::filesystem::path & path, bool snapshot)
+{
+  auto state = std::make_unique<EntityStoreState>();
+  int flags = SQLITE_OPEN_READWRITE;
+  if (snapshot) {
+    flags = SQLITE_OPEN_READONLY;
+  }
+  state->db = connect(path, flags);
+  auto * db = state->db.get();
+  if (snapshot) {execute(db, "BEGIN");}
+  const auto version = pragma(db, "PRAGMA user_version");
+  if (pragma(db, "PRAGMA application_id") != kApplicationId || version < 1 || version > kSchemaVersion) {
+    throw std::invalid_argument("Unsupported entity store format");
+  }
+  if (snapshot && version < kBuildSchemaVersion) {
+    throw std::invalid_argument("Open the legacy store in normal memory engine mode before publication");
+  }
+  state->context = readContext(db);
+  if (version < kBuildSchemaVersion) {upgradeSchema(db);}
+  return state;
+}
+}  // namespace
 
 /** @brief 接管数据库连接和不可变来源绑定。 */
 EntityStore::EntityStore(std::unique_ptr<EntityStoreState> state) : state_(std::move(state)) {}
@@ -472,6 +553,8 @@ EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, cons
     execute(db, kSchema);
     execute(db, kRelationSchema);
     execute(db, kBuildSchema);
+    execute(db, kAnnotationSchema);
+    execute(db, kCorrectionSchema);
     Statement insert(db, "INSERT INTO store_meta VALUES(1,?1,?2,?3,?4,?5)");
     insert.bind(1, context.dataset_manifest_sha256);
     insert.bind(2, context.source_manifest_sha256);
@@ -492,16 +575,19 @@ EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, cons
 EntityStoreOpenResult openEntityStore(const std::filesystem::path & path)
 {
   try {
-    auto state = std::make_unique<EntityStoreState>();
-    state->db = connect(path, SQLITE_OPEN_READWRITE);
-    auto * db = state->db.get();
-    const auto version = pragma(db, "PRAGMA user_version");
-    if (pragma(db, "PRAGMA application_id") != kApplicationId || version < 1 || version > kSchemaVersion) {
-      return {{Code::invalid_store, "Unsupported entity store format"}, nullptr};
-    }
-    state->context = readContext(db);
-    if (version < kSchemaVersion) {upgradeSchema(db);}
-    return {{Code::ready, ""}, std::unique_ptr<EntityStore>(new EntityStore(std::move(state)))};
+    return {{Code::ready, ""}, std::unique_ptr<EntityStore>(new EntityStore(readStore(path, false)))};
+  } catch (const std::invalid_argument & error) {
+    return {{Code::invalid_store, error.what()}, nullptr};
+  } catch (const std::exception & error) {
+    return {{Code::storage_error, error.what()}, nullptr};
+  }
+}
+
+/** @brief 在同一只读事务中提供实体、关系和待定位请求。 */
+EntityStoreOpenResult openEntityStoreSnapshot(const std::filesystem::path & path)
+{
+  try {
+    return {{Code::ready, ""}, std::unique_ptr<EntityStore>(new EntityStore(readStore(path, true)))};
   } catch (const std::invalid_argument & error) {
     return {{Code::invalid_store, error.what()}, nullptr};
   } catch (const std::exception & error) {
@@ -540,9 +626,17 @@ EntityStoreResult EntityStore::insertEntity(
       "(entity_id,kind,label,revision,status,pending_reason,location_linked_at_revision,details_json) "
       "VALUES(?1,?2,?3,1,?4,?5,CASE WHEN ?4='located' THEN 1 END,?6)");
     row.bind(1, entity.entity_id);
-    row.bind(2, entity.kind == EntityKind::object ? "object" : "region");
+    if (entity.kind == EntityKind::object) {
+      row.bind(2, "object");
+    } else {
+      row.bind(2, "region");
+    }
     row.bind(3, entity.semantic_label);
-    row.bind(4, entity.status == EntityStatus::located ? "located" : "pending_location");
+    if (entity.status == EntityStatus::located) {
+      row.bind(4, "located");
+    } else {
+      row.bind(4, "pending_location");
+    }
     row.bindOptional(5, entity.location_pending_reason);
     row.bind(6, entity.details_json);
     try {
@@ -574,6 +668,7 @@ EntityStoreResult EntityStore::appendEntityObservation(
   try {
     auto * db = state_->db.get();
     Transaction transaction(db);
+    if (entityRetired(db, entity_id)) {return {Code::not_found, "Entity was retired"};}
     EntityKind kind;
     std::int64_t revision;
     {
@@ -634,6 +729,22 @@ EntityStoreResult EntityStore::resolveEntityLocation(
   std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
   const EntityStoreContext & dataset, const Observation & observation)
 {
+  return setEntityLocation(entity_id, expected_revision, selected, dataset, observation, false);
+}
+
+/** @brief 人工可换用同一实体上已验证的定位证据。 */
+EntityStoreResult EntityStore::reselectEntityLocation(
+  std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
+  const EntityStoreContext & dataset, const Observation & observation)
+{
+  return setEntityLocation(entity_id, expected_revision, selected, dataset, observation, true);
+}
+
+/** @brief 核对位置证据，原子更新代表点及关系复核状态。 */
+EntityStoreResult EntityStore::setEntityLocation(
+  std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
+  const EntityStoreContext & dataset, const Observation & observation, bool allow_reselection)
+{
   const auto & bound = context();
   if (!matchesDataset(dataset, bound)) {
     return {Code::dataset_mismatch, "Dataset differs from the store binding"};
@@ -646,8 +757,10 @@ EntityStoreResult EntityStore::resolveEntityLocation(
   try {
     auto * db = state_->db.get();
     Transaction transaction(db);
+    if (entityRetired(db, entity_id)) {return {Code::not_found, "Entity was retired"};}
     EntityKind kind;
     std::int64_t revision;
+    std::optional<std::int64_t> previous_location;
     {
       Statement current(db, "SELECT kind,revision,status,pending_reason,location_linked_at_revision "
         "FROM entities WHERE entity_id=?1");
@@ -661,12 +774,12 @@ EntityStoreResult EntityStore::resolveEntityLocation(
       }
       const auto status = current.text(2);
       const auto pending_reason = current.optionalText(3);
-      const auto current_location = current.optionalInteger(4);
-      if (status == "located" && !pending_reason && current_location &&
-        *current_location > 0 && *current_location <= revision) {
-        return {Code::already_located, "Entity already has a selected location"};
-      }
-      if (status != "pending_location" || !pending_reason || !validText(*pending_reason) || current_location) {
+      previous_location = current.optionalInteger(4);
+      const bool located = status == "located" && !pending_reason && previous_location &&
+        *previous_location > 0 && *previous_location <= revision;
+      if (located && !allow_reselection) {return {Code::already_located, "Entity already has a selected location"};}
+      if (!located && (status != "pending_location" || !pending_reason ||
+        !validText(*pending_reason) || previous_location)) {
         return {Code::invalid_store, "Invalid stored entity location state"};
       }
     }
@@ -705,8 +818,9 @@ EntityStoreResult EntityStore::resolveEntityLocation(
       return {Code::invalid_entity, "Entity revision limit reached"};
     }
 
+    if (previous_location == linked_at_revision) {return {Code::already_linked, "This location is already selected"};}
     Statement resolve(db, "UPDATE entities SET revision=?1,status='located',pending_reason=NULL,"
-      "location_linked_at_revision=?2 WHERE entity_id=?3 AND revision=?4 AND status='pending_location'");
+      "location_linked_at_revision=?2 WHERE entity_id=?3 AND revision=?4");
     resolve.bindInteger(1, revision + 1);
     resolve.bindInteger(2, linked_at_revision);
     resolve.bind(3, entity_id);
@@ -864,7 +978,12 @@ EntityStoreResult EntityStore::updateEntityFields(
 /** @brief 使用现有主键索引列出实体，搜索逻辑由工具决定。 */
 std::vector<std::string> EntityStore::listEntityIds() const
 {
-  Statement row(state_->db.get(), "SELECT entity_id FROM entities ORDER BY entity_id");
+  auto * db = state_->db.get();
+  const char * sql = "SELECT entity_id FROM entities ORDER BY entity_id";
+  if (pragma(db, "PRAGMA user_version") >= kSchemaVersion) {
+    sql = "SELECT entity_id FROM entities WHERE retired=0 ORDER BY entity_id";
+  }
+  Statement row(db, sql);
   std::vector<std::string> ids;
   while (row.step()) {ids.push_back(row.text(0));}
   return ids;
@@ -876,8 +995,12 @@ namespace
 void orderEndpoints(std::string_view type, std::vector<std::string> & ids)
 {
   const bool connects = type == "connects_regions";
+  std::size_t endpoint_count = 2;
+  if (connects) {
+    endpoint_count = 3;
+  }
   if ((type != "near" && type != "inside" && type != "on" && type != "hanging_on" && !connects) ||
-    ids.size() != (connects ? 3U : 2U) || ids[0] == ids[1] ||
+    ids.size() != endpoint_count || ids[0] == ids[1] ||
     (connects && (ids[0] == ids[2] || ids[1] == ids[2])))
   {
     throw std::invalid_argument("Invalid relation type or endpoints");
@@ -892,19 +1015,19 @@ void bindRelationKey(Statement & row, std::string_view type, const std::vector<s
   row.bind(1, type);
   row.bind(2, ids[0]);
   row.bind(3, ids[1]);
-  row.bind(4, ids.size() == 3 ? std::string_view(ids[2]) : std::string_view{});
+  if (ids.size() == 3) {
+    row.bind(4, ids[2]);
+  } else {
+    row.bind(4, std::string_view{});
+  }
 }
 }  // namespace
 
-/** @brief 通过复合主键恢复可回查的关系。 */
-std::optional<EntityRelation> EntityStore::findRelation(std::string_view type, std::vector<std::string> ids) const
+namespace
 {
-  orderEndpoints(type, ids);
-  Statement row(state_->db.get(), "SELECT geometry_revision,evidence_json,basis,evidence_ref,"
-    "recognition_state,revision,distance_m,threshold_m,dimension FROM entity_relations "
-    "WHERE predicate=?1 AND subject_id=?2 AND target_id=?3 AND extra_id=?4");
-  bindRelationKey(row, type, ids);
-  if (!row.step()) {return std::nullopt;}
+/** @brief 用同一列顺序解码单条查询或批量枚举的关系。 */
+EntityRelation readRelation(const Statement & row, std::string_view type, std::vector<std::string> ids)
+{
   EntityRelation relation;
   relation.type = type;
   relation.entity_ids = std::move(ids);
@@ -918,6 +1041,131 @@ std::optional<EntityRelation> EntityStore::findRelation(std::string_view type, s
   relation.threshold_m = row.optionalReal(7);
   relation.dimension = row.text(8);
   return relation;
+}
+}  // namespace
+
+namespace
+{
+/** @brief 恢复一条完整人工标注，NULL 表示名称或备注未设置。 */
+EntityAnnotation readAnnotation(const Statement & row)
+{
+  const auto revision = row.integer(1);
+  if (revision <= 0) {throw std::invalid_argument("Invalid stored annotation revision");}
+  return {row.text(0), static_cast<std::uint64_t>(revision), row.optionalText(2),
+    Json::parse(row.text(3)).get<std::vector<std::string>>(), row.optionalText(4)};
+}
+}  // namespace
+
+/** @brief 用实体主键读取人工标注，v6 工作库视为尚无标注。 */
+std::optional<EntityAnnotation> EntityStore::findEntityAnnotation(std::string_view entity_id) const
+{
+  auto * db = state_->db.get();
+  if (pragma(db, "PRAGMA user_version") < kAnnotationSchemaVersion || entityRetired(db, entity_id)) {
+    return std::nullopt;
+  }
+  Statement row(db, "SELECT entity_id,annotation_revision,display_name,aliases_json,note "
+    "FROM entity_annotations WHERE entity_id=?1");
+  row.bind(1, entity_id);
+  if (!row.step()) {return std::nullopt;}
+  return readAnnotation(row);
+}
+
+/** @brief 按键顺序一次读完当前标注，调用方可按实体 ID 建立索引。 */
+std::vector<EntityAnnotation> EntityStore::listEntityAnnotations() const
+{
+  auto * db = state_->db.get();
+  const auto schema = pragma(db, "PRAGMA user_version");
+  if (schema < kAnnotationSchemaVersion) {return {};}
+  const char * sql =
+    "SELECT entity_id,annotation_revision,display_name,aliases_json,note FROM entity_annotations ORDER BY entity_id";
+  if (schema >= kSchemaVersion) {
+    sql = "SELECT entity_id,annotation_revision,display_name,aliases_json,note "
+      "FROM entity_annotations JOIN entities USING(entity_id) WHERE retired=0 ORDER BY entity_id";
+  }
+  Statement row(db, sql);
+  std::vector<EntityAnnotation> annotations;
+  while (row.step()) {annotations.push_back(readAnnotation(row));}
+  return annotations;
+}
+
+/** @brief 在单事务中验证实体与期望修订，必要时升级 v6 库并保存下一个修订。 */
+EntityStoreResult EntityStore::writeEntityAnnotation(const EntityAnnotation & annotation)
+{
+  if (!validText(annotation.entity_id) || (annotation.display_name && !validText(*annotation.display_name)) ||
+    (annotation.note && !validText(*annotation.note)) ||
+    !std::all_of(annotation.aliases.begin(), annotation.aliases.end(), validText) ||
+    annotation.annotation_revision >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    return {Code::invalid_entity, "Invalid annotation fields or revision"};
+  }
+  return writeAtomically([&]() -> EntityStoreResult {
+    auto * db = state_->db.get();
+    {
+      Statement entity(db, "SELECT 1 FROM entities WHERE entity_id=?1");
+      entity.bind(1, annotation.entity_id);
+      if (!entity.step() || entityRetired(db, annotation.entity_id)) {
+        return {Code::not_found, "Entity ID not found"};
+      }
+    }
+    const auto existing = findEntityAnnotation(annotation.entity_id);
+    std::uint64_t current = 0;
+    if (existing) {
+      current = existing->annotation_revision;
+    }
+    if (current != annotation.annotation_revision) {
+      return {Code::revision_conflict, "Annotation revision has changed"};
+    }
+    if (current == 0 && !annotation.display_name && annotation.aliases.empty() && !annotation.note) {
+      return {Code::invalid_entity, "A new annotation needs a name, alias or note"};
+    }
+    if (pragma(db, "PRAGMA user_version") < kAnnotationSchemaVersion) {upgradeSchema(db, kAnnotationSchemaVersion);}
+    Statement row(db, "INSERT INTO entity_annotations VALUES(?1,?2,?3,?4,?5) "
+      "ON CONFLICT(entity_id) DO UPDATE SET annotation_revision=excluded.annotation_revision,"
+      "display_name=excluded.display_name,aliases_json=excluded.aliases_json,note=excluded.note");
+    row.bind(1, annotation.entity_id);
+    row.bindInteger(2, static_cast<std::int64_t>(current + 1));
+    row.bindOptional(3, annotation.display_name);
+    row.bind(4, Json(annotation.aliases).dump());
+    row.bindOptional(5, annotation.note);
+    row.writeOne();
+    return {Code::ready, ""};
+  });
+}
+
+/** @brief 按规范化关系键读取单条关系。 */
+std::optional<EntityRelation> EntityStore::findRelation(std::string_view type, std::vector<std::string> ids) const
+{
+  orderEndpoints(type, ids);
+  Statement row(state_->db.get(), "SELECT geometry_revision,evidence_json,basis,evidence_ref,"
+    "recognition_state,revision,distance_m,threshold_m,dimension FROM entity_relations "
+    "WHERE predicate=?1 AND subject_id=?2 AND target_id=?3 AND extra_id=?4");
+  bindRelationKey(row, type, ids);
+  if (!row.step()) {return std::nullopt;}
+  return readRelation(row, type, std::move(ids));
+}
+
+/** @brief 顺序读取关系，保留 connects_regions 的额外端点。 */
+std::vector<EntityRelation> EntityStore::listRelations() const
+{
+  Statement row(state_->db.get(), "SELECT geometry_revision,evidence_json,basis,evidence_ref,"
+    "recognition_state,revision,distance_m,threshold_m,dimension,predicate,subject_id,target_id,extra_id "
+    "FROM entity_relations ORDER BY predicate,subject_id,target_id,extra_id");
+  std::vector<EntityRelation> relations;
+  while (row.step()) {
+    std::vector<std::string> ids{row.text(10), row.text(11)};
+    const auto extra = row.text(12);
+    if (!extra.empty()) {ids.push_back(extra);}
+    relations.push_back(readRelation(row, row.text(9), std::move(ids)));
+  }
+  return relations;
+}
+
+/** @brief 读取发布报告所需的待定位请求与原证据。 */
+std::vector<std::pair<std::string, std::string>> EntityStore::listPending() const
+{
+  Statement row(state_->db.get(), "SELECT pending_id,request_json FROM pending_entities ORDER BY pending_id");
+  std::vector<std::pair<std::string, std::string>> requests;
+  while (row.step()) {requests.emplace_back(row.text(0), row.text(1));}
+  return requests;
 }
 
 /** @brief 保存已核验来源的关系，保留修订并让已确认的 inside 成为空间归属来源。 */
@@ -1004,11 +1252,57 @@ EntityStoreResult EntityStore::recordRelation(EntityRelation relation)
   });
 }
 
+/** @brief 在纠错事务中将实体移出活动集合，并取消相关的当前关系。 */
+EntityStoreResult EntityStore::retireEntity(std::string_view entity_id, std::uint64_t expected_revision)
+{
+  auto * db = state_->db.get();
+  if (sqlite3_get_autocommit(db)) {return {Code::storage_error, "Retirement requires a correction transaction"};}
+  const auto current = loadEntity(entity_id);
+  if (!current.ok()) {return current;}
+  if (current.entity->revision != expected_revision) {return {Code::revision_conflict, "Entity revision has changed"};}
+  if (pragma(db, "PRAGMA user_version") < kSchemaVersion) {upgradeSchema(db);}
+  Statement deactivate(db, "UPDATE entities SET retired=1 WHERE entity_id=?1");
+  deactivate.bind(1, entity_id);
+  deactivate.writeOne();
+  Statement remove(db, "DELETE FROM entity_relations WHERE subject_id=?1 OR target_id=?1 OR extra_id=?1");
+  remove.bind(1, entity_id);
+  remove.step();
+  return {Code::ready, ""};
+}
+
+/** @brief 与实体纠错同事务保存历史，并返回本条历史序号。 */
+std::int64_t EntityStore::insertCorrection(std::string_view record_json)
+{
+  auto * db = state_->db.get();
+  if (sqlite3_get_autocommit(db)) {throw std::logic_error("Correction history requires a transaction");}
+  if (pragma(db, "PRAGMA user_version") < kSchemaVersion) {upgradeSchema(db);}
+  Statement insert(db, "INSERT INTO memory_corrections(record_json) VALUES(?1)");
+  insert.bind(1, record_json);
+  insert.writeOne();
+  return sqlite3_last_insert_rowid(db);
+}
+
+/** @brief 新库按提交顺序回读纠错历史，旧库返回空列表。 */
+std::vector<std::pair<std::int64_t, std::string>> EntityStore::listCorrections() const
+{
+  auto * db = state_->db.get();
+  if (pragma(db, "PRAGMA user_version") < kSchemaVersion) {return {};}
+  Statement row(db, "SELECT correction_id,record_json FROM memory_corrections ORDER BY correction_id");
+  std::vector<std::pair<std::int64_t, std::string>> records;
+  while (row.step()) {records.emplace_back(row.integer(0), row.text(1));}
+  return records;
+}
+
 /** @brief 将待处理请求和原始证据保存到工作库，供之后定位或发布报告。 */
-EntityStoreResult EntityStore::savePending(std::string_view pending_id, std::string_view request_json)
+EntityStoreResult EntityStore::savePending(
+  std::string_view pending_id, std::string_view request_json, bool update)
 {
   return writeAtomically([&]() -> EntityStoreResult {
-    Statement row(state_->db.get(), "INSERT INTO pending_entities VALUES(?1,?2)");
+    const char * sql = "INSERT INTO pending_entities VALUES(?1,?2)";
+    if (update) {
+      sql = "UPDATE pending_entities SET request_json=?2 WHERE pending_id=?1";
+    }
+    Statement row(state_->db.get(), sql);
     row.bind(1, pending_id);
     row.bind(2, request_json);
     row.writeOne();
@@ -1093,6 +1387,9 @@ EntityStoreResult EntityStore::saveBuildProgress(
 EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
 {
   try {
+    if (entityRetired(state_->db.get(), entity_id)) {
+      return {{Code::not_found, "Entity was retired"}, std::nullopt};
+    }
     Statement query(state_->db.get(), "SELECT e.kind,e.label,e.revision,e.status,e.pending_reason,"
       "o.observation_id,o.observation_revision,o.source_manifest_sha256,o.evidence_json,o.linked_at_revision,"
       "e.location_linked_at_revision,(SELECT target_id FROM entity_relations "
@@ -1108,8 +1405,12 @@ EntityStoreLoadResult EntityStore::loadEntity(std::string_view entity_id) const
       return {{Code::invalid_store, "Invalid entity status or revision"}, std::nullopt};
     }
     const auto & binding = context();
+    auto entity_status = EntityStatus::pending_location;
+    if (status == "located") {
+      entity_status = EntityStatus::located;
+    }
     Entity entity{std::string(entity_id), kind,
-      query.text(1), status == "located" ? EntityStatus::located : EntityStatus::pending_location,
+      query.text(1), entity_status,
       static_cast<std::uint64_t>(revision), binding.map_id, binding.map_frame, binding.geometry_revision,
       {}, query.optionalText(4)};
     if (!validEntity(entity)) {return {{Code::invalid_store, "Invalid stored entity"}, std::nullopt};}

@@ -45,6 +45,8 @@ void restoreLegacyEntityTable(const fs::path & file)
   execute(file, R"sql(
     PRAGMA foreign_keys = OFF;
     BEGIN;
+    DROP TABLE memory_corrections;
+    DROP TABLE entity_annotations;
     DROP TABLE entity_relations;
     DROP TABLE pending_entities;
     DROP TABLE tool_calls;

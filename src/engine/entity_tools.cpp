@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -36,13 +39,27 @@ Json failure(const EntityStoreResult & result)
 }
 
 /** @brief 校验修订号后用于乐观锁，避免小数和负数隐式转换。 */
-std::uint64_t revision(const Json & args)
+std::uint64_t revision(const Json & args, const char * key = "expected_revision")
 {
-  const auto & value = args.at("expected_revision");
+  const auto & value = args.at(key);
   if (!value.is_number_integer() || value <= 0) {
-    throw std::invalid_argument("expected_revision must be a positive integer");
+    throw std::invalid_argument(std::string(key) + " must be a positive integer");
   }
   return value.get<std::uint64_t>();
+}
+
+/** @brief 拒绝从其他操作误传的字段，避免部分执行或误撤回。 */
+void checkKeys(const Json & args, std::initializer_list<std::string_view> fields,
+  std::initializer_list<std::string_view> shared = {})
+{
+  if (!args.is_object()) {throw std::invalid_argument("Expected an object");}
+  for (const auto & field : args.items()) {
+    const std::string_view key = field.key();
+    if (std::find(fields.begin(), fields.end(), key) == fields.end() &&
+      std::find(shared.begin(), shared.end(), key) == shared.end()) {
+      throw std::invalid_argument("Unexpected field: " + field.key());
+    }
+  }
 }
 
 /** @brief 解析关系或观测使用的真实 ID，找不到时提前退出。 */
@@ -74,20 +91,35 @@ void applyFields(Json & details, const Json & fields)
   }
 }
 
-/** @brief 将观测证据及实测代表点整理为工具返回值。 */
+}  // namespace
+
+/** @brief 将实测代表点和观测证据整理为工具与发布共用记录。 */
 Json describeEntity(const Entity & entity)
 {
   auto out = Json::parse(entity.details_json);
   out["id"] = entity.entity_id;
   out["entity_id"] = entity.entity_id;
-  out["kind"] = entity.kind == EntityKind::object ? "object" : "region";
+  out["kind"] = "region";
+  if (entity.kind == EntityKind::object) {
+    out["kind"] = "object";
+  }
   out["semantic_label"] = entity.semantic_label;
   out["revision"] = entity.revision;
-  out["region_id"] = entity.region_id ? Json(*entity.region_id) : Json(nullptr);
+  out["region_id"] = nullptr;
+  if (entity.region_id) {
+    out["region_id"] = *entity.region_id;
+  }
   const auto position = selectedEntityPoint(entity);
-  out["position_map"] = position ? Json(*position) : Json(nullptr);
+  out["position_map"] = nullptr;
   if (position) {
-    out["geometry_quality"] = entity.kind == EntityKind::object ? "visible_surface_estimate" : "confirmed_interior";
+    out["position_map"] = *position;
+  }
+  if (position) {
+    if (entity.kind == EntityKind::object) {
+      out["geometry_quality"] = "visible_surface_estimate";
+    } else {
+      out["geometry_quality"] = "confirmed_interior";
+    }
   }
   out["geometry_revision"] = entity.geometry_revision;
   auto refs = Json::array();
@@ -127,6 +159,22 @@ Json describeRelation(const EntityRelation & relation)
   return out;
 }
 
+/** @brief 将拥有型人工标注整理成查询和发布共用的 JSON 记录。 */
+Json describeAnnotation(const EntityAnnotation & annotation)
+{
+  Json result{{"entity_id", annotation.entity_id}, {"annotation_revision", annotation.annotation_revision},
+    {"display_name", nullptr}, {"aliases", annotation.aliases}, {"note", nullptr}};
+  if (annotation.display_name) {
+    result["display_name"] = *annotation.display_name;
+  }
+  if (annotation.note) {
+    result["note"] = *annotation.note;
+  }
+  return result;
+}
+
+namespace
+{
 /** @brief 根据投影工具回传的原始深度像素，复用现有实体创建器生成可回查的证据。 */
 Entity buildView(
   const ObservationDatasetReader & dataset, const fs::path & root, const Json & view,
@@ -233,7 +281,10 @@ EntityStoreResult writeRelations(EntityStore & store, const std::vector<EntityRe
     if (!saved.ok()) {return saved;}
     changed = changed || saved.code == Code::ready;
   }
-  return {changed ? Code::ready : Code::already_linked, ""};
+  if (changed) {
+    return {Code::ready, ""};
+  }
+  return {Code::already_linked, ""};
 }
 
 /** @brief 在更新结果中回读当前实体和实际保存的关系。 */
@@ -278,20 +329,24 @@ Json createEntity(
   }
   auto details = Json{{"recognition_state", "supported"}};
   applyFields(details, args);
-  auto views = buildViews(dataset, root, args.at("add_observations"),
-    kind == "object" ? EntityKind::object : EntityKind::region, label);
+  auto entity_kind = EntityKind::region;
+  if (kind == "object") {
+    entity_kind = EntityKind::object;
+  }
+  auto views = buildViews(dataset, root, args.at("add_observations"), entity_kind, label);
   if (views.empty()) {throw std::invalid_argument("Create requires at least one observation");}
   const auto anchor = std::find_if(views.begin(), views.end(), [](const Entity & view) {
       return view.status == EntityStatus::located;
     });
   if (anchor == views.end()) {
-    const auto id = pending_id.empty() ? views.front().entity_id : std::string(pending_id);
+    std::string id(pending_id);
+    if (pending_id.empty()) {
+      id = views.front().entity_id;
+    }
     auto pending = args;
     pending["location_pending_reason"] = views.front().location_pending_reason.value_or("location_unavailable");
-    if (pending_id.empty()) {
-      const auto saved = store.savePending(id, pending.dump());
-      if (!saved.ok()) {return failure(saved);}
-    }
+    const auto saved = store.savePending(id, pending.dump(), !pending_id.empty());
+    if (!saved.ok()) {return failure(saved);}
     return {{"status", "pending_location"}, {"pending_id", id}, {"reason", pending.at("location_pending_reason")}};
   }
   if (locationConflict(*anchor, views, near.threshold_m)) {
@@ -315,7 +370,10 @@ Json createEntity(
     if (!related.ok() || pending_id.empty()) {return related;}
     return store.removePending(pending_id);
   });
-  return result.ok() ? describeWrite(store, id, relations) : failure(result);
+  if (result.ok()) {
+    return describeWrite(store, id, relations);
+  }
+  return failure(result);
 }
 
 /** @brief 在待定位记录上优先使用本次提交的证据，保留其他帧的引用。 */
@@ -412,13 +470,310 @@ Json updateEntity(
     }
     return related;
   });
-  return result.ok() ? describeWrite(store, id, relations) : failure(result);
+  if (result.ok()) {
+    return describeWrite(store, id, relations);
+  }
+  return failure(result);
 }
 
-/** @brief 按名称、描述和可选空间过滤，返回位置和观测引用。 */
+/** @brief 保存实体和选中的定位证据供纠错历史回读。 */
+Json correctionSnapshot(const EntityStore & store, const Entity & entity)
+{
+  auto out = describeEntity(entity);
+  out["status"] = "pending_location";
+  if (entity.status == EntityStatus::located) {
+    out["status"] = "located";
+  }
+  if (entity.location_pending_reason) {out["location_pending_reason"] = *entity.location_pending_reason;}
+  if (entity.location_observation) {
+    const auto & ref = *entity.location_observation;
+    out["location_observation"] = {{"observation_id", ref.observation_id},
+      {"observation_revision", ref.observation_revision}};
+  }
+  if (const auto annotation = store.findEntityAnnotation(entity.entity_id)) {
+    out["annotation"] = describeAnnotation(*annotation);
+  }
+  return out;
+}
+
+/** @brief 汇集即将修改或退出活动集合的实体对应的原关系。 */
+Json correctionRelations(const EntityStore & store, const std::vector<std::string> & affected)
+{
+  auto out = Json::array();
+  for (const auto & relation : store.listRelations()) {
+    for (const auto & end : relation.entity_ids) {
+      if (std::find(affected.begin(), affected.end(), end) == affected.end()) {continue;}
+      out.push_back(describeRelation(relation));
+      break;
+    }
+  }
+  return out;
+}
+
+/** @brief 合并到目标 ID。不同选区占用同一观测键时，由证据写入器返回冲突。 */
+EntityStoreResult mergeEntities(EntityStore & store, const ObservationDatasetReader & dataset,
+  const Entity & target, const Entity & source)
+{
+  if (target.kind != source.kind || target.entity_id == source.entity_id) {
+    return {Code::invalid_entity, "Merge requires two distinct entities of the same kind"};
+  }
+  auto current = target.revision;
+  for (const auto & ref : source.observations) {
+    const auto linked = appendObservedEvidence(store, dataset, target.entity_id, current, ref);
+    if (!linked.ok()) {return linked;}
+    if (linked.code == Code::ready) {++current;}
+  }
+  if (!target.location_observation && source.location_observation) {
+    const auto located = resolveEntityLocation(store, dataset, target.entity_id, current, *source.location_observation);
+    if (!located.ok()) {return located;}
+    ++current;
+  }
+  if (current == target.revision) {
+    const auto bumped = store.updateEntityFields(
+      target.entity_id, current, target.semantic_label, target.details_json, true);
+    if (!bumped.ok()) {return bumped;}
+  }
+  return store.retireEntity(source.entity_id, source.revision);
+}
+
+/** @brief 判断观测本身是否保存地图代表点，供拆分选择首条证据。 */
+bool locatedEvidence(const EntityObservationRef & ref)
+{
+  return (ref.object_selection && ref.object_selection->representative) ||
+    (ref.region_interior && ref.region_interior->body_anchor);
+}
+
+/** @brief 复用首条观测建实体，再追加该组的其余证据。 */
+EntityStoreResult createSplitPart(EntityStore & store, const ObservationDatasetReader & dataset,
+  const Entity & source, const std::string & label, const std::vector<const EntityObservationRef *> & refs,
+  std::vector<std::string> & children)
+{
+  auto first = std::find_if(refs.begin(), refs.end(), [](const auto * ref) {return locatedEvidence(*ref);});
+  if (first == refs.end()) {first = refs.begin();}
+  const auto id = allocateEntityId();
+  if (!id) {return {Code::storage_error, "Cannot allocate entity ID"};}
+  Entity child{*id, source.kind, label, EntityStatus::pending_location, 1,
+    source.map_id, source.map_frame, source.geometry_revision, {**first}, "split_evidence_unlocated"};
+  if (locatedEvidence(**first)) {
+    child.status = EntityStatus::located;
+    child.location_pending_reason.reset();
+    child.location_observation = EntityLocationRef{(*first)->observation_id, (*first)->observation_revision};
+  }
+  const auto inserted = insertObservedEntity(store, dataset, child);
+  if (!inserted.ok()) {return inserted;}
+  auto revision = child.revision;
+  for (const auto * ref : refs) {
+    if (ref == *first) {continue;}
+    const auto linked = appendObservedEvidence(store, dataset, *id, revision, *ref);
+    if (!linked.ok()) {return linked;}
+    if (linked.code == Code::ready) {++revision;}
+  }
+  children.push_back(*id);
+  return {Code::ready, ""};
+}
+
+/** @brief 按请求的无交集观测分组创建新 ID，所有原证据必须恰好出现一次。 */
+EntityStoreResult splitEntity(EntityStore & store, const ObservationDatasetReader & dataset,
+  const Entity & source, const Json & parts, std::vector<std::string> & children)
+{
+  if (!parts.is_array() || parts.size() < 2) {throw std::invalid_argument("Split requires at least two parts");}
+  std::map<std::string, const EntityObservationRef *> remaining;
+  for (const auto & ref : source.observations) {remaining.emplace(ref.observation_id, &ref);}
+  for (const auto & part : parts) {
+    checkKeys(part, {"semantic_label", "observation_ids"});
+    const auto label = part.at("semantic_label").get<std::string>();
+    const auto ids = part.at("observation_ids").get<std::vector<std::string>>();
+    if (ids.empty()) {throw std::invalid_argument("Each split part needs observation IDs");}
+    std::vector<const EntityObservationRef *> refs;
+    for (const auto & id : ids) {
+      const auto match = remaining.find(id);
+      if (match == remaining.end()) {
+        return {Code::invalid_reference, "Split observations must belong to the source and appear once"};
+      }
+      refs.push_back(match->second);
+      remaining.erase(match);
+    }
+    const auto created = createSplitPart(store, dataset, source, label, refs, children);
+    if (!created.ok()) {return created;}
+  }
+  if (!remaining.empty()) {return {Code::invalid_reference, "Split must assign every source observation"};}
+  return store.retireEntity(source.entity_id, source.revision);
+}
+
+/** @brief 沿用既有实体写入，并允许人工从已保存证据重新选择代表点。 */
+Json correctFields(EntityStore & store, const ObservationDatasetReader & dataset,
+  const fs::path & root, const NearOptions & near, const Json & args, const Entity & before)
+{
+  if (args.contains("set_fields") || args.contains("add_observations") || args.contains("relations")) {
+    const auto reply = updateEntity(store, dataset, root, near, args);
+    if (reply.at("status") != "ok") {return reply;}
+  }
+  if (args.contains("location_observation_id")) {
+    const auto current = store.loadEntity(before.entity_id);
+    if (!current.ok()) {return failure(current);}
+    const auto obs = readObservation(dataset, args.at("location_observation_id").get<std::string>());
+    const auto chosen = store.reselectEntityLocation(before.entity_id, current.entity->revision, {obs.id, obs.revision},
+      store.context(), obs);
+    if (!chosen.ok()) {return failure(chosen);}
+  }
+  const auto after = store.loadEntity(before.entity_id);
+  if (!after.ok()) {return failure(after);}
+  if (after.entity->revision == before.revision) {
+    return {{"status", "invalid_request"}, {"message", "Correction made no changes"}};
+  }
+  return {{"status", "ok"}};
+}
+
+/** @brief 为每种纠错操作限制相应字段。 */
+void checkCorrectionKeys(const Json & args, std::string_view operation)
+{
+  const std::initializer_list<std::string_view> common{"operation", "entity_id", "expected_revision", "reason"};
+  if (operation == "update") {
+    checkKeys(args, {"set_fields", "add_observations", "relations", "location_observation_id"}, common);
+  } else if (operation == "merge") {
+    checkKeys(args, {"source_entity_id", "source_expected_revision"}, common);
+  } else if (operation == "split") {
+    checkKeys(args, {"parts"}, common);
+  } else if (operation == "retract") {
+    checkKeys(args, {}, common);
+  } else {
+    throw std::invalid_argument("Expected update, retract, merge or split");
+  }
+}
+
+/** @brief 在当前事务内执行一次完整纠错并记录改动前后的证据关联。 */
+Json applyCorrection(EntityStore & store, const ObservationDatasetReader & dataset, const fs::path & root,
+  const NearOptions & near, const Json & args)
+{
+  const auto op = args.at("operation").get<std::string>();
+  checkCorrectionKeys(args, op);
+  const auto id = args.at("entity_id").get<std::string>();
+  const auto reason = args.at("reason").get<std::string>();
+  if (reason.size() > 4096 || reason.find_first_not_of(" \t\r\n") == std::string::npos) {
+    throw std::invalid_argument("A correction reason of at most 4096 bytes is required");
+  }
+  const auto loaded = store.loadEntity(id);
+  if (!loaded.ok()) {return failure(loaded);}
+  const auto & current = *loaded.entity;
+  if (current.revision != revision(args)) {return failure({Code::revision_conflict, "Entity revision has changed"});}
+
+  auto before = Json::array({correctionSnapshot(store, current)});
+  std::vector<std::string> affected{id};
+  std::optional<Entity> source;
+  if (op == "merge") {
+    const auto other = store.loadEntity(args.at("source_entity_id").get<std::string>());
+    if (!other.ok()) {return failure(other);}
+    if (other.entity->revision != revision(args, "source_expected_revision")) {
+      return failure({Code::revision_conflict, "Source entity revision has changed"});
+    }
+    source = std::move(*other.entity);
+    affected.push_back(source->entity_id);
+    before.push_back(correctionSnapshot(store, *source));
+  }
+  const auto relations = correctionRelations(store, affected);
+
+  EntityStoreResult changed{Code::ready, ""};
+  std::vector<std::string> remaining;
+  std::vector<std::string> retired;
+  if (op == "update") {
+    const auto updated = correctFields(store, dataset, root, near, args, current);
+    if (updated.at("status") != "ok") {return updated;}
+    remaining.push_back(id);
+  } else if (op == "merge") {
+    changed = mergeEntities(store, dataset, current, *source);
+    remaining.push_back(id);
+    retired.push_back(source->entity_id);
+  } else if (op == "split") {
+    changed = splitEntity(store, dataset, current, args.at("parts"), remaining);
+    retired.push_back(id);
+  } else {
+    // 其余操作已经由 checkCorrectionKeys 限定为 retract。
+    changed = store.retireEntity(id, current.revision);
+    retired.push_back(id);
+  }
+  if (!changed.ok()) {return failure(changed);}
+
+  auto after = Json::array();
+  for (const auto & active : remaining) {
+    const auto stored = store.loadEntity(active);
+    if (!stored.ok()) {return failure(stored);}
+    after.push_back(correctionSnapshot(store, *stored.entity));
+  }
+  const auto correction_id = store.insertCorrection(Json{{"operation", op}, {"reason", reason},
+    {"before", before}, {"after", after}, {"relations_before", relations}, {"retired_entity_ids", retired}}.dump());
+  return {{"status", "ok"}, {"operation", op}, {"correction_id", correction_id},
+    {"entities", std::move(after)}, {"retired_entity_ids", retired}};
+}
+
+/** @brief 将修改、撤回和历史封在同一个 SQLite 事务中。 */
+Json correctEntity(EntityStore & store, const ObservationDatasetReader & dataset, const fs::path & root,
+  const NearOptions & near, const Json & args)
+{
+  Json reply;
+  const auto saved = store.writeAtomically([&]() -> EntityStoreResult {
+    try {
+      reply = applyCorrection(store, dataset, root, near, args);
+    } catch (const Json::exception & error) {
+      reply = {{"status", "invalid_request"}, {"message", error.what()}};
+    } catch (const std::invalid_argument & error) {
+      reply = {{"status", "invalid_request"}, {"message", error.what()}};
+    }
+    if (reply.at("status") == "ok") {return {Code::ready, ""};}
+    return {Code::invalid_entity, "Correction was not applied"};
+  });
+  if (!saved.ok() && (reply.is_null() || reply.at("status") == "ok")) {return failure(saved);}
+  return reply;
+}
+
+/** @brief 解析可部分更新的标注字段，复用同一实体 ID 上的独立修订。 */
+Json annotateEntity(EntityStore & store, const Json & args)
+{
+  const auto id = args.at("entity_id").get<std::string>();
+  const auto & revision = args.at("expected_annotation_revision");
+  if (!revision.is_number_integer() || (!revision.is_number_unsigned() && revision.get<std::int64_t>() < 0)) {
+    throw std::invalid_argument("expected_annotation_revision must be a nonnegative integer");
+  }
+  checkKeys(args, {"entity_id", "expected_annotation_revision", "display_name", "aliases", "note"});
+  if (!args.contains("display_name") && !args.contains("aliases") && !args.contains("note")) {
+    throw std::invalid_argument("Provide display_name, aliases or note");
+  }
+  auto annotation = store.findEntityAnnotation(id).value_or(EntityAnnotation{});
+  annotation.entity_id = id;
+  if (annotation.annotation_revision != revision.get<std::uint64_t>()) {
+    if (annotation.annotation_revision == 0) {
+      const auto entity = store.loadEntity(id);
+      if (!entity.ok()) {return failure(entity);}
+    }
+    return failure({Code::revision_conflict, "Annotation revision has changed"});
+  }
+  for (const auto * key : {"display_name", "note"}) {
+    if (!args.contains(key)) {continue;}
+    auto * field = &annotation.note;
+    if (std::string_view(key) == "display_name") {
+      field = &annotation.display_name;
+    }
+    auto & target = *field;
+    const auto & value = args.at(key);
+    if (value.is_null()) {target.reset();}
+    else {target = value.get<std::string>();}
+  }
+  if (args.contains("aliases")) {annotation.aliases = args.at("aliases").get<std::vector<std::string>>();}
+  const auto saved = store.writeEntityAnnotation(annotation);
+  if (!saved.ok()) {return failure(saved);}
+  ++annotation.annotation_revision;
+  return {{"status", "ok"}, {"annotation", describeAnnotation(annotation)}};
+}
+
+/** @brief 按人工名称、别名及原语义过滤，返回位置和观测引用。 */
 Json searchEntities(EntityStore & store, const Json & args)
 {
   const auto query = args.value("query", std::string{});
+  std::map<std::string, EntityAnnotation> annotations;
+  auto saved = store.listEntityAnnotations();
+  for (auto & annotation : saved) {
+    const auto id = annotation.entity_id;
+    annotations.emplace(id, std::move(annotation));
+  }
   auto results = Json::array();
   for (const auto & id : store.listEntityIds()) {
     const auto loaded = store.loadEntity(id);
@@ -428,9 +783,18 @@ Json searchEntities(EntityStore & store, const Json & args)
     auto record = describeEntity(entity);
     const auto description = record.value("description", std::string{});
     const auto name = record.value("display_name", std::string{});
-    if (entity.semantic_label.find(query) != std::string::npos || description.find(query) != std::string::npos ||
-      name.find(query) != std::string::npos)
-    {
+    const auto annotation = annotations.find(id);
+    bool annotation_match = false;
+    if (annotation != annotations.end()) {
+      const auto & human = annotation->second;
+      /** @brief 沿用实体搜索的子串匹配。 */
+      const auto matches = [&](const std::string & value) {return value.find(query) != std::string::npos;};
+      annotation_match = (human.display_name && matches(*human.display_name)) ||
+        std::any_of(human.aliases.begin(), human.aliases.end(), matches);
+      record["annotation"] = describeAnnotation(human);
+    }
+    if (annotation_match || entity.semantic_label.find(query) != std::string::npos ||
+      description.find(query) != std::string::npos || name.find(query) != std::string::npos) {
       results.push_back(std::move(record));
     }
   }
@@ -477,7 +841,10 @@ Json spatialQuery(EntityStore & store, const NearOptions & defaults, const Json 
   const auto a = selectedEntityPoint(endpoints[0]);
   const auto b = selectedEntityPoint(endpoints[1]);
   if (!a || !b) {return failure({Code::location_unavailable, "Both entities need map positions"});}
-  const auto dz = dimension == "xyz" ? (*a)[2] - (*b)[2] : 0.0;
+  double dz = 0.0;
+  if (dimension == "xyz") {
+    dz = (*a)[2] - (*b)[2];
+  }
   const auto distance = std::hypot((*a)[0] - (*b)[0], (*a)[1] - (*b)[1], dz);
   if (!std::isfinite(distance)) {return failure({Code::invalid_entity, "Non-finite map distance"});}
   const bool related = distance <= threshold;
@@ -510,6 +877,8 @@ Json runEntityTool(
   if (name == "create_entity") {return createEntity(store, dataset, root, near, arguments);}
   if (name == "update_entity") {return updateEntity(store, dataset, root, near, arguments);}
   if (name == "spatial_query") {return spatialQuery(store, near, arguments);}
+  if (name == "memory_annotate") {return annotateEntity(store, arguments);}
+  if (name == "correct_memory") {return correctEntity(store, dataset, root, near, arguments);}
   return {{"status", "unknown_tool"}, {"message", "Unknown entity tool"}};
 }
 }  // namespace vln_memory

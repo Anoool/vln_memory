@@ -17,21 +17,23 @@ flowchart LR
   F["工具回执与批次恢复点"] --> E
 ~~~
 
-观测 ID 由录包、配对、两路原始消息、时钟和段构成，是不透明键。实体 ID 在证据追加和补定位后保留。实体选中的定位证据和新增观测分开记录，位姿变化或证据冲突可触发复核。
+项目 YAML 配置录制编号后，观测 ID 使用 obs2，由录制编号与两路原始消息的分卷、话题和序号组成。旧 `obs1` 仍按原来源元组读取。实体 ID 在证据追加和补定位后保留。实体选中的定位证据和新增观测分开记录，位姿变化或证据冲突可触发复核。
 
 ## 数据结构
 
 | `observation/1` 字段组 | 含义 |
 | --- | --- |
-| `id`、`revision`、`bag_id`、`pair_id`、`clock_id`、`segment_id` | 观测身份与修订，来源另用 `source_manifest_sha256` 绑定。 |
+| `id`、`recording_id`（新格式）、`revision`、`bag_id`、`pair_id`、`clock_id`、`segment_id` | 观测身份与修订，来源另用 `source_manifest_sha256` 绑定。 |
 | `map_id`、`map_frame`、`body_frame`、`geometry_revision`、`map_basis` | 地图上下文、几何版本与依据。 |
 | `stamp`、`rgb_stamp`、`depth_stamp`、`delta_ns` | 原始整数 `{sec,nanosec}`；`stamp` 取 RGB 时刻，`delta_ns = Depth − RGB`。 |
 | `rgb_image` / `depth_image`、`rgb_media` / `depth_media` | 各自话题、frame、网格、时间和媒体相对路径。对应的相机模型与原始标定独立保存。 |
 | `camera_pose_map`、`depth_camera_pose_map`、`body_pose_map` | 分别为 RGB、Depth、RGB 参考时刻的位姿和所用 TF 端点。 |
 | `depth_storage`、`capture_sync_status`、`depth_alignment`、`pending_reasons` | 深度格式、单位、比例及质量，以及同步、配准与待处理原因。消息证据保留原始来源和摘要。 |
 
-| SQLite 表（schema v6） | 内容 |
+| SQLite 表（schema v8） | 内容 |
 | --- | --- |
+| `entity_annotations` | 每个实体一条当前人工标注，含名称、别名、备注和独立修订号。v6 库首次保存标注时升级。 |
+| `memory_corrections` | 按提交顺序保留纠错理由、实体前后记录、原关系和撤回 ID。撤回标志保存在实体行。 |
 | `store_meta` | 观测集及来源清单摘要、地图、frame 和几何版本。 |
 | `entities` | 稳定 `entity_id`、`kind`（`object/region`）、标签、正整数修订、定位状态、业务字段和所选定位证据。 |
 | `entity_observations` | 观测 ID、修订、来源摘要、关联修订及 `evidence_json`。物品证据保存请求选区、深度像素和地图表面点；空间证据保存内部确认与底盘锚点。 |

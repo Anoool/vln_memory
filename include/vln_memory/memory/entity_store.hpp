@@ -68,6 +68,16 @@ struct EntityRelation
   std::string evidence_ref;
 };
 
+/** @brief 绑在稳定实体 ID 上的人工标注，与实体修订独立。 */
+struct EntityAnnotation
+{
+  std::string entity_id;
+  std::uint64_t annotation_revision{0};
+  std::optional<std::string> display_name;
+  std::vector<std::string> aliases;
+  std::optional<std::string> note;
+};
+
 /** @brief 请求与结果一起保存，便于检查重放是否确实对应同一调用。 */
 struct ToolCallRecord
 {
@@ -120,6 +130,20 @@ public:
     std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
     const EntityStoreContext & context, const Observation & observation);
 
+  /** @brief 人工重新选择已关联的定位证据，并让相关关系进入复核。 */
+  EntityStoreResult reselectEntityLocation(
+    std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
+    const EntityStoreContext & context, const Observation & observation);
+
+  /** @brief 在外层纠错事务中撤回实体，保留实体原行、证据和标注。 */
+  EntityStoreResult retireEntity(std::string_view entity_id, std::uint64_t expected_revision);
+
+  /** @brief 在外层纠错事务中追加历史，返回稳定序号。 */
+  std::int64_t insertCorrection(std::string_view record_json);
+
+  /** @brief 按提交序号读取已提交的纠错历史。 */
+  std::vector<std::pair<std::int64_t, std::string>> listCorrections() const;
+
   /** @brief 保存有确切观测证据的物品归属。重复归属可重试，已有不同归属返回冲突。 */
   EntityStoreResult recordInside(
     std::string_view object_id, std::string_view region_id,
@@ -139,14 +163,29 @@ public:
   /** @brief 按永久 ID 顺序列出工作库实体。 */
   std::vector<std::string> listEntityIds() const;
 
+  /** @brief 读取实体的当前人工标注，尚无标注时为空。 */
+  std::optional<EntityAnnotation> findEntityAnnotation(std::string_view entity_id) const;
+
+  /** @brief 按实体 ID 读取当前人工标注，供查询和版本导出。 */
+  std::vector<EntityAnnotation> listEntityAnnotations() const;
+
+  /** @brief 比对 annotation.annotation_revision 后原子写入下一修订，0 表示首次写入。 */
+  EntityStoreResult writeEntityAnnotation(const EntityAnnotation & annotation);
+
   /** @brief 写入有证据的语义关系，原子维护区域归属。 */
   EntityStoreResult recordRelation(EntityRelation relation);
 
   /** @brief 读取指定关系及其状态、证据和数值距离。 */
   std::optional<EntityRelation> findRelation(std::string_view type, std::vector<std::string> entity_ids) const;
 
+  /** @brief 按关系键顺序读取全部关系。 */
+  std::vector<EntityRelation> listRelations() const;
+
+  /** @brief 按 ID 顺序读取全部待定位请求。 */
+  std::vector<std::pair<std::string, std::string>> listPending() const;
+
   /** @brief 保存未定位的新实体请求及证据，供后续复核。 */
-  EntityStoreResult savePending(std::string_view pending_id, std::string_view request_json);
+  EntityStoreResult savePending(std::string_view pending_id, std::string_view request_json, bool update = false);
 
   /** @brief 读取一条待定位请求，或按写入顺序倒序读取最近四条。 */
   std::optional<std::string> findPending(std::string_view id) const;
@@ -172,11 +211,17 @@ public:
   EntityStoreLoadResult loadEntity(std::string_view entity_id) const;
 
 private:
+  /** @brief 按调用模式补定位或重新选择，统一校验证据。 */
+  EntityStoreResult setEntityLocation(
+    std::string_view entity_id, std::uint64_t expected_revision, const EntityLocationRef & selected,
+    const EntityStoreContext & context, const Observation & observation, bool allow_reselection);
+
   /** @brief 接管已完成 schema 和上下文检查的 SQLite 连接。 */
   explicit EntityStore(std::unique_ptr<EntityStoreState> state);
   std::unique_ptr<EntityStoreState> state_;
   friend EntityStoreOpenResult createEntityStore(const std::filesystem::path &, const EntityStoreContext &);
   friend EntityStoreOpenResult openEntityStore(const std::filesystem::path &);
+  friend EntityStoreOpenResult openEntityStoreSnapshot(const std::filesystem::path &);
 };
 
 struct EntityStoreOpenResult : EntityStoreResult
@@ -189,5 +234,8 @@ EntityStoreOpenResult createEntityStore(const std::filesystem::path & path, cons
 
 /** @brief 打开既有工作库，验证绑定并事务升级旧版 schema，缺失路径不创建文件。 */
 EntityStoreOpenResult openEntityStore(const std::filesystem::path & path);
+
+/** @brief 打开 v6 至当前版本的只读快照，关闭实例时结束读事务。 */
+EntityStoreOpenResult openEntityStoreSnapshot(const std::filesystem::path & path);
 
 }  // namespace vln_memory

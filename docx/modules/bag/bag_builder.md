@@ -31,6 +31,11 @@ python3 test/bag/builder/audit_camera_record_rgbd.py /path/to/observations build
 
 ## 数据结构
 
+
+配置 `dataset.recording_id` 时，新观测生成类似 `obs2:camera_record_01:r0.1.2102:d0.3.2068` 的 ID。
+`r` 和 `d` 后依次是各自的分卷号、话题号和话题内消息序号。录制编号可用英文字母、数字、下划线和连字符，同一录制及时间段重跑时沿用。
+旧配置省略录制编号时沿用 `obs1`。旧数据集与自己的 SQLite 一起打开，新导出用新工作目录建库。
+
 | 输入或产物 | 内容 |
 | --- | --- |
 | [vln_memory.yaml](../../../config/vln_memory.yaml) | `dataset` 给录包、输出目录、地图 ID/几何版本/依据。`topics`、`frames` 给实际话题和坐标系。`preprocess` 给配对容差（毫秒）、深度比例和可选位移/转角（米/度）。 |

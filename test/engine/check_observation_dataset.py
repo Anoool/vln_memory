@@ -256,7 +256,8 @@ def check_project_bag_builder(binary, root, fixture):
   # A JSON document is valid YAML and needs no test-only parser dependency.
   config.write_text(json.dumps({
       "dataset": {"bag_path": str(fixture / "bad_depth_compressed_bag"), "memory_dir": str(output),
-                  "map_id": "fixture", "geometry_revision": "v1", "map_basis": "Fixture recorded TF"},
+                  "map_id": "fixture", "geometry_revision": "v1", "map_basis": "Fixture recorded TF",
+                  "recording_id": "fixture_recording"},
       "topics": {"rgb": "/rgb", "depth": "/depth", "rgb_camera_info": "/rgb_info",
                  "depth_camera_info": "/depth_info", "tf": "/tf", "tf_static": "/tf_static"},
       "frames": {"map": "map", "body": "base", "rgb_optical": "camera", "depth_optical": "camera"},
@@ -271,6 +272,10 @@ def check_project_bag_builder(binary, root, fixture):
   assert summary["observations"] == len(records) and not summary["keyframes_selected"], summary
   assert summary["pending_observations"] == report["pending_observations"], summary
   record, = records
+  assert record["recording_id"] == "fixture_recording"
+  rgb_coordinates = record["rgb_message_id"].rsplit("_f", 1)[1].replace("_t", ".").replace("_", ".")
+  depth_coordinates = record["depth_message_id"].rsplit("_f", 1)[1].replace("_t", ".").replace("_", ".")
+  assert record["id"] == f"obs2:fixture_recording:r{rgb_coordinates}:d{depth_coordinates}"
   assert record["rgb_stamp"]["sec"] == record["depth_stamp"]["sec"] == 11
   for field in ("rgb_media", "depth_media"):
     assert (output / record[field]).is_file(), record[field]
@@ -402,6 +407,13 @@ def check_entity_tools(binary, root, fixture):
   evidence = {"entity_id": pending["pending_id"], "expected_revision": 1,
               "add_observations": [view(second, 0)]}
   run("update_entity", {**evidence, "expected_revision": 2}, "revision_conflict")
+  retry_view = {"observation_id": second, "selector": {"type": "bbox", "image": "depth", "xyxy_px": [0, 0, 2, 1]}}
+  failed_retry = run("update_entity", {**evidence, "add_observations": [retry_view]}, "pending_location")
+  assert failed_retry["pending_id"] == pending["pending_id"]
+  with sqlite3.connect(dataset / "entities.sqlite3") as store:
+    payload, = store.execute("SELECT request_json FROM pending_entities WHERE pending_id=?",
+                             (pending["pending_id"],)).fetchone()
+  assert json.loads(payload)["add_observations"] == [retry_view, view(first, 1)]
   located = run("update_entity", evidence)["entity"]
   assert located["id"] == pending["pending_id"] and located["position_map"] is not None
   assert [ref["observation_id"] for ref in located["observation_refs"]] == [second, first]

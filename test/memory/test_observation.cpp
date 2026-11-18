@@ -195,6 +195,18 @@ void identityCases()
   a = complete();
   a.id = "obs_fabricated";
   rejected(a, ObservationCode::invalid_identity);
+
+  a.recording_id = "camera_record_01";
+  a.rgb_message_id = "m_" + a.bag_id + "_f0_t1_2102";
+  a.depth_message_id = "m_" + a.bag_id + "_f0_t3_2068";
+  const auto short_id = makeObservationId(a);
+  expect(short_id == "obs2:camera_record_01:r0.1.2102:d0.3.2068", "Wrong short observation ID");
+  a.geometry_revision = "another_geometry";
+  expect(makeObservationId(a) == short_id, "Geometry changed the short observation ID");
+  a.depth_message_id = "m_" + a.bag_id + "_f0_t3_2069";
+  expect(makeObservationId(a) == "obs2:camera_record_01:r0.1.2102:d0.3.2069", "Depth change kept short ID");
+  a.recording_id = "ambiguous:recording";
+  rejected(a, ObservationCode::invalid_identity);
 }
 
 /** @brief 零/负时间、大范围时差以及所有大整数不经 double。 */

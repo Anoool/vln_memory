@@ -31,9 +31,13 @@ void require(bool condition, const std::string & message)
 }
 
 /** @brief 固定 schema 禁止缺失键和未知键，防止往返时悄悄丢失信息。 */
-void members(const Json & value, std::initializer_list<const char *> names)
+void members(const Json & value, std::initializer_list<const char *> names, const char * optional = nullptr)
 {
-  require(value.is_object() && value.size() == names.size(), "Unexpected object fields");
+  unsigned int optional_count = 0;
+  if (optional != nullptr && value.contains(optional)) {
+    optional_count = 1;
+  }
+  require(value.is_object() && value.size() == names.size() + optional_count, "Unexpected object fields");
   for (const auto * name : names) {require(value.contains(name), std::string("Missing field: ") + name);}
 }
 
@@ -233,10 +237,14 @@ Json selectionJson(const CameraInfoMatchOptions & value)
   std::string clock = "unknown";
   if (value.clock_relation == SensorClockRelation::same_clock) {clock = "same_clock";}
   if (value.clock_relation == SensorClockRelation::different_clocks) {clock = "different_clocks";}
+  const char * time_policy = "synchronized";
+  if (value.time_policy == CameraInfoTimePolicy::static_calibration) {
+    time_policy = "static_calibration";
+  }
   return {{"camera_info_topic", value.camera_info_topic}, {"image_topic", value.image_topic},
     {"optical_frame", value.optical_frame}, {"binding_basis", value.binding_basis},
     {"image_domain", domainName(value.image_domain)},
-    {"time_policy", value.time_policy == CameraInfoTimePolicy::static_calibration ? "static_calibration" : "synchronized"},
+    {"time_policy", time_policy},
     {"clock_relation", clock}, {"max_delta_ns", std::to_string(value.max_delta_ns)},
     {"compatibility", cameraInfoCompatibilityName(value.compatibility)}};
 }
@@ -315,7 +323,11 @@ ObservationDepthStorage parseStorage(const Json & value)
 /** @brief 保存原始 TF 端点，不只保存重算后的位姿。 */
 Json transformJson(const TfTransform & value)
 {
-  return {{"kind", value.kind == TfKind::dynamic ? "dynamic" : "static"},
+  const char * kind = "static";
+  if (value.kind == TfKind::dynamic) {
+    kind = "dynamic";
+  }
+  return {{"kind", kind},
     {"stamp", stampJson(value.stamp)}, {"parent_frame", value.parent_frame}, {"child_frame", value.child_frame},
     {"translation_m", value.translation_m}, {"rotation_xyzw", value.rotation_xyzw},
     {"source_topic", value.source_topic}, {"source_message_id", value.source_message_id},
@@ -428,6 +440,7 @@ Json observationJson(const Observation & o)
     {"tf_jump_limits", {{"translation_m", nullptr}, {"rotation_rad", nullptr}}},
     {"camera_pose_map", nullptr}, {"depth_camera_pose_map", nullptr}, {"body_pose_map", nullptr},
     {"evidence", Json::array()}, {"pending_reasons", o.pending_reasons}};
+  if (!o.recording_id.empty()) {value["recording_id"] = o.recording_id;}
   if (o.rgb_media) {value["rgb_media"] = *o.rgb_media;}
   if (o.depth_media) {value["depth_media"] = *o.depth_media;}
   if (o.depth_storage) {value["depth_storage"] = storageJson(*o.depth_storage);}
@@ -453,11 +466,15 @@ Observation parseObservation(const Json & value)
     "stamp", "rgb_stamp", "depth_stamp", "rgb_image", "depth_image", "delta_ns", "sync_tolerance_ns", "time_match", "pairing_policy",
     "source_pair_status", "source_pending_reasons", "capture_sync_status", "capture_sync_basis", "depth_alignment", "alignment_basis",
     "rgb_media", "depth_media", "depth_storage", "rgb_calibration", "depth_calibration", "rgb_model", "depth_model", "tf_max_gap_ns",
-    "tf_jump_limits", "camera_pose_map", "depth_camera_pose_map", "body_pose_map", "evidence", "pending_reasons"});
+    "tf_jump_limits", "camera_pose_map", "depth_camera_pose_map", "body_pose_map", "evidence", "pending_reasons"}, "recording_id");
   require(value.at("length_unit") == "m" && value.at("rotation_convention") == "xyzw" &&
     value.at("depth_convention") == "optical_z" && value.at("rgb_format") == "png_rgb8", "Unsupported geometry/media convention");
   Observation o;
   o.id = value.at("id").get<std::string>();
+  if (value.contains("recording_id")) {
+    o.recording_id = value.at("recording_id").get<std::string>();
+    require(!o.recording_id.empty(), "Empty recording_id");
+  }
   o.revision = decimal<std::uint64_t>(value.at("revision"));
   o.bag_id = value.at("bag_id").get<std::string>();
   o.pair_id = value.at("pair_id").get<std::string>();

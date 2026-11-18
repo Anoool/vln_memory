@@ -53,4 +53,6 @@ ros2 run vln_memory memory_engine --config config/vln_memory.yaml --build
 
 第二条命令需要配置兼容 Responses 的视觉模型。服务密钥填同目录的本地 `config/api_key.yaml`。BagBuilder 输出 `observations.jsonl` 和 `evidence/`，MemoryEngine 在同一目录写 `entities.sqlite3`。单条工具请求和旧入口见 [MemoryEngine 文档](docx/modules/engine/memory_engine.md#快速开始与典型示例)。
 
+工作库可用 `ros2 run vln_memory memory_engine --config config/vln_memory.yaml --publish OUTPUT_DIR` 发布为独立的记忆版本，参见[记忆版本发布](docx/modules/engine/memory_publication.md)。
+
 开发约定见 [AGENTS.md](AGENTS.md)。项目采用 [Apache License 2.0](LICENSE)。

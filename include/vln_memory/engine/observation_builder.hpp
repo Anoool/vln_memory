@@ -21,6 +21,7 @@ struct ObservationBuildContext
   std::string map_basis;
   std::uint64_t revision{1};
   std::vector<std::string> additional_pending_reasons;
+  std::string recording_id{};
 };
 
 /** @brief 成功持有独立观测，失败只携带原读取错误或正式记录校验错误。 */

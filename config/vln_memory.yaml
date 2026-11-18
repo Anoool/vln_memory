@@ -2,6 +2,7 @@
 dataset:
   bag_path: /absolute/path/to/camera_record
   memory_dir: /absolute/path/to/new_memory
+  recording_id: camera_record_01  # 同一录制及时间段重跑沿用，其他录制用不同编号。
   map_id: site_s4
   geometry_revision: recorded-v1
   map_basis: Recorded map and TF

@@ -102,6 +102,7 @@ struct Observation
   std::optional<TfPoseResult> body_pose_map;
   std::vector<ObservationEvidence> evidence;
   std::vector<std::string> pending_reasons;
+  std::string recording_id{};
 };
 
 enum class ObservationCode
@@ -140,8 +141,8 @@ struct ObservationParseResult
 const char * observationCodeName(ObservationCode code) noexcept;
 
 /**
- * @brief 用来源 bag/pair/RGB/Depth/clock/segment 的长度前缀元组生成确定键。
- * @throws std::invalid_argument 任一身份分量为空、含控制字符或超过 4096 字节。
+ * @brief 从录制编号与双图消息坐标生成 obs2，旧记录使用来源元组生成 obs1。
+ * @throws std::invalid_argument 来源身份、录制编号或消息坐标格式非法。
  * @note 不含 map/geometry revision；键不用于路径或可读名称。
  */
 std::string makeObservationId(const Observation & observation);

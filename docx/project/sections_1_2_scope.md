@@ -6,15 +6,15 @@
 | --- | --- |
 | 1.1、1.3 · 坐标、来源与观测 | 双图使用各自原始采样时间、有效模型、原始标定和历史位姿，地图上下文与未确认依据随观测保存。 |
 | 1.2、1.4 · 实体与关系 | 支持物品和空间的稳定 ID、修订、证据追加、补定位和有依据的 `inside/near/on/hanging_on/connects_regions`。 |
-| 1.5、1.6 · 工具、版本与文件 | 已发布观测与证据，SQLite 存工作状态。完整 `manifest.json`、四类 JSONL（实体、观测、关系、标注）以及 `evidence/`、`reports/`、`indexes/` 属于 B4。 |
+| 1.5、1.6 · 工具、版本与文件 | SQLite 存工作状态。[发布命令](../modules/engine/memory_publication.md) 生成 `manifest.json`、实体/观测/关系/标注 JSONL、证据、报告和索引。标注文件按实体 ID 关联实体。 |
 
 ## 第 2 部分 · 离线构建
 
 | 条款 | 当前边界 |
 | --- | --- |
-| 2.1、2.10 · 三模块交接 | BagBuilder → MemoryEngine 已交接双图。完整发布、Viewer 和真实场景闭环待验收。 |
-| 2.2 · 八项工具 | 已有六项，`correct_memory` 与 `memory_annotate` 待实现。 |
+| 2.1、2.10 · 三模块交接 | BagBuilder → MemoryEngine 已交接双图并支持版本发布。人工标注已可经工具写入并随版本发布，Viewer 的界面闭环待实现。 |
+| 2.2 · 八项工具 | 八项已实现，包含 `memory_annotate` 和 `correct_memory`。 |
 | 2.3–2.7 · 定位、身份、归属与关系 | 已有深度投影、依据确认的空间代表点、同观测选区去重、修订与关系复核。真实跨帧身份、配准及轨迹修订重算仍需验收。 |
-| 2.8、2.9 · 纠错与人工命名 | B4 实现修正历史和标注；C 验收界面录入及回读。 |
+| 2.8、2.9 · 纠错与人工命名 | B4 支持人工标注与带原因的纠错历史。C 验收界面录入及回读。 |
 
 [实施顺序](system_plan.md) · [观测与实体契约](../modules/memory/memory.md)

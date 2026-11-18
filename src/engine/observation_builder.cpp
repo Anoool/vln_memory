@@ -48,6 +48,7 @@ ObservationBuildResult buildObservation(const PreparedPair & pair, const Observa
 
   Observation observation;
   observation.revision = context.revision;
+  observation.recording_id = context.recording_id;
   observation.map_id = context.map_id;
   observation.geometry_revision = context.geometry_revision;
   observation.map_basis = context.map_basis;
@@ -67,7 +68,10 @@ ObservationBuildResult buildObservation(const PreparedPair & pair, const Observa
   observation.depth_image = pair.depth_image;
   observation.delta_ns = pair.delta_ns;
   observation.sync_tolerance_ns = pair.sync_tolerance_ns;
-  observation.time_match = pair.delta_ns == 0 ? "exact" : "approximate";
+  observation.time_match = "approximate";
+  if (pair.delta_ns == 0) {
+    observation.time_match = "exact";
+  }
   observation.pairing_policy = pair.timestamp_match_policy;
   observation.source_pair_status = pair.status;
   observation.source_pending_reasons = pair.pending_reasons;

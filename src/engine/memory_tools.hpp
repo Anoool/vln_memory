@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "entity_tools.hpp"
 
 namespace vln_memory
@@ -8,7 +10,9 @@ namespace vln_memory
 class MemoryTools
 {
 public:
-  MemoryTools(const ObservationDatasetReader & dataset, std::filesystem::path root, NearOptions near);
+  /** @brief 发布模式允许回读观测并禁止在版本目录生成副产物。 */
+  MemoryTools(const ObservationDatasetReader & dataset, std::filesystem::path root,
+    NearOptions near, std::optional<std::string> published_version = std::nullopt);
 
   /** @brief 请求可附 call_id，重放时返回首次提交的结果。 */
   nlohmann::json call(const nlohmann::json & request);
@@ -21,6 +25,7 @@ private:
   const ObservationDatasetReader & dataset_;
   std::filesystem::path root_;
   NearOptions near_;
+  std::optional<std::string> published_version_;
   std::unique_ptr<EntityStore> store_;
 };
 
