@@ -138,17 +138,17 @@ std::map<std::string, ImageGeometry> pairedRgbGrids(const BagScan & scan, const 
   return grids;
 }
 
-/** @brief RGB 解码成功即写 PNG，返回值不携带像素；失败保持已有核心错误码。 */
+/** @brief 解码 RGB，提供输出时写 PNG；返回值不持有像素。 */
 ConvertedFrame convertRgb(
   const BagImageRecord & image, const sensor_msgs::msg::Image & message,
-  const BagBuildOptions & options, OutputFiles & output)
+  const BagBuildOptions & options, OutputFiles * output)
 {
   ConvertedFrame result;
   const auto decoded = decodeRosRgb(message, options.rgb_limits);
   result.code = rgbErrorCodeName(decoded.code);
   result.message = decoded.message;
   if (decoded.ok()) {
-    result.media_path = writeRgb(output, image.source.message_id, *decoded.frame);
+    if (output) {result.media_path = writeRgb(*output, image.source.message_id, *decoded.frame);}
     result.details = {{"encoding", "rgb8"}, {"source_encoding", decoded.frame->source_encoding}};
   }
   return result;
@@ -157,7 +157,7 @@ ConvertedFrame convertRgb(
 /** @brief 深度解码/保存并检查真正配对网格，NaN 不进入 JSON 数值字段。 */
 ConvertedFrame convertDepth(
   const BagImageRecord & image, const sensor_msgs::msg::Image & message,
-  const BagBuildOptions & options, const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles & output)
+  const BagBuildOptions & options, const std::map<std::string, ImageGeometry> & rgb_grids, OutputFiles * output)
 {
   ConvertedFrame result;
   const auto decoded = decodeRosDepth(message, options.depth, options.depth_limits);
@@ -172,15 +172,15 @@ ConvertedFrame convertDepth(
     std::nullopt, frame.valid_pixels, frame.invalid_pixels, false};
   const char * storage_unit = "m";
   if (store_source_png) {
-    result.media_path = writeDepthPng16(output, image.source.message_id, message);
+    if (output) {result.media_path = writeDepthPng16(*output, image.source.message_id, message);}
     storage.format = "png";
     storage.dtype = "uint16";
     storage.unit = frame.source_unit;
     storage.scale_to_m = frame.source_scale_to_m;
     storage.invalid_rule = "zero_or_out_of_range_to_nan";
     storage_unit = depthUnitName(storage.unit);
-  } else {
-    result.media_path = writeDepth(output, image.source.message_id, frame);
+  } else if (output) {
+    result.media_path = writeDepth(*output, image.source.message_id, frame);
   }
   if (std::isfinite(frame.max_depth_m)) {
     storage.max_depth_m = frame.max_depth_m;
@@ -297,7 +297,7 @@ Json frameRecord(const BagImageRecord & image, bool is_rgb, bool metadata_availa
     record["source_is_bigendian"] = nullptr;  // 压缩源消息没有 Image 的行宽/端序字段。
   }
   record["metadata_available"] = metadata_available;
-  record["numeric_quality_passed"] = !converted.media_path.empty() && converted.depth_quality;
+  record["numeric_quality_passed"] = converted.code == "none" && converted.depth_quality;
   if (!metadata_available) {record["stamp"] = nullptr;}
   if (is_rgb) {record["kind"] = "rgb";}
   return record;
@@ -312,7 +312,7 @@ void reportConversionIssues(
   if (write_preparation) {
     pending_path = "reports/pending.jsonl";
   }
-  if (converted.media_path.empty()) {
+  if (converted.code != "none") {
     if (metadata_available) {
       issues.push_back({"decode", converted.code, converted.message, image.source.message_id, {}});
     }
@@ -339,8 +339,10 @@ PreparedFrame processImage(
   const bool is_rgb = image.source.topic == options.rgb_camera.image_topic;
   ConvertedFrame converted;
   if (message != nullptr) {
-    if (is_rgb) {converted = convertRgb(image, *message, options, output);} else {
-      converted = convertDepth(image, *message, options, rgb_grids, output);
+    OutputFiles * media_output = nullptr;
+    if (write_preparation) {media_output = &output;}
+    if (is_rgb) {converted = convertRgb(image, *message, options, media_output);} else {
+      converted = convertDepth(image, *message, options, rgb_grids, media_output);
     }
   } else if (!image.deserialization_error.empty()) {
     converted.message = image.deserialization_error;
@@ -357,8 +359,8 @@ PreparedFrame processImage(
   prepared.alignment_checked = converted.alignment_checked;
   prepared.aligned = converted.aligned;
   auto record = frameRecord(image, is_rgb, metadata_available, converted);
-  if (!converted.media_path.empty()) {
-    record["media_path"] = converted.media_path;
+  if (converted.code == "none") {
+    if (write_preparation) {record["media_path"] = converted.media_path;}
     attachGeometryChecks(image, is_rgb, options, scan, calibrations, prepared, record, !write_preparation);
   }
   reportConversionIssues(image, metadata_available, converted, output, issues, write_preparation);
@@ -366,7 +368,7 @@ PreparedFrame processImage(
     writeJsonLine(output, "frames.jsonl", std::move(record));
   } else {
     prepared.image = {image.source.topic, image.width, image.height, image.frame_id, image.stamp};
-    if (!is_rgb && !converted.media_path.empty()) {
+    if (!is_rgb && converted.code == "none") {
       const auto & details = converted.details;
       prepared.depth_storage = std::move(converted.depth_storage);
       if (converted.aligned) {prepared.depth_alignment = DepthAlignment::aligned_to_rgb;}
@@ -383,8 +385,8 @@ PreparedFrame processImage(
 std::vector<std::string> pairReasons(const PreparedFrame & rgb, const PreparedFrame & depth)
 {
   std::vector<std::string> reasons;
-  if (rgb.media_path.empty()) {reasons.push_back("rgb_decode_failed");}
-  if (depth.media_path.empty()) {reasons.push_back("depth_decode_failed");}
+  if (rgb.decode_code != "none") {reasons.push_back("rgb_decode_failed");}
+  if (depth.decode_code != "none") {reasons.push_back("depth_decode_failed");}
   if (!rgb.camera_matched) {reasons.push_back("rgb_calibration_unavailable");}
   if (!depth.camera_matched) {reasons.push_back("depth_calibration_unavailable");}
   if (!rgb.model_ready) {reasons.push_back("rgb_camera_model_unavailable");}
@@ -523,6 +525,32 @@ Json coverageReports(const BagBuildOptions & options, const BagScan & scan)
   return reports;
 }
 
+/** @brief 用原始采样时间统计有符号时差和绝对残差，不调整配对和同步状态。 */
+Json timestampDeltaSummary(const RgbdSyncReport & sync)
+{
+  std::vector<std::int64_t> deltas;
+  deltas.reserve(sync.pairs.size());
+  std::size_t depth_earlier = 0;
+  std::size_t depth_later = 0;
+  for (const auto & pair : sync.pairs) {
+    deltas.push_back(pair.delta_ns);
+    if (pair.delta_ns < 0) {++depth_earlier;}
+    if (pair.delta_ns > 0) {++depth_later;}
+  }
+  Json summary{{"depth_earlier", depth_earlier}, {"depth_later", depth_later},
+    {"equal", sync.exact_count}, {"signed_median_ns", nullptr}, {"absolute_p95_ns", nullptr}};
+  if (!deltas.empty()) {
+    std::sort(deltas.begin(), deltas.end());
+    summary["signed_median_ns"] = std::to_string(deltas[(deltas.size() - 1) / 2]);
+    for (auto & delta : deltas) {
+      if (delta < 0) {delta = -delta;}
+    }
+    std::sort(deltas.begin(), deltas.end());
+    summary["absolute_p95_ns"] = std::to_string(deltas[deltas.size() - 1 - deltas.size() / 20]);
+  }
+  return summary;
+}
+
 /** @brief 汇总输入、算法和质量数量；配对守恒只针对有效时间引用输入。 */
 Json summaryRecord(
   const BagBuildOptions & options, const BagScan & scan,
@@ -535,6 +563,7 @@ Json summaryRecord(
     {"timestamp_match_policy", rgbdSyncPolicyName(options.sync_tolerance_ns)},
     {"sync_tolerance_ns", std::to_string(options.sync_tolerance_ns)},
     {"timestamp_match_status", result.timestamp_match_status}, {"capture_sync_status", "unknown"},
+    {"timestamp_delta", timestampDeltaSummary(sync)},
     {"unmatched_rgb", sync.unmatched_rgb.size()}, {"unused_depth", sync.unused_depth.size()},
     {"max_abs_delta_ns", std::to_string(sync.max_abs_delta_ns)}, {"prepared_pairs", result.prepared_pairs},
     {"pending_pairs", result.pairs - result.prepared_pairs}, {"issue_count", result.issue_count},
@@ -653,11 +682,44 @@ bool hasCameraRecordRgbdAudit(const BagScan & scan, const BagBuildOptions & opti
     scan.source_files.front().sha256 == "5704b033b590e01151bb56534c3068ea817f90836744975c51ef70b7dbc5890d";
 }
 
-/** @brief 按已固定配对和候选顺序组装正式记录；只借用当前运行中的元数据。 */
+/** @brief 复核原始录包，只落盘正式选中观测的双图及文件摘要。 */
+void writeDirectMedia(
+  const BagBuildOptions & options, const BagScan & scan, const std::vector<BuildInputFrame> & candidates,
+  const std::map<std::string, ImageGeometry> & rgb_grids, const fs::path & work,
+  std::map<std::string, PreparedFrame> & frames, OutputFiles & output)
+{
+  std::set<std::string> selected;
+  for (const auto & item : candidates) {
+    if (!item.selected) {continue;}
+    selected.insert(item.rgb_message_id);
+    selected.insert(item.depth_message_id);
+  }
+  if (selected.empty()) {return;}
+  readBagImages(options, scan, [&](const auto & image, const auto * message) {
+    if (!message) {throw BagBuildError("source_changed", "Previously validated image is unavailable");}
+    ConvertedFrame converted;
+    if (image.source.topic == options.rgb_camera.image_topic) {
+      converted = convertRgb(image, *message, options, &output);
+    } else {
+      converted = convertDepth(image, *message, options, rgb_grids, &output);
+    }
+    if (converted.media_path.empty()) {
+      throw BagBuildError("source_changed", "Selected image could not be decoded on re-read");
+    }
+    auto & frame = frames.at(image.source.message_id);
+    frame.media_path = std::move(converted.media_path);
+    const auto digest = detail::preparationFileSha256(work / frame.media_path);
+    output.appendLine(detail::kDirectObservationMediaIndex,
+      detail::preparationMediaRow(image.source.message_id, frame.media_path, digest).dump());
+  }, selected);
+}
+
+/** @brief 按已固定配对和候选顺序组装正式记录，并只写所需证据。 */
 void writeDirectObservations(
   const BagBuildOptions & options, const ObservationBuildContext & context, const BuildInputOptions & selection,
-  const BagScan & scan, const RgbdSyncReport & sync, const std::map<std::string, PreparedFrame> & frames,
-  const fs::path & work, OutputFiles & output, BagBuildResult & result, std::vector<BagIssue> & issues)
+  const BagScan & scan, const RgbdSyncReport & sync, const std::map<std::string, ImageGeometry> & rgb_grids,
+  std::map<std::string, PreparedFrame> & frames, const fs::path & work, OutputFiles & output,
+  BagBuildResult & result, std::vector<BagIssue> & issues)
 {
   const auto source_digest = writeDirectSource(options, scan, work, output);
   const bool audited_rgbd = hasCameraRecordRgbdAudit(scan, options);
@@ -694,7 +756,7 @@ void writeDirectObservations(
       issues.push_back({"prepare", "pair_pending", "Pair has failed sensor preparation checks", {}, item.pair_id});
     }
     if (rgb.camera_pose_ready && depth.camera_pose_ready && rgb.body_pose_ready) {++result.posed_pairs;}
-    if (rgb.media_path.empty() || depth.media_path.empty()) {
+    if (rgb.decode_code != "none" || depth.decode_code != "none") {
       item.eligibility_reasons.push_back("missing_rgbd_media");
     }
     if (selection.purpose != BuildInputPurpose::rgb &&
@@ -709,6 +771,7 @@ void writeDirectObservations(
   }
   result.pairs = candidates.size();
   selectBuildInputFrames(candidates, selection);
+  writeDirectMedia(options, scan, candidates, rgb_grids, work, frames, output);
   for (const auto & item : candidates) {
     if (!item.selected) {
       if (item.selection_reason != "below_motion_threshold") {
@@ -858,8 +921,8 @@ void runBuild(
       }
       auto prepared = processImage(
         image, message, options, scan, calibrations, rgb_grids, output, issues, write_preparation);
-      if (!prepared.media_path.empty()) {
-        ++result.decoded_frames;
+      if (prepared.decode_code == "none") {++result.decoded_frames;}
+      if (write_preparation && !prepared.media_path.empty()) {
         const auto digest = detail::preparationFileSha256(work / prepared.media_path);
         output.appendLine(media_index,
           detail::preparationMediaRow(image.source.message_id, prepared.media_path, digest).dump());
@@ -883,7 +946,7 @@ void runBuild(
   if (write_preparation) {
     writePairs(options, sync, frames, output, result, issues);
   } else {
-    writeDirectObservations(options, *context, selection, scan, sync, frames, work, output, result, issues);
+    writeDirectObservations(options, *context, selection, scan, sync, rgb_grids, frames, work, output, result, issues);
   }
   writeUnmatched(sync, output, issues, pending_path);
   for (const auto & issue : issues) {

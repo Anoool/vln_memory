@@ -48,6 +48,10 @@ vln_memory::ModelBuildOptions modelOptions(
   if (!key_file.empty()) {options.api_key_file = config_path.parent_path() / key_file;}
   options.api_key_env = model["api_key_env"].as<std::string>("");
   options.timeout_s = model["timeout_s"].as<long>(options.timeout_s);
+  options.rgb_jpeg_quality = model["rgb_jpeg_quality"].as<int>(options.rgb_jpeg_quality);
+  if (options.rgb_jpeg_quality < 0 || options.rgb_jpeg_quality > 100) {
+    throw std::invalid_argument("model.rgb_jpeg_quality must be 0 (PNG) or between 1 and 100");
+  }
   if (const auto build = config["build"]) {
     options.observations_per_batch = build["observations_per_batch"].as<std::size_t>(options.observations_per_batch);
     const auto rounds = build["max_tool_rounds"].as<long>(static_cast<long>(options.max_tool_rounds));

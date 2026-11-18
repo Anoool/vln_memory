@@ -17,7 +17,7 @@ flowchart LR
 
 定位使用原图坐标。彩色选区用两图各自的模型和历史位姿做 Depth→RGB 重投影，落入同一彩色像素时取 RGB 相机中最近的深度点。分簇和定位依据保留在原深度像素上。物品用实测可见表面点，空间用经确认在内部的底盘位置。
 
-批次按发布顺序取 1–4 条观测，附原始 RGB 和最多两张相关历史彩色图。每轮先保存模型输出，再执行工具。业务写入与 `call_id` 回执在同一事务提交，批次完成才推进观测位置。已处理的观测在恢复时跳过。 同一批内同一实体的定位更新连续失败两次后，暂停该实体的定位更新。如果模型只重复提交已暂停的更新，保留已写入的结果并进入下一批。CLI 用 `deferred_batches` 报告本次因此提前结束的批次数。
+批次按发布顺序取 1–4 条观测，附对应 RGB 和最多两张相关历史彩色图。每张图提供批内短编号（如 `v1`），写工具在执行前将短编号还原为正式观测 ID。每轮先保存模型输出，再执行工具。业务写入与 `call_id` 回执在同一事务提交，批次完成才推进观测位置。已处理的观测在恢复时跳过。 同一批内同一实体的定位更新连续失败两次后，暂停该实体的定位更新。如果模型只重复提交已暂停的更新，保留已写入的结果并进入下一批。CLI 用 `deferred_batches` 报告本次因此提前结束的批次数。
 
 自动构建只向模型提供 `create_entity` 和 `update_entity`，提交选区时由本地执行定位，实体 ID 齐全后可用这两个工具写入关系。
 
@@ -82,7 +82,7 @@ ros2 run vln_memory memory_engine --config config/vln_memory.yaml --build
 
 固定真图验收使用同一录包的 RGB 消息 1564、1578、1607、1633，每两帧一批，从空库运行默认构建提示词。帧的原始时间、配对、媒体摘要和几何版本见[样本清单](../../../test/engine/real_camera_record_frames.json)。
 
-终端给出 `status`、`total_observations`、`resumed_from`、`processed_observations`。实体和详细回执查 `entities.sqlite3`，例如执行 `SELECT label, revision, status FROM entities;`。
+终端给出 `status`、`total_observations`、`resumed_from`、`processed_observations`。`timing` 记录本次图像准备、模型请求、本地工具的耗时和模型请求次数。`model.rgb_jpeg_quality` 为 1–100 时发送同分辨率 JPEG，项目模板使用 85。设置为 0 时发送原 PNG。发布证据和像素坐标沿用原图。恢复仍在处理的批次时使用原有图像编码配置。实体和详细回执查 `entities.sqlite3`，例如执行 `SELECT label, revision, status FROM entities;`。
 
 兼容入口 `memory_semantic_build --dataset DIR --store DB < requests.jsonl` 接收带 `op` 的结构化请求（`lookup/create/append/resolve_location/inside/near/get`）。Agent 可按两路原始时间与 `source_manifest_sha256` 找回唯一已发布配对，再用稳定 `entity_key` 创建或用 `entity_id/expected_revision` 追加。单次识别响应的局部 ID 由宿主维护映射。下面是写入一条纯 RGB 识别结果的请求，缺几何时实体带观测来源进入待定位状态。完整协议见 [CLI 实现](../../../src/apps/memory_semantic_build_main.cpp)。
 

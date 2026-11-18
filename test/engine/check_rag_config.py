@@ -111,6 +111,11 @@ def check_retrieval_modes():
     assert result["matches"][0]["entity_id"] == "bag"
     assert result["matches"][0]["cosine_similarity"] == 1.0
     assert calls == ["背包"]
+    result = rank_entities(*inputs, vector_only=True, relevant_ids=set())
+    assert result == {"memory_version": "test", "status": "no_relevant_match", "matches": []}
+    assert calls == ["背包"]
+    result = rank_entities(*inputs, vector_only=True, relevant_ids={"chair"})
+    assert [row["entity_id"] for row in result["matches"]] == ["chair"]
 
 
 if __name__ == "__main__":

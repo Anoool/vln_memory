@@ -167,7 +167,7 @@ add_executable(memory_engine src/apps/memory_engine_main.cpp
   src/engine/observation_tools.cpp src/engine/entity_tools.cpp src/engine/memory_tools.cpp
   src/engine/model_batches.cpp src/engine/responses_client.cpp src/engine/memory_publication.cpp)
 target_link_libraries(memory_engine PRIVATE vln_memory_observed_entity_store vln_memory_entity_builder
-  vln_memory_preparation_reader
+  vln_memory_preparation_reader opencv_imgcodecs
   nlohmann_json::nlohmann_json yaml-cpp OpenSSL::Crypto CURL::libcurl)
 install(TARGETS memory_engine DESTINATION lib/${PROJECT_NAME})
 

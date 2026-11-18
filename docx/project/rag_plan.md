@@ -51,4 +51,4 @@ build/rag/venv/bin/python tools/memory_rag.py query \
 
 ## R4 · 发送用户消息前召回
 
-Agent 将首条及后续用户指令送入独立的 `retrieve_context` ROS 入口，强制执行向量检索。召回候选及同版定位证据随原消息送给模型。没有候选、服务失败或超时则发送原消息。模型可继续通过 `search_memory` 发送明确的实体描述和关系问题。两条路径复用一个编码器和索引，无需重建已有索引。[接口与配置](../modules/engine/memory_rag.md#接入-vln_agent)
+Agent 将首条及后续用户指令送入独立的 `retrieve_context` ROS 入口，强制执行向量检索。先按名称、别名和 YAML 同义词组筛选相关实体，再将按向量排序的候选及同版定位证据随原消息送给模型。没有候选、服务失败或超时则发送原消息。模型可继续通过 `search_memory` 发送明确的实体描述和关系问题。两条路径复用一个编码器和索引，无需重建已有索引。[接口与配置](../modules/engine/memory_rag.md#接入-vln_agent)

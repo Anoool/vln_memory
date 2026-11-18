@@ -24,18 +24,18 @@ def main():
     except (OSError, ValueError, KeyError, ImportError, RuntimeError, yaml.YAMLError) as error:
         parser.exit(1, f"memory_rag_server: {error}\n")
 
-    def reply(request, response, *, vector_only=False):
+    def reply(request, response, *, context=False):
         """为当前 ROS 请求返回 JSON 格式的证据或错误信息。"""
         try:
-            result = search.query(request.text, request.relation or None, vector_only=vector_only)
+            result = search.query(request.text, request.relation or None, context=context)
             response.result_json = json.dumps(result, ensure_ascii=False)
         except (OSError, ValueError, KeyError, ImportError, RuntimeError) as error:
             response.error = str(error)
         return response
 
     def context_reply(request, response):
-        """对原始用户文字执行纯向量检索，返回待核对候选。"""
-        return reply(request, response, vector_only=True)
+        """召回存在相关实体词依据的候选，供 Agent 自动附加。"""
+        return reply(request, response, context=True)
 
     rclpy.init(args=[])
     try:

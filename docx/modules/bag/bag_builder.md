@@ -1,5 +1,7 @@
 # BagBuilder
 
+直出工作目录在选定关键帧后只写正式观测的双图及摘要。所有候选仍按原本的配对、解码检查、标定和位姿规则判断。来源校验覆盖全包。报告中的 `timestamp_delta` 使用原始 RGB 和深度采样时间，记录深度早于、晚于或等于 RGB 的对数、有符号中位数和绝对时差 P95。
+
 ## 模块职责与边界
 
 读取项目的 ROS 2 SQLite RGB-D 录包，发布可独立回读的双图观测和证据。BagBuilder 负责时间配对、标定、历史位姿和关键帧，不负责语义识别、实体写入或模型分批。当前配置面向 `camera_record` 的 JPEG 彩色图、`compressedDepth`、两路 CameraInfo 和 TF。

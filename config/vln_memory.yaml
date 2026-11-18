@@ -41,3 +41,4 @@ model:
   model: local-vlm
   api_key_file: api_key.yaml  # 路径相对于本配置；在本地文件填写密钥。
   timeout_s: 60
+  rgb_jpeg_quality: 85  # 保持原像素尺寸，0 发送原 PNG。

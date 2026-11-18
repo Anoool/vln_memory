@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import tempfile
 import unicodedata
@@ -237,12 +238,38 @@ def normalize_name(text):
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def rank_entities(ids, vectors, metadata, entities, annotations, text, top_k, encode_query, *, vector_only=False):
+def context_has_term(text, term):
+    """中文术语按子串匹配，英文术语须位于首尾或字母数字边界。"""
+    if not term.isascii():
+        return term in text
+    return re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text) is not None
+
+
+def context_topics(text, aliases):
+    """返回查询或实体名称提到的同义词组编号。"""
+    return {i for i, group in enumerate(aliases) if any(context_has_term(text, alias) for alias in group)}
+
+
+def context_entity_topics(names, aliases):
+    """只用名称主体确定实体类别，避免把名称中提到的周边物体归为该实体。"""
+    subjects = []
+    for name in names:
+        subject = re.split(r" (?:with|near|beside|by|against|on|under|hung|hanging|leaning) ", name, maxsplit=1)
+        subjects.append(subject[0])
+    return context_topics(" ".join(subjects), aliases)
+
+
+def rank_entities(
+        ids, vectors, metadata, entities, annotations, text, top_k, encode_query, *,
+        vector_only=False, relevant_ids=None):
     """默认优先精确名称，自动检索直接编码并返回排序后的候选项。"""
     name = normalize_name(text)
     if not name or top_k < 1:
         raise ValueError("Query text must be non-empty and top-k must be positive")
     result = {"memory_version": metadata["memory_version"], "status": "empty", "matches": []}
+    if ids and relevant_ids is not None and not relevant_ids:
+        result["status"] = "no_relevant_match"
+        return result
     exact = []
     if not vector_only:
         for entity_id, row in entities.items():
@@ -257,10 +284,14 @@ def rank_entities(ids, vectors, metadata, entities, annotations, text, top_k, en
         vector = encode_query(text)
         scores = vectors @ vector
         result["status"] = "candidates"
-        for i in np.argsort(-scores, kind="stable")[:top_k]:
+        for i in np.argsort(-scores, kind="stable"):
             entity_id = ids[i]
+            if relevant_ids is not None and entity_id not in relevant_ids:
+                continue
             result["matches"].append({"entity_id": entity_id, "semantic_label": entities[entity_id]["semantic_label"],
                                       "cosine_similarity": float(scores[i])})
+            if len(result["matches"]) == top_k:
+                break
     return result
 
 
@@ -384,7 +415,8 @@ def load_config(config_path):
 
     path_keys = ("release", "index_dir", "model_path", "tokenizer_path")
     integer_keys = ("top_k", "dimension", "max_length", *runtime_keys)
-    allowed_keys = {*path_keys, *integer_keys, *ENCODER_FIELDS, "environment", "service_name", "context_service_name"}
+    allowed_keys = {*path_keys, *integer_keys, *ENCODER_FIELDS, "environment", "service_name",
+                    "context_service_name", "context_aliases"}
     unknown = settings.keys() - allowed_keys
     if "model_dir" in settings:
         raise ValueError("Legacy model_dir is no longer supported; use model_path and tokenizer_path from config/memory_rag.yaml")
@@ -414,6 +446,13 @@ def load_config(config_path):
         raise ValueError("RAG setting 'pooling' must be mean, cls or none")
     settings.setdefault("service_name", "/vln_memory/search_memory")
     settings.setdefault("context_service_name", "/vln_memory/retrieve_context")
+    aliases = settings.setdefault("context_aliases", [])
+    if not isinstance(aliases, list):
+        raise ValueError("context_aliases must be a list of non-empty synonym groups")
+    for group in aliases:
+        if not isinstance(group, list) or not group or any(
+                not isinstance(alias, str) or not normalize_name(alias) for alias in group):
+            raise ValueError("Each context_aliases group must contain non-empty strings")
     for key in ("service_name", "context_service_name"):
         value = settings[key]
         if not isinstance(value, str) or not value.strip():
@@ -435,6 +474,16 @@ class MemorySearch:
         self.ids, self.vectors = load_index(settings["index_dir"], self.metadata, self.entities)
         self.encoder = None
         self.observations = None
+        self.context_aliases = []
+        self.context_names = {}
+        self.context_entity_topics = {}
+        for group in settings.get("context_aliases", []):
+            self.context_aliases.append([normalize_name(alias) for alias in group])
+        if self.context_aliases:
+            for entity_id, row in self.entities.items():
+                names = [normalize_name(name) for name in entity_names(row, self.annotations.get(entity_id, {}))]
+                self.context_names[entity_id] = names
+                self.context_entity_topics[entity_id] = context_entity_topics(names, self.context_aliases)
 
     def encode_query(self, text):
         """在本进程的所有向量检索中复用同一个编码器。"""
@@ -442,12 +491,26 @@ class MemorySearch:
             self.encoder = OnnxEncoder(self.settings, self.model_files)
         return self.encoder.encode([text], self.settings["query_prefix"])[0]
 
-    def query(self, text, relation=None, *, vector_only=False):
-        """返回排序后的匹配结果及其已发布证据，保持发布数据原样。"""
+    def relevant_context_ids(self, text):
+        """只接受命中实体名称或同义类的自动候选，缺少匹配时返回空集。"""
+        query = normalize_name(text)
+        topics = context_topics(query, self.context_aliases)
+        return {
+            entity_id for entity_id, names in self.context_names.items()
+            if topics & self.context_entity_topics[entity_id]
+            or any(context_has_term(query, name) for name in names)
+        }
+
+    def query(self, text, relation=None, *, vector_only=False, context=False):
+        """返回排序后的匹配及证据，自动上下文可拒绝低相关输入。"""
         if relation is not None and relation not in RELATION_TYPES:
             raise ValueError(f"Unsupported memory relation: {relation}")
+        relevant_ids = None
+        if context and self.context_aliases:
+            relevant_ids = self.relevant_context_ids(text)
         result = rank_entities(self.ids, self.vectors, self.metadata, self.entities, self.annotations,
-                               text, self.settings["top_k"], self.encode_query, vector_only=vector_only)
+                               text, self.settings["top_k"], self.encode_query, vector_only=vector_only or context,
+                               relevant_ids=relevant_ids)
         if result["matches"] and self.observations is None:
             self.observations = checked_observations(self.release, self.manifest)
         add_evidence(result, self.release, self.manifest, self.entities, self.annotations, self.observations, relation)
@@ -462,7 +525,9 @@ def main():
     commands.add_parser("build-index")
     search = commands.add_parser("query")
     search.add_argument("--text", required=True)
-    search.add_argument("--vector-only", action="store_true", help="Skip name matching and rank by vector similarity")
+    mode = search.add_mutually_exclusive_group()
+    mode.add_argument("--vector-only", action="store_true", help="Rank all entities by vector similarity")
+    mode.add_argument("--context", action="store_true", help="Apply the automatic context relevance check")
     search.add_argument("--relation", choices=RELATION_TYPES, help="Return supported published relations of this type")
     args = parser.parse_args()
 
@@ -474,7 +539,8 @@ def main():
             _, metadata, entities, annotations, model_files = load_release(release, settings)
             result = build_index(index_dir, settings, metadata, entities, annotations, model_files)
         else:
-            result = MemorySearch(settings).query(args.text, args.relation, vector_only=args.vector_only)
+            result = MemorySearch(settings).query(args.text, args.relation, vector_only=args.vector_only,
+                                                  context=args.context)
     except (OSError, ValueError, KeyError, ImportError, RuntimeError, yaml.YAMLError) as error:
         parser.exit(1, f"memory_rag: {error}\n")
     print(json.dumps(result, ensure_ascii=False))

@@ -340,6 +340,8 @@ void checkNormal(const fs::path & output, const BagBuildResult & result)
   }
   const auto summary = readJson(output / "reports/summary.json");
   expect(summary.at("tf_duplicates") == 1 && summary.at("tf_unique_samples") == 3, "TF duplicate provenance wrong");
+  expect(summary.at("timestamp_delta").at("equal") == 2 &&
+    summary.at("timestamp_delta").at("absolute_p95_ns") == "0", "Original timestamp summary is wrong");
   const auto pairs = readLines(output / "rgbd_pairs.jsonl");
   expect(
     pairs[0].at("delta_ns") == "0" && pairs[1].at("delta_ns") == "0",

@@ -54,6 +54,7 @@ build/rag/venv/bin/python tools/memory_rag.py build-index
 | `exact` | 在名称、别名和原语义标签中找到唯一的精确匹配。 |
 | `candidates` | 同一模型编码查询，按余弦相似度排序。得分用于比较候选。 |
 | `empty` | 该发布版本没有实体。 |
+| `no_relevant_match` | 自动召回没有找到名称、别名或类别词依据，返回空候选。 |
 
 ## Jetson Nano 部署
 
@@ -90,9 +91,16 @@ build/rag/venv/bin/python tools/memory_rag.py query --text "肩带放在椅背�
 | 路径 | 触发方式 | 配置对接 |
 | --- | --- | --- |
 | `search_memory` | 模型根据问题发出工具调用。精确名称先匹配，其他描述走向量检索。可带 `relation` 核对关系。 | Agent 工具组的 `service_name` 对应 RAG 的 `service_name`。 |
-| `retrieve_context` | Agent 在发送用户消息前对完整文字做向量检索，即使文字恰好等于实体名称也返回相似候选。 | Agent `memory_context.service_name` 对应 RAG 的 `context_service_name`。 |
+| `retrieve_context` | Agent 在发送用户消息前先用名称、别名和 YAML `context_aliases` 筛选相关实体，再按向量相似度排序。 | Agent `memory_context.service_name` 对应 RAG 的 `context_service_name`。 |
 
-自动路径附加 `{"source":"memory_rag","data":{...}}` 到同一条用户消息。`data` 包含发布版本、地图、候选相似度与定位证据引用，候选数量由 RAG YAML 的 `top_k` 控制。模型可忽略无关候选或进一步主动查证。设置 `memory_context.enabled: false` 可关闭自动路径。检索失败或达到该组的 `timeout_sec` 时，Agent 继续处理原消息。
+自动路径附加 `{"source":"memory_rag","data":{...}}` 到同一条用户消息。`data` 包含发布版本、地图、候选相似度与定位证据引用，候选数量由 RAG YAML 的 `top_k` 控制。`context_aliases` 中每一组是同类实体的中英文近义词。词表随场景扩充。没有可靠词项时自动路径保留原用户消息，模型仍可主动查证。`--context` 可本地复现自动入口，例如：
+
+~~~bash
+build/rag/venv/bin/python tools/memory_rag.py query --context --text "实验室里的绿帘"
+build/rag/venv/bin/python tools/memory_rag.py query --context --text "一架亮紫色直升机"
+~~~
+
+设置 `memory_context.enabled: false` 可关闭自动路径。检索失败或达到该组的 `timeout_sec` 时，Agent 继续处理原消息。
 
 ~~~bash
 source /opt/ros/humble/setup.bash

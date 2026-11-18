@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 #include <sensor_msgs/msg/image.hpp>
@@ -40,6 +41,10 @@ using BagImageConsumer = std::function<void (const BagImageRecord &, const senso
 BagScan scanBag(const BagBuildOptions & options, OutputFiles & output, bool write_preparation = true);
 /** @brief 同约定重扫并逐条核对来源/摘要，仅图像调用 consumer，不保留借用引用。 */
 void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer);
+/** @brief 复核完整来源，但只读取指定 ID 的图像负载并调用 consumer。 */
+void readBagImages(
+  const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer,
+  const std::set<std::string> & selected);
 /** @brief 复核全部输入分卷及 metadata 指纹；改变/活动 WAL 拒绝发布。 */
 void verifyBagSources(const BagBuildOptions & options, const BagScan & scan);
 

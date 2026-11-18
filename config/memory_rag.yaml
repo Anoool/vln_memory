@@ -25,3 +25,18 @@ max_length: 128
 top_k: 3
 service_name: /vln_memory/search_memory
 context_service_name: /vln_memory/retrieve_context
+
+# 自动给 Agent 附加上下文时使用的中英文同义词组。
+context_aliases:
+  - [backpack, backpacks, bag, bags, 背包, 随身包, 书包, 挎包]
+  - [chair, chairs, stool, stools, 椅子, 椅背, 办公椅, 转椅]
+  - [cabinet, cabinets, cupboard, cupboards, 设备柜, 柜子, 橱柜]
+  - [workbench, table, tables, desk, desks, 桌子, 桌面, 工作台]
+  - [monitor, monitors, screen, screens, 显示器, 屏幕]
+  - [shelf, shelves, rack, racks, 货架, 架子, 置物架]
+  - [door, doors, 门口, 房门, 门板]
+  - [curtain, curtains, 窗帘, 帘子, 绿帘]
+  - [broom, brooms, dustpan, 扫把, 扫帚, 簸箕]
+  - [cart, carts, trolley, trolleys, 推车, 小车]
+  - [socket, outlet, sockets, 插座]
+  - [wall, walls, 墙壁, 墙面]

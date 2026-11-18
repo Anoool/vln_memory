@@ -135,7 +135,7 @@ def run_recovery(binary, dataset, config_path):
       update = call_item("call_03", "update_entity", {
           "entity_id": first_entity["id"], "expected_revision": first_entity["revision"],
           "relations": [{"type": "on", "entity_ids": ["$self", second_entity["id"]],
-                         "evidence_observation_ids": ids}]})
+                         "evidence_observation_ids": ["v1", "v2"]}]})
       replies[2] = (200, [update])
 
       capped = run(1)
@@ -170,6 +170,7 @@ def run_recovery(binary, dataset, config_path):
       with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM build_progress")
       config["build"].update(observations_per_batch=1, max_tool_rounds=4)
+      config["model"]["rgb_jpeg_quality"] = 85
       bad_update = {
           "entity_id": first_entity["id"], "expected_revision": json.loads(receipts["call_03"])["entity"]["revision"],
           "add_observations": [{"observation_id": ids[0],
@@ -192,6 +193,12 @@ def run_recovery(binary, dataset, config_path):
       assert all(json.loads(receipts[key])["status"] == "location_unavailable" for key in ("reject_1", "reject_2"))
       assert "deferred_3" not in receipts and json.loads(receipts["next_batch"])["status"] == "ok"
       assert entities == 3 and len(posted) == 10
+      assert finished["timing"]["requests"] == 4
+      jpeg_content = posted[4][1]["input"][0]["content"]
+      note = json.loads(jpeg_content[1]["text"])
+      assert note["observation_ref"] == "v1" and note["observation_id"] == ids[0]
+      mime, payload = jpeg_content[2]["image_url"].split(",", 1)
+      assert mime == "data:image/jpeg;base64" and base64.b64decode(payload).startswith(b"\xff\xd8")
     finally:
       server.shutdown()
       thread.join()

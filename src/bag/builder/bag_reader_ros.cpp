@@ -644,8 +644,10 @@ BagScan scanBag(const BagBuildOptions & options, OutputFiles & output, bool writ
   return scan;
 }
 
-/** @brief 第二遍只临时解码当前图像；坏 CDR/负载用 nullptr 回调，不静默改配。 */
-void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer)
+/** @brief 重读并校验全部来源，按需限制解码和回调；坏负载仍使用 nullptr。 */
+static void readImages(
+  const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer,
+  const std::set<std::string> * selected)
 {
   if (!consumer) {throw BagBuildError("invalid_consumer", "Image consumer is required");}
   checkSourceStats(options, scan);
@@ -665,6 +667,7 @@ void readBagImages(const BagBuildOptions & options, const BagScan & scan, const 
       throw BagBuildError("source_changed", "Image index does not match source sequence");
     }
     const auto & record = scan.images[image_index++];
+    if (selected && !selected->count(record.source.message_id)) {continue;}
     if (!record.deserialization_error.empty() || !record.payload_error_code.empty()) {
       consumer(record, nullptr);
       continue;
@@ -683,6 +686,18 @@ void readBagImages(const BagBuildOptions & options, const BagScan & scan, const 
   }
   reader.close();
   verifyBagSources(options, scan);
+}
+
+void readBagImages(const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer)
+{
+  readImages(options, scan, consumer, nullptr);
+}
+
+void readBagImages(
+  const BagBuildOptions & options, const BagScan & scan, const BagImageConsumer & consumer,
+  const std::set<std::string> & selected)
+{
+  readImages(options, scan, consumer, &selected);
 }
 
 }  // namespace vln_memory

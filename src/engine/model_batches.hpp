@@ -13,6 +13,7 @@ struct ModelBuildOptions
   std::filesystem::path api_key_file;
   std::string api_key_env;
   long timeout_s{60};
+  int rgb_jpeg_quality{0};
   std::size_t observations_per_batch{4};
   std::size_t max_tool_rounds{12};
   bool resume{true};
