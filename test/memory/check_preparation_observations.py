@@ -1,7 +1,7 @@
-"""Test-only preparation adapter: raw metadata -> observation/1 -> C++ reader comparison.
+"""测试专用预处理适配器，将原始元数据转换为 observation/1，再与 C++ 读取结果比对。
 
-This does not implement the production observation_builder. Map context below is an
-explicit acceptance declaration, not proof of physical calibration/registration.
+正式流程由 observation_builder 实现。下方的地图上下文是为验收显式声明的，
+无法据此确认物理标定或配准状态。
 """
 import argparse
 import hashlib
@@ -12,17 +12,17 @@ import tempfile
 
 
 def rows(path):
-  """Read metadata only; preserve each JSONL source order."""
+  """仅读取元数据，保留每份 JSONL 的原始顺序。"""
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def fingerprint(path):
-  """Hash source metadata to identify it and detect test-time modification."""
+  """对源元数据做哈希，标识其内容并检测测试期间的修改。"""
   return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def identity(record):
-  """Match C++ length-prefix identity using UTF-8 byte lengths."""
+  """用 UTF-8 字节长度作为前缀，复现 C++ 标识生成规则。"""
   value = "obs1:"
   for name in ("bag_id", "pair_id", "rgb_message_id", "depth_message_id", "clock_id", "segment_id"):
     part = record[name]
@@ -31,7 +31,7 @@ def identity(record):
 
 
 def model(frame):
-  """Copy effective parameters only when the source model is ready."""
+  """在源模型就绪后复制有效参数。"""
   value = frame.get("camera_model")
   if not value or value["code"] != "ready":
     return None
@@ -41,13 +41,13 @@ def model(frame):
 
 
 def image(frame):
-  """Keep image metadata and source topic; stamp is encoded at the root."""
+  """保留图像元数据和来源话题，时间戳编码在记录根层。"""
   return {"topic": frame["source"]["topic"], "frame_id": frame["frame_id"],
       "width": frame["width"], "height": frame["height"]}
 
 
 def calibration(record, frame, selection, sources):
-  """Preserve original D8/ROI/binning/stamp and the actual matching policy."""
+  """保留原始 D8、ROI、像素合并参数、时间戳和实际匹配策略。"""
   if record is None:
     return None
   sources.append(record["source"])
@@ -65,7 +65,7 @@ def calibration(record, frame, selection, sources):
 
 
 def pose(frame, name, transforms, sources):
-  """Resolve every saved TF endpoint to its original transform metadata."""
+  """将每个已保存的 TF 端点引用解析为原始变换元数据。"""
   value = frame.get(name)
   if not value or value["pose_code"] != "ready":
     return None
@@ -91,7 +91,7 @@ def pose(frame, name, transforms, sources):
 
 
 def storage(frame, options):
-  """Distinguish metric NPY, source PNG16 and the historical v5 fallback."""
+  """区分以米为单位的 NPY、源 PNG16 格式和历史 v5 回退格式。"""
   if frame["media_path"] is None:
     return None
   details = frame["details"]
@@ -108,7 +108,7 @@ def storage(frame, options):
 
 
 def evidence(source):
-  """Keep original message locators, exact integers and optional raw CDR."""
+  """保留原始消息定位信息、精确整数和可选的原始 CDR。"""
   result = {key: source[key] for key in (
     "message_id", "topic", "payload_sha256", "raw_path")}
   for name in ("file_index", "topic_ordinal", "message_order", "bag_record_time_ns", "serialized_bytes"):
@@ -117,7 +117,7 @@ def evidence(source):
 
 
 def pending(record):
-  """Independently enumerate required missing-field and quality reasons."""
+  """独立列出必填字段缺失和质量不合格的原因。"""
   result = []
   for reason in record["source_pending_reasons"] + ["physical_geometry_unverified"]:
     if reason not in result:
@@ -148,7 +148,7 @@ def pending(record):
 
 
 def adapt(root, manifest_sha):
-  """Construct test records without modifying source metadata or media."""
+  """构造测试记录，保持源元数据和媒体内容原样。"""
   manifest = json.loads((root / "bag_manifest.json").read_text())
   options = manifest["effective_options"]
   frames = {row["source"]["message_id"]: row for row in rows(root / "frames.jsonl")}
@@ -209,7 +209,7 @@ def adapt(root, manifest_sha):
 
 
 def main():
-  """Run generated records through C++ and compare every decoded JSON value."""
+  """使用 C++ 读取生成的记录，并逐一比对解码后的 JSON 值。"""
   parser = argparse.ArgumentParser()
   parser.add_argument("--binary", required=True, type=Path)
   parser.add_argument("--input", action="append", default=[], type=Path)

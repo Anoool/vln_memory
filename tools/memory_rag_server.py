@@ -1,4 +1,4 @@
-"""Expose the local published memory search as a ROS 2 service."""
+"""通过 ROS 2 服务查询本地已发布的空间记忆。"""
 
 import argparse
 import json
@@ -14,7 +14,7 @@ from memory_rag import DEFAULT_CONFIG, MemorySearch, load_config
 
 
 def main():
-    """Load one published version and serve requests serially in the ROS executor."""
+    """加载一个发布版本，在 ROS 执行器中串行处理请求。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=DEFAULT_CONFIG, type=Path)
     args = parser.parse_args()
@@ -24,23 +24,29 @@ def main():
     except (OSError, ValueError, KeyError, ImportError, RuntimeError, yaml.YAMLError) as error:
         parser.exit(1, f"memory_rag_server: {error}\n")
 
-    def reply(request, response):
-        """Return JSON evidence or an error for this ROS request."""
+    def reply(request, response, *, vector_only=False):
+        """为当前 ROS 请求返回 JSON 格式的证据或错误信息。"""
         try:
-            result = search.query(request.text, request.relation or None)
+            result = search.query(request.text, request.relation or None, vector_only=vector_only)
             response.result_json = json.dumps(result, ensure_ascii=False)
         except (OSError, ValueError, KeyError, ImportError, RuntimeError) as error:
             response.error = str(error)
         return response
+
+    def context_reply(request, response):
+        """对原始用户文字执行纯向量检索，返回待核对候选。"""
+        return reply(request, response, vector_only=True)
 
     rclpy.init(args=[])
     try:
         node = Node("memory_rag")
         try:
             service_name = settings["service_name"]
+            context_service_name = settings["context_service_name"]
             node.create_service(SearchMemory, service_name, reply)
+            node.create_service(SearchMemory, context_service_name, context_reply)
             version = search.metadata["memory_version"]
-            node.get_logger().info(f"Serving {version} on {service_name}")
+            node.get_logger().info(f"Serving {version} on {service_name} and {context_service_name}")
             rclpy.spin(node)
         finally:
             node.destroy_node()

@@ -1,4 +1,4 @@
-"""Independently compare one SQLite recording with a CameraModel preparation dataset."""
+"""独立比对一份 SQLite 录包与 CameraModel 预处理数据集。"""
 
 import argparse
 from collections import Counter
@@ -15,9 +15,9 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
 
 def rows(path):
-    """Read strict JSONL objects without accepting NaN/Infinity extensions."""
+    """按严格的 JSONL 格式读取对象，拒绝 NaN 和 Infinity 扩展值。"""
     def reject(value):
-        """Reject non-JSON floating point constants."""
+        """拒绝 JSON 规范以外的浮点常量。"""
         raise ValueError(value)
     with path.open(encoding="utf-8") as stream:
         for line in stream:
@@ -25,7 +25,7 @@ def rows(path):
 
 
 def source_messages(db, selected_topics):
-    """Index original message bytes by topic, record time and hash; do not alter SQLite."""
+    """按话题、录制时间和哈希为原始消息字节建索引，以只读方式访问 SQLite。"""
     connection = sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)
     try:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
@@ -41,7 +41,7 @@ def source_messages(db, selected_topics):
 
 
 def message_bytes(root, item, connection):
-    """Read retained CDR or find exact source bytes in the read-only recording."""
+    """读取保留的 CDR，或从只读录包中查找完全一致的原始消息字节。"""
     if item["raw_path"] is not None:
         data = (root / item["raw_path"]).read_bytes()
         assert len(data) == item["serialized_bytes"]
@@ -58,7 +58,7 @@ def message_bytes(root, item, connection):
 
 
 def check_messages(root, source, connection):
-    """Verify every exported raw CDR against original bytes and consume duplicate multiplicity."""
+    """逐条核对导出的原始 CDR 与录包字节，并扣减重复消息的剩余条数。"""
     messages = {}
     for item in rows(root / "messages.jsonl"):
         raw = message_bytes(root, item, connection)
@@ -74,7 +74,7 @@ def check_messages(root, source, connection):
 
 
 def check_calibrations(root, messages, connection):
-    """Compare raw coefficients/matrices/header and derive D5 independently of C++ normalization."""
+    """比较原始系数、矩阵和消息头，独立推导 D5 参数以核对 C++ 归一化结果。"""
     calibrations = {}
     for item in rows(root / "camera_info.jsonl"):
         identifier = item["calibration_id"]
@@ -100,7 +100,7 @@ def check_calibrations(root, messages, connection):
 
 
 def decode_pixels(message, kind):
-    """Decode original JPEG/16UC1 compressedDepth with Python and apply explicit millimetres."""
+    """用 Python 解码录包中的 JPEG 和 16UC1 compressedDepth，按明确声明的毫米单位换算深度。"""
     if isinstance(message, CompressedImage):
         payload = bytes(message.data)
         if kind == "rgb":
@@ -120,7 +120,7 @@ def decode_pixels(message, kind):
 
 
 def check_model(frame, calibration):
-    """Compute actual grid matrices with independent matrix multiplication A*K and A*P."""
+    """独立计算矩阵乘积 A*K 和 A*P，得到实际像素网格的矩阵。"""
     model = frame["camera_model"]
     assert frame["effective_model_computed"] and model["code"] == "ready"
     assert model["image_domain"] == "raw"
@@ -139,7 +139,7 @@ def check_model(frame, calibration):
 
 
 def check_frames(root, messages, calibrations, types, connection):
-    """Check all source headers, actual models, JPEG pixels and metric depth arrays."""
+    """核对所有源消息头、实际相机模型、JPEG 像素和以米为单位的深度数组。"""
     frames = {}
     for frame in rows(root / "frames.jsonl"):
         identifier = frame["source"]["message_id"]
@@ -182,9 +182,9 @@ def check_frames(root, messages, calibrations, types, connection):
 
 
 def check_pairs(root, frames, summary):
-    """Recompute signed nanosecond deltas, one-to-one usage and both-model status."""
+    """重新计算带符号的纳秒时差，检查帧是否一对一使用，并确定两份相机模型的状态。"""
     def ns(stamp):
-        """Convert raw integer seconds/nanoseconds without floating point."""
+        """用整数将原始秒和纳秒转换为总纳秒数。"""
         return stamp["sec"] * 1_000_000_000 + stamp["nanosec"]
     used_rgb, used_depth = set(), set()
     for pair in rows(root / "rgbd_pairs.jsonl"):
@@ -202,7 +202,7 @@ def check_pairs(root, frames, summary):
 
 
 def main():
-    """Audit the supplied full recording and write a compact reproducible result."""
+    """审计提供的完整录包，并写出简明、可复现的结果。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--dataset", required=True, type=Path)

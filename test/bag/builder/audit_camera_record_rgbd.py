@@ -1,4 +1,4 @@
-"""Compare the RGB-D edge positions on fixed camera_record observations."""
+"""比较 camera_record 中指定观测的 RGB 和深度边缘位置。"""
 import json
 from pathlib import Path
 import sys
@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 
 SAMPLES = (635, 2701, 3374, 3360, 1564, 1578, 1607, 1633)
-# RGB edge x measured on a fixed horizontal slice. Depth x is the median in
-# the same window, using only jumps with valid samples on both sides.
+# 在固定水平切线上测量 RGB 边缘的 x 坐标。深度边缘的 x 坐标取同一窗口中的中位数，
+# 仅统计跳变两侧深度均有效的位置。
 SLICES = (
     (2701, "chair leg left", 445, 1038, 1140, 1085.5),
     (2701, "chair leg left", 530, 1005, 1100, 1060.5),
@@ -21,7 +21,7 @@ SLICES = (
 
 
 def rotation(pose):
-    """Convert the recorded optical-to-map quaternion to a rotation matrix."""
+    """将录制的光学坐标系到地图坐标系的四元数转换为旋转矩阵。"""
     x, y, z, w = pose["rotation_xyzw"]
     return np.array([
         [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
@@ -31,7 +31,7 @@ def rotation(pose):
 
 
 def edge_points(depth):
-    """Return the near-side pixel for jumps with valid depth on both sides."""
+    """对跳变两侧深度均有效的位置，返回靠近相机一侧的像素。"""
     mask = np.zeros(depth.shape, bool)
     for a, b, out_a, out_b in (
         (depth[:, :-1], depth[:, 1:], mask[:, :-1], mask[:, 1:]),
@@ -45,7 +45,7 @@ def edge_points(depth):
 
 
 def project(uv, depths, row, motion, rectified=False):
-    """Project the stored depth pixels into raw RGB, optionally using both times."""
+    """将保存的深度像素投影到原始 RGB 图像上，可选用深度和 RGB 各自的时间戳。"""
     depth, rgb = row["depth_model"], row["rgb_model"]
     kd = np.array(depth["k"]).reshape(3,3)
     kr = np.array(rgb["k"]).reshape(3,3)
@@ -61,7 +61,7 @@ def project(uv, depths, row, motion, rectified=False):
 
 
 def overlay(image, points):
-    """Draw projected depth discontinuities on a copy for inspection."""
+    """将投影后的深度跳变位置绘制到图像副本中，供检查。"""
     result = image.copy()
     h,w = result.shape[:2]
     x,y = np.rint(points).astype(int).T
@@ -73,7 +73,7 @@ def overlay(image, points):
 
 
 def inspect(dataset, output):
-    """Save the three comparison grids and exact pixel coordinates."""
+    """保存三张对照网格图和精确的像素坐标。"""
     source = json.loads((dataset/"evidence/source.json").read_text())
     if [f["sha256"] for f in source["source_files"]] != [
         "5704b033b590e01151bb56534c3068ea817f90836744975c51ef70b7dbc5890d"

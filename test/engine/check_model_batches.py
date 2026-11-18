@@ -1,4 +1,4 @@
-"""Check the installed-style batch command against a scripted local Responses server."""
+"""通过本地模拟 Responses 服务测试按安装方式调用的批处理命令。"""
 
 import argparse
 import base64
@@ -13,19 +13,19 @@ import threading
 
 
 def message(text):
-  """Return a completed assistant message."""
+  """返回一条已完成的助理消息。"""
   return {"type": "message", "role": "assistant", "status": "completed",
           "content": [{"type": "output_text", "text": text}]}
 
 
 def call_item(call_id, name, arguments):
-  """Create the same function item shape returned by Responses."""
+  """构造与 Responses 返回值结构相同的函数调用项。"""
   return {"type": "function_call", "call_id": call_id, "name": name,
           "arguments": json.dumps(arguments), "status": "completed"}
 
 
 def run_recovery(binary, dataset, config_path):
-  """Resume after a failed receipt insert, HTTP failure, and tool round exhaustion."""
+  """覆盖回执写入失败、HTTP 请求失败和工具调用轮次耗尽后的续跑。"""
   database = dataset / "entities.sqlite3"
   with (dataset / "observations.jsonl").open() as stream:
     observations = [json.loads(line) for line in stream]
@@ -33,7 +33,7 @@ def run_recovery(binary, dataset, config_path):
   assert len(ids) == 2
 
   def create(label, obs_id):
-    """Create a located object from a known depth pixel."""
+    """通过一个已知深度像素创建带位置的物体。"""
     return {"kind": "object", "semantic_label": label, "add_observations": [
         {"observation_id": obs_id, "selector": {"type": "point", "image": "depth", "pixel_xy": [0, 0]}}]}
 
@@ -46,7 +46,7 @@ def run_recovery(binary, dataset, config_path):
   replies = [(200, [reasoning, first, second]), (503, []), (200, []), (200, [message("Done")])]
 
   class Handler(BaseHTTPRequestHandler):
-    """Capture the exact HTTP body and return one scripted result."""
+    """原样记录 HTTP 请求体，并返回一个预设结果。"""
 
     def do_POST(self):
       data = self.rfile.read(int(self.headers["Content-Length"]))
@@ -61,7 +61,7 @@ def run_recovery(binary, dataset, config_path):
       self.wfile.write(payload)
 
     def log_message(self, *_args):
-      """Keep routine HTTP logging out of CTest output."""
+      """抑制常规 HTTP 日志，使 CTest 输出集中在测试结果。"""
 
   with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -72,7 +72,7 @@ def run_recovery(binary, dataset, config_path):
                         "api_key_file": key_file.name, "timeout_s": 3}}
 
     def run(expected, request=None):
-      """Run a new process with the same SQLite work directory."""
+      """使用同一个 SQLite 工作目录启动新进程。"""
       config_path.write_text(json.dumps(config), encoding="utf-8")
       command = [str(binary), "--config", str(config_path)]
       inputs = ""
@@ -85,7 +85,7 @@ def run_recovery(binary, dataset, config_path):
       return result
 
     def state():
-      """Inspect durable state after the CLI has exited."""
+      """在 CLI 退出后检查持久化状态。"""
       with sqlite3.connect(database) as connection:
         progress, = connection.execute("SELECT progress_json FROM build_progress").fetchone()
         receipts = dict(connection.execute("SELECT call_id,result_json FROM tool_calls"))
@@ -165,7 +165,7 @@ def run_recovery(binary, dataset, config_path):
       assert json.loads(conflict.stdout)["status"] == "call_id_conflict"
       assert state()[2] == 2
 
-      # Continue with an existing entity and two single-observation batches.
+      # 用已有实体和两个各含一条观测的批次继续测试。
       key_file.write_text('api_key: "fixture-key"\n', encoding="utf-8")
       with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM build_progress")
@@ -198,7 +198,7 @@ def run_recovery(binary, dataset, config_path):
 
 
 def main():
-  """Use a direct BagBuilder fixture so each tool has real media and calibration to read."""
+  """使用 BagBuilder 直接生成的测试数据，让各工具能够读取实际媒体和标定数据。"""
   parser = argparse.ArgumentParser()
   parser.add_argument("--engine", type=Path, required=True)
   parser.add_argument("--fixture-pointer", type=Path, required=True)

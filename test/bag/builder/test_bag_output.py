@@ -1,4 +1,4 @@
-"""Independently read C++ artifacts with Python JSON, SHA-256 and NumPy."""
+"""用 Python 的 JSON、SHA-256 和 NumPy 独立检查 C++ 输出。"""
 
 import hashlib
 import json
@@ -9,15 +9,15 @@ import numpy as np
 
 
 def read_json(path):
-    """Read strict JSON; reject nonstandard NaN/Infinity tokens."""
+    """按严格的 JSON 格式读取数据，拒绝 NaN 和 Infinity。"""
     def reject_constant(value):
-        """Fail on a non-JSON numerical literal instead of accepting Python's extension."""
+        """遇到 JSON 规范以外的数值字面量时报错，以排除 Python 的扩展行为。"""
         raise ValueError(f"Nonstandard JSON constant: {value}")
     return json.loads(path.read_text(encoding="utf-8"), parse_constant=reject_constant)
 
 
 def read_lines(path):
-    """Read each nonempty JSONL object and retain source order for reference checks."""
+    """逐行读取非空的 JSONL 对象，保留原始顺序以便核对引用。"""
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
         row = json.loads(line)
@@ -28,7 +28,7 @@ def read_lines(path):
 
 
 def check_dataset(root):
-    """Verify image references, NPY metric values, raw bytes and TF endpoint references."""
+    """核对图像引用、NPY 中以米为单位的数值、原始字节和 TF 端点引用。"""
     frames = read_lines(root / "frames.jsonl")
     messages = read_lines(root / "messages.jsonl")
     manifest = read_json(root / "bag_manifest.json")
@@ -100,7 +100,7 @@ def check_dataset(root):
 
 
 def check_storage_modes(parent):
-    """Compare all extracted records and media while allowing nullable raw paths."""
+    """比较所有提取记录和媒体文件，允许原始数据路径为空。"""
     full = parent / "normal_out"
     lean = parent / "normal_no_cdr_out"
     assert not (lean / "evidence/raw").exists()
@@ -124,7 +124,7 @@ def check_storage_modes(parent):
 
 
 def check_nearest_dataset(root):
-    """Recompute signed deltas and uniqueness from original CDR and exported frames."""
+    """根据原始 CDR 和导出的帧重新计算带符号的时差，并检查帧是否重复使用。"""
     import struct
     messages = {}
     for message in read_lines(root / "messages.jsonl"):
@@ -135,7 +135,7 @@ def check_nearest_dataset(root):
         frames[message_id] = frame
         if frame["metadata_available"]:
             raw = (root / messages[message_id]["raw_path"]).read_bytes()
-            # ROS CDR encapsulation precedes Header stamp; support recorded byte order.
+            # ROS 消息头里的时间戳位于 CDR 封装头之后，按录包记录的字节序读取。
             endian = ">"
             if raw[1] & 1:
                 endian = "<"
@@ -147,7 +147,7 @@ def check_nearest_dataset(root):
 
 
 def check_pair_times(root, frames):
-    """Check unique pairs, signed deltas, actual equality and report conservation."""
+    """检查配对唯一性、带符号的时差、实际时间戳是否相等，以及配对统计的计数是否守恒。"""
     used_rgb = set()
     used_depth = set()
     summary = read_json(root / "reports/summary.json")
@@ -185,7 +185,7 @@ def check_pair_times(root, frames):
 
 
 def main():
-    """Find the latest C++ fixture, verify it, then compare two deterministic exports."""
+    """找到最新的 C++ 测试数据并验证，再比较两次确定性导出的结果。"""
     parent = Path(sys.argv[1])
     root = Path((parent / "latest.txt").read_text().strip())
     check_dataset(root / "normal_out")

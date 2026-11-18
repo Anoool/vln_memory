@@ -1,6 +1,6 @@
 # vln_memory_RAG
 
-`vln_memory` 是用于视觉语言导航的 ROS 2 Humble / C++17 空间语义记忆包。BagBuilder 从 RGB-D 录包发布可回读的正式观测；MemoryEngine 读取观测、计算地图坐标并把实体和关系写入 SQLite。本仓库在该离线构建基线上规划 RAG 查询。ROS 包名和现有命令仍为 `vln_memory`。MemoryViewer 处于规划阶段。
+`vln_memory` 是用于视觉语言导航的 ROS 2 Humble / C++17 空间语义记忆包。BagBuilder 从 RGB-D 录包发布可回读的正式观测；MemoryEngine 读取观测、计算地图坐标并把实体和关系写入 SQLite。记忆发布后，由 RAG 检索实体与关系，并向 Agent 提供坐标和观测证据。ROS 包名和现有命令仍为 `vln_memory`。MemoryViewer 处于规划阶段。
 
 | 模块 | 入口与文档 |
 | --- | --- |
@@ -58,8 +58,17 @@ ros2 run vln_memory memory_engine --config config/vln_memory.yaml --build
 
 ## RAG 查询
 
-RAG 从 `memory_engine --publish` 生成的记忆版本读取实体、标注、关系和观测证据。第一版在本地运行 `intfloat/multilingual-e5-small`。向量按实体编码，与实体 ID 一起存到发布目录旁的可重建索引。查询使用同一模型编码中文或英文短语，再按实体 ID 回查坐标、关系和原图引用。SQLite 继续管理离线构建、标注和纠错。
+[config/memory_rag.yaml](config/memory_rag.yaml) 当前指向 `site_s4-bag217-deepseek-v1` 正式包及其共享索引，包含 217 条观测、53 个已定位实体和 27 条关系。编码使用本地 E5-small INT8 ONNX。
 
-现有 Python CLI 提供本地建索引、实体检索和关系与观测回查。发布目录、索引目录、模型目录和候选数量集中在 [config/memory_rag.yaml](config/memory_rag.yaml)，参见[安装与调用方式](docx/modules/engine/memory_rag.md)。`vln_agent` 的只读 `search_memory` 工具通过 ROS 2 调用本地常驻检索服务，由现有会话模型根据检索结果回答。当前范围与实施顺序见 [RAG 实施方案](docx/project/rag_plan.md) 和 [系统规划](docx/project/system_plan.md)。
+从仓库根目录，直接用现有索引查询：
+
+~~~bash
+build/rag/venv/bin/python tools/memory_rag.py query \
+  --text "black backpack hung on chair backrest" --relation hanging_on
+~~~
+
+当前环境为 `desktop`。部署到 Jetson Nano 时，将同一份 YAML 的 `environment` 改为 `jetson`，即可用该环境的批大小和 CPU 线程数读取现有索引。发布版本或编码配置变更时，再按[建索引与部署说明](docx/modules/engine/memory_rag.md#建索引和查询)构建索引。
+
+`vln_agent` 通过同一个检索进程使用两条只读路径。模型可主动调用 `search_memory` 查证实体或关系，Agent 也可在发送用户指令前通过 `retrieve_context` 附上相似候选。参见 [Agent 接入](docx/modules/engine/memory_rag.md#接入-vln_agent)和 [217 条观测验收](docx/reviews/verification.md#217-条观测与共享索引验收)。
 
 开发约定见 [AGENTS.md](AGENTS.md)。项目采用 [Apache License 2.0](LICENSE)。

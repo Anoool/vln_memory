@@ -1,4 +1,4 @@
-"""Build and query a local vector index for a published spatial memory version."""
+"""为已发布的空间记忆版本构建和查询本地向量索引。"""
 
 import argparse
 import hashlib
@@ -11,70 +11,138 @@ import numpy as np
 import yaml
 
 
-MODEL_ID = "intfloat/multilingual-e5-small"
-MODEL_REVISION = "ccc66d3bcd826f577e26b9a4072cc5fe3a7ad6a3"
-MODEL_FILE = "model_qint8_avx512_vnni.onnx"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config/memory_rag.yaml"
-DIMENSION = 384
-BATCH_SIZE = 16
+ENCODER_FIELDS = (
+    "model_id", "model_revision", "dimension", "max_length", "onnx_output",
+    "pooling", "pad_token", "passage_prefix", "query_prefix",
+)
 RELATION_TYPES = ("inside", "near", "on", "hanging_on", "connects_regions")
 
 
-class E5Encoder:
-    """Run the pinned E5-small ONNX model locally and return unit vectors."""
+class OnnxEncoder:
+    """依据 YAML 加载本地 ONNX 编码器和分词器，返回单位向量。"""
 
-    def __init__(self, model_dir):
-        """Open the local model and tokenizer once for this command."""
+    def __init__(self, settings, model_files):
+        """用已完成身份校验的模型文件初始化 CPU 会话，读取输入契约。"""
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
-        model_path = model_dir / MODEL_FILE
-        tokenizer_path = model_dir / "tokenizer.json"
-        if not model_path.is_file() or not tokenizer_path.is_file():
-            raise ValueError(f"Missing E5-small files in {model_dir}; see the RAG setup instructions")
-        self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
-        self.tokenizer.enable_truncation(max_length=512)
-        self.tokenizer.enable_padding(pad_id=self.tokenizer.token_to_id("<pad>"), pad_token="<pad>")
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = 4
-        self.session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
+        self.settings = settings
+        tokenizer_path = settings["tokenizer_path"]
+        model_path = settings["model_path"]
+        check_encoder_files(settings, model_files)
+        try:
+            self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = settings["intra_op_threads"]
+            self.session = ort.InferenceSession(str(model_path), options, providers=["CPUExecutionProvider"])
+        except Exception as error:
+            raise ValueError(f"Cannot load ONNX model {model_path} or tokenizer {tokenizer_path}: {error}") from error
+        check_encoder_files(settings, model_files)
+
+        pad_token = settings["pad_token"]
+        pad_id = self.tokenizer.token_to_id(pad_token)
+        if pad_id is None:
+            raise ValueError(f"Pad token {pad_token!r} is not in {tokenizer_path}")
+        self.tokenizer.enable_truncation(max_length=settings["max_length"])
+        self.tokenizer.enable_padding(pad_id=pad_id, pad_token=pad_token)
+
+        fields = {"input_ids": "ids", "attention_mask": "attention_mask", "token_type_ids": "type_ids"}
+        dtypes = {"tensor(int32)": np.int32, "tensor(int64)": np.int64}
+        self.inputs = {}
+        for item in self.session.get_inputs():
+            if item.name not in fields or item.type not in dtypes:
+                raise ValueError(f"Unsupported ONNX input {item.name!r}: {item.type}")
+            self.inputs[item.name] = (fields[item.name], dtypes[item.type])
+        if "input_ids" not in self.inputs:
+            raise ValueError("ONNX encoder must declare an input_ids input")
+        if settings["onnx_output"] not in {item.name for item in self.session.get_outputs()}:
+            raise ValueError(f"Configured ONNX output is missing: {settings['onnx_output']}")
 
     def encode(self, texts, prefix):
-        """Encode prefixed passages or queries in bounded batches, preserving input order."""
-        vectors = np.empty((len(texts), DIMENSION), dtype=np.float32)
-        for start in range(0, len(texts), BATCH_SIZE):
-            end = start + BATCH_SIZE
+        """按配置限制批大小和序列长度，按输入顺序返回 float32 向量。"""
+        settings = self.settings
+        batch_size = settings["batch_size"]
+        dimension = settings["dimension"]
+        vectors = np.empty((len(texts), dimension), dtype=np.float32)
+        for start in range(0, len(texts), batch_size):
+            end = start + batch_size
             batch = self.tokenizer.encode_batch([prefix + text for text in texts[start:end]])
-            attention = np.array([item.attention_mask for item in batch], dtype=np.int64)
-            inputs = {
-                "input_ids": np.array([item.ids for item in batch], dtype=np.int64),
-                "attention_mask": attention,
-                "token_type_ids": np.array([item.type_ids for item in batch], dtype=np.int64),
-            }
-            hidden, = self.session.run(["last_hidden_state"], inputs)
-            mask = attention[..., None].astype(np.float32)
-            pooled = (hidden * mask).sum(axis=1) / mask.sum(axis=1)
+            inputs = {}
+            for name, (field, dtype) in self.inputs.items():
+                inputs[name] = np.array([getattr(item, field) for item in batch], dtype=dtype)
+            try:
+                hidden, = self.session.run([settings["onnx_output"]], inputs)
+            except Exception as error:
+                raise ValueError(f"ONNX inference failed for {settings['model_path']}: {error}") from error
+            pooled = self.pool(hidden, batch)
+            if pooled.shape != (len(batch), dimension):
+                raise ValueError(f"ONNX embedding shape {pooled.shape} does not match dimension {dimension}")
             norms = np.linalg.norm(pooled, axis=1, keepdims=True)
             if not np.isfinite(norms).all() or np.any(norms == 0):
-                raise ValueError("E5-small produced an invalid vector")
+                raise ValueError("ONNX encoder produced an invalid vector")
             vectors[start:end] = pooled / norms
         return vectors
 
+    def pool(self, output, batch):
+        """根据 YAML 汇总词元向量，或使用模型已导出的句向量。"""
+        if not isinstance(output, np.ndarray) or output.dtype.kind != "f":
+            raise ValueError("ONNX encoder output must be a floating-point tensor")
+        output = output.astype(np.float32, copy=False)
+        pooling = self.settings["pooling"]
+        if pooling == "none" and output.ndim == 2:
+            return output
+        if pooling != "none" and output.ndim == 3 and output.shape[1] == len(batch[0].ids):
+            if pooling == "cls":
+                return output[:, 0, :]
+            attention = np.array([item.attention_mask for item in batch], dtype=np.float32)
+            weighted = np.einsum("btd,bt->bd", output, attention, dtype=np.float32)
+            return weighted / attention.sum(axis=1, keepdims=True)
+        raise ValueError(f"ONNX output shape {output.shape} is incompatible with pooling {pooling!r}")
+
+
+def file_sha256(path):
+    """分块读取模型文件，避免为校验值将整个权重文件载入内存。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
 
 def read_rows(release, manifest, name):
-    """Read a published JSONL table after checking its digest and declared count."""
+    """逐行读取已发布的 JSONL，并在遍历结束时核对摘要与记录数。"""
     path = release / f"{name}.jsonl"
-    raw = path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != manifest["file_sha256"][path.name]:
+    digest = hashlib.sha256()
+    count = 0
+    with path.open("rb") as stream:
+        for line in stream:
+            digest.update(line)
+            count += 1
+            yield json.loads(line)
+    if digest.hexdigest() != manifest["file_sha256"][path.name]:
         raise ValueError(f"Published file digest does not match the manifest: {path.name}")
-    rows = [json.loads(line) for line in raw.splitlines()]
-    if len(rows) != manifest["counts"][name]:
+    if count != manifest["counts"][name]:
         raise ValueError(f"Published file count does not match the manifest: {path.name}")
-    return rows
 
 
-def load_release(release):
-    """Load the sealed entity and annotation tables and bind them to one release."""
+def encoder_files(settings):
+    """取得两份模型文件的身份和修改状态，供延迟加载前后比较。"""
+    files = []
+    for key in ("model_path", "tokenizer_path"):
+        info = settings[key].stat()
+        files.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    return files
+
+
+def check_encoder_files(settings, previous_files):
+    """拒绝运行期间替换的模型文件，防止旧索引搭配新权重。"""
+    if encoder_files(settings) != previous_files:
+        raise ValueError("ONNX model or tokenizer changed while loading; restart or rebuild the index")
+
+
+def load_release(release, settings):
+    """加载已封存的实体与标注，生成发布版本和编码配置对应的索引签名。"""
     raw = (release / "manifest.json").read_bytes()
     manifest = json.loads(raw)
     if manifest["artifact_kind"] != "spatial_memory" or manifest["schema_version"] != "spatial_memory/1":
@@ -93,27 +161,28 @@ def load_release(release):
             raise ValueError("Published annotations must reference distinct active entities")
         annotations[entity_id] = row
 
+    model_files = encoder_files(settings)
     metadata = {
-        "schema_version": "memory_rag/1",
+        "schema_version": "memory_rag/2",
         "memory_version": manifest["memory_version"],
         "release_manifest_sha256": hashlib.sha256(raw).hexdigest(),
-        "model_id": MODEL_ID,
-        "model_revision": MODEL_REVISION,
-        "model_file": MODEL_FILE,
-        "dimension": DIMENSION,
         "entities": len(entities),
+        **{key: settings[key] for key in ENCODER_FIELDS},
+        "model_sha256": file_sha256(settings["model_path"]),
+        "tokenizer_sha256": file_sha256(settings["tokenizer_path"]),
     }
-    return manifest, metadata, entities, annotations
+    check_encoder_files(settings, model_files)
+    return manifest, metadata, entities, annotations, model_files
 
 
 def entity_names(entity, annotation):
-    """Return the current display name, aliases and original semantic label."""
+    """返回当前显示名称、别名和原始语义标签。"""
     names = [annotation.get("display_name"), entity["semantic_label"], *annotation.get("aliases", [])]
     return list(dict.fromkeys(name.strip() for name in names if name and name.strip()))
 
 
 def passage(entity, annotation):
-    """Assemble one short E5 passage for an entity, including selected attributes."""
+    """将实体及其选定属性组织成一段可供 E5 编码的短文本。"""
     parts = entity_names(entity, annotation)
     if entity.get("description"):
         parts.append(entity["description"])
@@ -124,14 +193,14 @@ def passage(entity, annotation):
     return ". ".join(parts)
 
 
-def build_index(index_dir, model_dir, metadata, entities, annotations):
-    """Encode one vector per entity and publish a complete index in a new directory."""
+def build_index(index_dir, settings, metadata, entities, annotations, model_files):
+    """为每个实体编码一个向量，并在新目录中发布完整索引。"""
     if index_dir.exists():
         raise ValueError(f"Index already exists; choose a new directory: {index_dir}")
     texts = [passage(row, annotations.get(entity_id, {})) for entity_id, row in entities.items()]
-    vectors = np.empty((0, DIMENSION), dtype=np.float32)
+    vectors = np.empty((0, settings["dimension"]), dtype=np.float32)
     if texts:
-        vectors = E5Encoder(model_dir).encode(texts, "passage: ")
+        vectors = OnnxEncoder(settings, model_files).encode(texts, settings["passage_prefix"])
 
     index_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".rag-", dir=index_dir.parent) as temporary:
@@ -146,7 +215,7 @@ def build_index(index_dir, model_dir, metadata, entities, annotations):
 
 
 def load_index(index_dir, metadata, entities):
-    """Reject stale or misaligned indexes before using their vectors."""
+    """在使用向量之前，拒绝过期索引或与当前发布版本不一致的索引。"""
     manifest_path = index_dir / "index.json"
     if not manifest_path.is_file():
         raise ValueError(f"Index is missing or incomplete; run build-index: {index_dir}")
@@ -154,29 +223,32 @@ def load_index(index_dir, metadata, entities):
     ids = json.loads((index_dir / "entity_ids.json").read_text(encoding="utf-8"))
     if saved != metadata or ids != list(entities):
         raise ValueError("Index does not match this release or model; rebuild the index")
-    vectors = np.load(index_dir / "vectors.npy", allow_pickle=False)
-    if (not isinstance(vectors, np.ndarray) or vectors.shape != (len(ids), DIMENSION)
-            or vectors.dtype != np.float32 or not np.isfinite(vectors).all()):
+    vectors = np.load(index_dir / "vectors.npy", mmap_mode="r", allow_pickle=False)
+    if not isinstance(vectors, np.ndarray) or vectors.shape != (len(ids), metadata["dimension"]) or vectors.dtype != np.float32:
         raise ValueError("Invalid vector matrix; rebuild the index")
+    for start in range(0, len(ids), 1024):
+        if not np.isfinite(vectors[start:start + 1024]).all():
+            raise ValueError("Invalid vector matrix; rebuild the index")
     return ids, vectors
 
 
 def normalize_name(text):
-    """Normalize case, Unicode width and repeated whitespace for name matching."""
+    """统一字母大小写和 Unicode 字符宽度，合并连续空白，用于名称匹配。"""
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def rank_entities(ids, vectors, metadata, entities, annotations, text, top_k, encode_query):
-    """Return a unique name match or ranked vector candidates for the query."""
+def rank_entities(ids, vectors, metadata, entities, annotations, text, top_k, encode_query, *, vector_only=False):
+    """默认优先精确名称，自动检索直接编码并返回排序后的候选项。"""
     name = normalize_name(text)
     if not name or top_k < 1:
         raise ValueError("Query text must be non-empty and top-k must be positive")
     result = {"memory_version": metadata["memory_version"], "status": "empty", "matches": []}
     exact = []
-    for entity_id, row in entities.items():
-        names = entity_names(row, annotations.get(entity_id, {}))
-        if any(normalize_name(candidate) == name for candidate in names):
-            exact.append(entity_id)
+    if not vector_only:
+        for entity_id, row in entities.items():
+            names = entity_names(row, annotations.get(entity_id, {}))
+            if any(normalize_name(candidate) == name for candidate in names):
+                exact.append(entity_id)
     if len(exact) == 1:
         entity_id = exact[0]
         result["status"] = "exact"
@@ -193,7 +265,8 @@ def rank_entities(ids, vectors, metadata, entities, annotations, text, top_k, en
 
 
 def checked_observations(release, manifest):
-    """Index sealed observations from the release's map and geometry revision."""
+    """只保留同版观测的修订、媒体路径和同步状态，供查询复用。"""
+    fields = ("revision", "rgb_media", "depth_media", "depth_alignment", "capture_sync_status")
     observations = {}
     for row in read_rows(release, manifest, "observations"):
         obs_id = row["id"]
@@ -202,12 +275,12 @@ def checked_observations(release, manifest):
         if (row["map_id"], row["map_frame"], row["geometry_revision"]) != (
                 manifest["map_id"], manifest["frame_id"], manifest["geometry_revision"]):
             raise ValueError(f"Observation geometry does not match the release: {obs_id}")
-        observations[obs_id] = row
+        observations[obs_id] = {key: row.get(key) for key in fields}
     return observations
 
 
 def location_fields(release, entity, observations):
-    """Resolve the entity's selected observation and return its original evidence references."""
+    """定位实体选用的观测，并返回原始证据引用。"""
     fields = dict.fromkeys(("observation_id", "observation_revision", "selector",
                             "rgb_media", "depth_media", "depth_alignment", "capture_sync_status"))
     location = entity["location_observation"]
@@ -225,7 +298,9 @@ def location_fields(release, entity, observations):
     else:
         raise ValueError(f"Missing entity evidence for location observation: {obs_id}")
     for role in ("rgb_media", "depth_media"):
-        media = observation[role]
+        media = observation.get(role)
+        if not isinstance(media, str) or not media:
+            raise ValueError(f"Missing {role} in published observation: {obs_id}")
         path = Path(media)
         resolved = (release / path).resolve()
         if path.is_absolute() or not resolved.is_relative_to(release / "evidence") or not resolved.is_file():
@@ -237,7 +312,7 @@ def location_fields(release, entity, observations):
 
 
 def relations_by_entity(release, manifest, entities, observations, relation_type):
-    """Group supported relations by endpoint while keeping their published direction and basis."""
+    """按端点整理有证据支持的关系，保留发布时的方向和依据。"""
     grouped = {}
     for row in read_rows(release, manifest, "relations"):
         if (row["type"] != relation_type or row["recognition_state"] != "supported"
@@ -260,15 +335,14 @@ def relations_by_entity(release, manifest, entities, observations, relation_type
     return grouped
 
 
-def add_evidence(result, release, manifest, entities, annotations, relation_type):
-    """Enrich each search hit with coordinates and evidence from the same published version."""
+def add_evidence(result, release, manifest, entities, annotations, observations, relation_type):
+    """为每个检索结果补充同一发布版本中的坐标与证据。"""
     for key in ("map_id", "frame_id", "geometry_revision"):
         result[key] = manifest[key]
     if relation_type is not None:
         result["relation_type"] = relation_type
     if not result["matches"]:
         return
-    observations = checked_observations(release, manifest)
     relations = {}
     if relation_type is not None:
         relations = relations_by_entity(release, manifest, entities, observations, relation_type)
@@ -290,13 +364,30 @@ def add_evidence(result, release, manifest, entities, annotations, relation_type
 
 
 def load_config(config_path):
-    """Read YAML settings and resolve relative paths from the configuration directory."""
+    """读取 YAML 配置，以配置文件所在目录为基准解析相对路径。"""
     path = config_path.resolve(strict=True)
     settings = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(settings, dict):
         raise ValueError(f"Expected a YAML mapping: {path}")
-    path_keys = ("release", "index_dir", "model_dir")
-    unknown = settings.keys() - {*path_keys, "top_k", "service_name"}
+    runtime_keys = ("batch_size", "intra_op_threads")
+    if "environment" in settings or "environments" in settings:
+        environment = settings.get("environment")
+        environments = settings.pop("environments", None)
+        if not isinstance(environment, str) or not isinstance(environments, dict) or environment not in environments:
+            raise ValueError("RAG setting 'environment' must select a profile from 'environments'")
+        runtime = environments[environment]
+        if not isinstance(runtime, dict) or runtime.keys() != set(runtime_keys):
+            raise ValueError("An environment profile must set only 'batch_size' and 'intra_op_threads'")
+        if settings.keys() & runtime_keys:
+            raise ValueError("Set batch size and CPU threads within the environment profile")
+        settings.update(runtime)
+
+    path_keys = ("release", "index_dir", "model_path", "tokenizer_path")
+    integer_keys = ("top_k", "dimension", "max_length", *runtime_keys)
+    allowed_keys = {*path_keys, *integer_keys, *ENCODER_FIELDS, "environment", "service_name", "context_service_name"}
+    unknown = settings.keys() - allowed_keys
+    if "model_dir" in settings:
+        raise ValueError("Legacy model_dir is no longer supported; use model_path and tokenizer_path from config/memory_rag.yaml")
     if unknown:
         raise ValueError(f"Unknown RAG settings: {', '.join(map(str, unknown))}")
 
@@ -305,51 +396,73 @@ def load_config(config_path):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"RAG setting '{key}' must be a non-empty path")
         settings[key] = (path.parent / Path(value).expanduser()).resolve()
-    top_k = settings.get("top_k")
-    if type(top_k) is not int or top_k < 1:
-        raise ValueError("RAG setting 'top_k' must be a positive integer")
-    service_name = settings.setdefault("service_name", "/vln_memory/search_memory")
-    if not isinstance(service_name, str) or not service_name.strip():
-        raise ValueError("RAG setting 'service_name' must be a non-empty ROS service name")
+    if settings["index_dir"].is_relative_to(settings["release"]):
+        raise ValueError("Index must be outside the published directory")
+    for key in integer_keys:
+        value = settings.get(key)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"RAG setting '{key}' must be a positive integer")
+    for key in ENCODER_FIELDS:
+        if key in integer_keys:
+            continue
+        value = settings.get(key)
+        if not isinstance(value, str):
+            raise ValueError(f"RAG setting '{key}' must be a string")
+        if key not in ("passage_prefix", "query_prefix") and not value.strip():
+            raise ValueError(f"RAG setting '{key}' must be a non-empty string")
+    if settings["pooling"] not in ("mean", "cls", "none"):
+        raise ValueError("RAG setting 'pooling' must be mean, cls or none")
+    settings.setdefault("service_name", "/vln_memory/search_memory")
+    settings.setdefault("context_service_name", "/vln_memory/retrieve_context")
+    for key in ("service_name", "context_service_name"):
+        value = settings[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"RAG setting '{key}' must be a non-empty ROS service name")
+    if settings["service_name"] == settings["context_service_name"]:
+        raise ValueError("Search and context retrieval services must have distinct names")
     return settings
 
 
 class MemorySearch:
-    """Keep one validated release and its index loaded for repeated local queries."""
+    """保留一份已经过验证的发布版本及其索引，供本地重复查询。"""
 
     def __init__(self, settings):
-        """Read index and release data once; load the local encoder on the first vector query."""
+        """只读取一次索引和发布数据，并在首次进行向量检索时加载本地编码器。"""
         self.release = settings["release"]
-        self.model_dir = settings["model_dir"]
-        self.top_k = settings["top_k"]
-        self.manifest, self.metadata, self.entities, self.annotations = load_release(self.release)
+        self.settings = settings
+        self.manifest, self.metadata, self.entities, self.annotations, self.model_files = load_release(
+            self.release, settings)
         self.ids, self.vectors = load_index(settings["index_dir"], self.metadata, self.entities)
         self.encoder = None
+        self.observations = None
 
     def encode_query(self, text):
-        """Reuse the same encoder for every vector query in this process."""
+        """在本进程的所有向量检索中复用同一个编码器。"""
         if self.encoder is None:
-            self.encoder = E5Encoder(self.model_dir)
-        return self.encoder.encode([text], "query: ")[0]
+            self.encoder = OnnxEncoder(self.settings, self.model_files)
+        return self.encoder.encode([text], self.settings["query_prefix"])[0]
 
-    def query(self, text, relation=None):
-        """Return ranked hits and published evidence without changing the release."""
+    def query(self, text, relation=None, *, vector_only=False):
+        """返回排序后的匹配结果及其已发布证据，保持发布数据原样。"""
         if relation is not None and relation not in RELATION_TYPES:
             raise ValueError(f"Unsupported memory relation: {relation}")
         result = rank_entities(self.ids, self.vectors, self.metadata, self.entities, self.annotations,
-                               text, self.top_k, self.encode_query)
-        add_evidence(result, self.release, self.manifest, self.entities, self.annotations, relation)
+                               text, self.settings["top_k"], self.encode_query, vector_only=vector_only)
+        if result["matches"] and self.observations is None:
+            self.observations = checked_observations(self.release, self.manifest)
+        add_evidence(result, self.release, self.manifest, self.entities, self.annotations, self.observations, relation)
         return result
 
 
 def main():
-    """Parse CLI arguments and emit a single JSON result or a diagnostic on stderr."""
+    """解析 CLI 参数，输出一份 JSON 结果，或将诊断信息写入标准错误。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="RAG YAML settings")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("build-index")
     search = commands.add_parser("query")
     search.add_argument("--text", required=True)
+    search.add_argument("--vector-only", action="store_true", help="Skip name matching and rank by vector similarity")
     search.add_argument("--relation", choices=RELATION_TYPES, help="Return supported published relations of this type")
     args = parser.parse_args()
 
@@ -357,13 +470,11 @@ def main():
         settings = load_config(args.config)
         release = settings["release"]
         index_dir = settings["index_dir"]
-        if index_dir.is_relative_to(release):
-            raise ValueError("Index must be outside the published directory")
         if args.command == "build-index":
-            _, metadata, entities, annotations = load_release(release)
-            result = build_index(index_dir, settings["model_dir"], metadata, entities, annotations)
+            _, metadata, entities, annotations, model_files = load_release(release, settings)
+            result = build_index(index_dir, settings, metadata, entities, annotations, model_files)
         else:
-            result = MemorySearch(settings).query(args.text, args.relation)
+            result = MemorySearch(settings).query(args.text, args.relation, vector_only=args.vector_only)
     except (OSError, ValueError, KeyError, ImportError, RuntimeError, yaml.YAMLError) as error:
         parser.exit(1, f"memory_rag: {error}\n")
     print(json.dumps(result, ensure_ascii=False))

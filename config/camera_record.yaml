@@ -1,4 +1,4 @@
-# Supplied recording profile: explicit diagnostic clock/domain/registration declarations remain in force.
+# 本录包配置沿用已明确声明的诊断时钟、时钟域和配准设置。
 bag:
   save_raw_cdr: false             # 保留提取媒体与 JSONL，省略原始消息副本。
   input: /absolute/path/to/camera_record

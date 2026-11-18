@@ -19,7 +19,7 @@ flowchart LR
 | BagBuilder | [录包、配置、观测编号与 RGB-D 验收](modules/bag/bag_builder.md) |
 | MemoryEngine | [手动工具、深度定位与自动写入批次](modules/engine/memory_engine.md) · [人工标注](modules/engine/memory_annotate.md) · [实体纠错](modules/engine/correct_memory.md) · [记忆版本发布](modules/engine/memory_publication.md) |
 | MemoryViewer | [检查界面和标注交接（规划）](modules/viewer/memory_viewer.md) |
-| RAG 查询 | [本地索引与查询](modules/engine/memory_rag.md) · [实施与验收](project/rag_plan.md) |
+| RAG 查询 | [统一索引配置与查询](modules/engine/memory_rag.md) · [Agent 双路径检索](modules/engine/memory_rag.md#接入-vln_agent) · [Jetson 部署](modules/engine/memory_rag.md#jetson-nano-部署) · [实施与验收](project/rag_plan.md) |
 | Memory | [正式观测、实体与 SQLite 契约](modules/memory/memory.md) |
 | RGB | [彩色解码与 ROS 适配](modules/rgb/rgb.md) |
 | Depth | [米制解码、重投影与区域定位](modules/depth/depth.md) |

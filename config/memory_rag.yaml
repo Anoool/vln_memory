@@ -1,6 +1,27 @@
 # 相对路径以本文件所在目录为基准。
-release: ../build/rag/r2/site_s4-model-zh-v1
-index_dir: ../build/rag/r2/index
-model_dir: ../build/rag/e5-small
+# 当前运行环境：desktop 或 jetson。两种环境共享一份索引。
+environment: desktop
+environments:
+  desktop:
+    batch_size: 16
+    intra_op_threads: 4
+  jetson:
+    batch_size: 2
+    intra_op_threads: 2
+
+release: ../build/rag/e2e-200-20261118/site_s4-bag217-deepseek-v1
+index_dir: ../build/rag/e2e-200-20261118/index
+model_id: Xenova/multilingual-e5-small
+model_revision: 761b726dd34fb83930e26aab4e9ac3899aa1fa78
+model_path: ../build/rag/e5-small-arm64/model_quantized.onnx
+tokenizer_path: ../build/rag/e5-small-arm64/tokenizer.json
+onnx_output: last_hidden_state
+dimension: 384
+pad_token: "<pad>"
+pooling: mean
+passage_prefix: "passage: "
+query_prefix: "query: "
+max_length: 128
 top_k: 3
 service_name: /vln_memory/search_memory
+context_service_name: /vln_memory/retrieve_context

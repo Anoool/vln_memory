@@ -19,8 +19,9 @@ BagBuilder 和 MemoryEngine 共用 [vln_memory.yaml](../../config/vln_memory.yam
 
 | 阶段 | 状态与验收 |
 | --- | --- |
-| R1 · [本地索引与检索](../modules/engine/memory_rag.md) | 已实现。E5-small 完成实体检索，发布中文名称和别名后可精确区分两个背包。 |
+| R1 · [本地索引与检索](../modules/engine/memory_rag.md) | 已实现。217 条观测的正式版有 53 条实体向量。桌面和 Jetson 通过同一 YAML 切换运行参数并复用索引。 |
 | R2 · [回查关系与证据](../modules/engine/memory_rag.md) | 已实现。用四帧发布版验证 `hanging_on`、定位引用与原图回读。 |
 | R3 · [接入 vln_agent](../modules/engine/memory_rag.md#接入-vln_agent) | 已实现。常驻 ROS 服务复用本地索引与编码器，`search_memory` 通过现有工具和会话接口返回证据。 |
+| R4 · [输入前召回](../modules/engine/memory_rag.md#接入-vln_agent) | Agent 将用户文字编码检索，把候选与原指令送入同一条模型消息。检索失败时原消息继续处理。 |
 
 R1 和 R2 共用独立 CLI。在线导航单独验收。详细接口和任务见 [RAG 实施方案](rag_plan.md)。

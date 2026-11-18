@@ -14,11 +14,11 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `vectors.npy` | `N × 384` 的 `float32` 矩阵，一行一个实体。 |
+| `vectors.npy` | `N × dimension` 的 `float32` 矩阵，一行一个实体。默认 E5-small 为 384 维。 |
 | `entity_ids.json` | 依矩阵行顺序保存实体 ID。 |
-| `index.json` | 索引格式、发布版本、发布清单 SHA-256、模型 ID 和修订、维度及行数。 |
+| `index.json` | 索引格式、发布版本、发布清单 SHA-256、模型与分词器摘要、编码配置、维度及行数。 |
 
-每次加载检查索引与发布版本的清单、行数、维度和实体 ID 是否一致。新发布版本或更换 Embedding 模型时重建索引。
+每次加载检查索引与发布版本的清单、行数、维度和实体 ID 是否一致。新发布版本、更换 Embedding 模型或编码配置时重建索引。当前默认使用同一个 E5-small INT8 ONNX 导出。YAML 的 `environment` 选择批量和 CPU 线程数，桌面和 Jetson 共用模型和索引。板端验收项见 [部署说明](../modules/engine/memory_rag.md#jetson-nano-部署)。
 
 ## R1 · 本地检索
 
@@ -34,17 +34,21 @@
 
 调用方指定 `hanging_on` 等关系时，从同版本 `relations.jsonl` 按实体 ID 取原始有序端点、另一端和支持观测。缺少对应记录时报告证据不足。向量用于候选排序，数值距离沿用发布记录。
 
-R1 与 R2 共用以下 CLI。发布目录、索引目录、模型目录和候选数在 [config/memory_rag.yaml](../../config/memory_rag.yaml) 配置。中文精确匹配使用包含中文标注的发布版本。
+R1 与 R2 共用以下 CLI。当前 [config/memory_rag.yaml](../../config/memory_rag.yaml) 指向 217 条观测的正式包及单份已建索引。首次建索引或更换发布、模型时使用 `build-index`。
 
 ~~~bash
-build/rag/venv/bin/python tools/memory_rag.py build-index
-build/rag/venv/bin/python tools/memory_rag.py query --text "黑色背包" --relation hanging_on
+build/rag/venv/bin/python tools/memory_rag.py query \
+  --text "black backpack hung on chair backrest" --relation hanging_on
 ~~~
 
-验收时从 `hanging_on` 查到椅子和支持观测，并从背包实体回查 RGB 1607、Depth 1575 和原始选区。四帧版本位于原项目的 `/home/dev/agent/vln_memory/build/minimal-real-bag-20261117/site_s4-model-v1`，可以只读使用。发布目录也可以按 [README](../../README.md) 重新生成后传入。
+历史四帧验收从 `hanging_on` 查到椅子和支持观测，并从背包实体回查 RGB 1607、Depth 1575 和原始选区。当前正式包的结果见 [217 条观测验收](../reviews/verification.md#217-条观测与共享索引验收)。四帧版本位于原项目的 `/home/dev/agent/vln_memory/build/minimal-real-bag-20261117/site_s4-model-v1`，可以只读使用。发布目录也可以按 [README](../../README.md) 重新生成后传入。
 
 ## R3 · 接入 vln_agent
 
 常驻 Python 进程加载已发布版本和索引，通过 ROS 2 服务暴露同一套查询逻辑。`vln_agent` 的 `ToolManager` 注册 `search_memory` 插件，返回现有 `ToolResult.data`。先用 `/vln/tool_call` 验证真实查询，再从会话查看模型调用和工具结果。发布版本变更时重建索引并重启检索进程。[启动与配置](../modules/engine/memory_rag.md#接入-vln_agent)
 
 检索结果携带实体及观测引用，RGB-D 工具负责现场确认。在线导航另行验收，历史物体坐标用于缩小搜索范围，停车点依据当前可通行区域选择。
+
+## R4 · 发送用户消息前召回
+
+Agent 将首条及后续用户指令送入独立的 `retrieve_context` ROS 入口，强制执行向量检索。召回候选及同版定位证据随原消息送给模型。没有候选、服务失败或超时则发送原消息。模型可继续通过 `search_memory` 发送明确的实体描述和关系问题。两条路径复用一个编码器和索引，无需重建已有索引。[接口与配置](../modules/engine/memory_rag.md#接入-vln_agent)

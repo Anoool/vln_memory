@@ -1,4 +1,4 @@
-"""Exercise installed-style observation dataset CLI against BagBuilder fixtures."""
+"""使用 BagBuilder 测试数据验证按安装方式调用的观测数据集 CLI。"""
 import argparse
 import hashlib
 import json
@@ -10,18 +10,18 @@ import tempfile
 
 
 def read_json(path):
-  """Load one artifact with its declared JSON object format."""
+  """按产物声明的 JSON 对象格式加载数据。"""
   return json.loads(path.read_text(encoding="utf-8"))
 
 
 def rows(path):
-  """Load rows in their published order."""
+  """按发布时的顺序加载记录。"""
   with path.open(encoding="utf-8") as stream:
     return [json.loads(line) for line in stream]
 
 
 def call(binary, source, output, purpose="rgb", map_frame="map", cwd=None, mode="reference"):
-  """Run the public CLI and keep return code and structured outcome."""
+  """运行公开 CLI，保留退出码和结构化结果。"""
   completed = subprocess.run([
     str(binary.resolve()), "--input", str(source.resolve()), "--output", str(output), "--purpose", purpose,
     "--batch-size", "1", "--map-id", "fixture", "--geometry-revision", "v1",
@@ -32,7 +32,7 @@ def call(binary, source, output, purpose="rgb", map_frame="map", cwd=None, mode=
 
 
 def check_published(source, output, expected):
-  """Verify batch order, identity, time preservation, source binding and file layout."""
+  """核对批次顺序、标识、原始时间、来源绑定和文件布局。"""
   manifest = read_json(output / "observation_manifest.json")
   assert manifest["schema_version"] == "observation_dataset/2"
   assert manifest["file_sha256"] == {
@@ -65,13 +65,13 @@ def check_published(source, output, expected):
 
 
 def check_reader(binary, root, source, good, expected, empty_output):
-  """Cover indexed retrieval, old schema, relocation, damaged data, and changes after open."""
+  """覆盖索引检索、旧数据格式、目录迁移、数据损坏和打开后发生的数据变更。"""
   def check(mode, output, *args):
-    """Run the normal C++ consumer and preserve failure output."""
+    """运行常规 C++ 读取程序，并保留失败输出。"""
     subprocess.run([str(binary.resolve()), mode, str(output), *map(str, args)], check=True)
 
   def legacy_copy(name):
-    """Construct the old manifest over unchanged v1 observation rows."""
+    """基于原有的 v1 观测记录构造旧版清单。"""
     output = root / name
     shutil.copytree(good, output)
     manifest_file = output / "observation_manifest.json"
@@ -156,7 +156,7 @@ def check_reader(binary, root, source, good, expected, empty_output):
 
 
 def check_semantic(binary, dataset, database):
-  """Apply structured results to a portable dataset and verify saved relation semantics."""
+  """将结构化结果应用到便携数据集，并验证已保存关系的语义。"""
   first = rows(dataset / "observations.jsonl")[0]
   raw = {key: first[key] for key in ("rgb_stamp", "depth_stamp", "source_manifest_sha256")}
 
@@ -204,7 +204,7 @@ def check_semantic(binary, dataset, database):
 
 
 def check_bundle(binary, reader, store, semantic, root, source, expected):
-  """Move a portable release after removing its old source path and exercise normal consumers."""
+  """将来源移出原路径后迁移便携发布目录，并用常规读取程序验证。"""
   private_source = root / "bundle_input"
   shutil.copytree(source, private_source)
   output = root / "bundle_output"
@@ -228,7 +228,7 @@ def check_bundle(binary, reader, store, semantic, root, source, expected):
 
 
 def check_direct(reader, semantic, root, fixture, legacy_output):
-  """Move both direct depth formats, read their media and reject changed bytes."""
+  """迁移两种直接深度格式的数据，验证媒体仍可读取且字节被修改时会拒绝读取。"""
   legacy = rows(legacy_output / "observations.jsonl")
   for storage in ("metric_npy", "source_png16"):
     direct = root / ("moved_" + storage)
@@ -250,10 +250,10 @@ def check_direct(reader, semantic, root, fixture, legacy_output):
 
 
 def check_project_bag_builder(binary, root, fixture):
-  """Run the single-YAML entry point with one good pair and one corrupt depth image."""
+  """用一对正常图像和一张损坏的深度图验证单 YAML 配置入口。"""
   output = root / "project_memory"
   config = root / "project.yaml"
-  # A JSON document is valid YAML and needs no test-only parser dependency.
+  # JSON 文档也是有效的 YAML，可直接使用，省去测试专用的解析依赖。
   config.write_text(json.dumps({
       "dataset": {"bag_path": str(fixture / "bad_depth_compressed_bag"), "memory_dir": str(output),
                   "map_id": "fixture", "geometry_revision": "v1", "map_basis": "Fixture recorded TF",
@@ -286,7 +286,7 @@ def check_project_bag_builder(binary, root, fixture):
 
 
 def check_memory_engine(binary, root, fixture):
-  """Exercise the YAML tool entry point and verify the optional point artifact."""
+  """验证 YAML 工具入口和可选的点集产物。"""
   dataset = root / "engine_dataset"
   shutil.copytree(fixture / "direct_source_png16", dataset)
   config = root / "engine.yaml"
@@ -317,7 +317,7 @@ def check_memory_engine(binary, root, fixture):
 
 
 def check_entity_tools(binary, root, fixture):
-  """Build and reopen one memory, including stale updates and atomic rollback."""
+  """构建并重新打开一份记忆，覆盖过期更新和原子回滚。"""
   dataset = root / "entity_tool_dataset"
   shutil.copytree(fixture / "direct_source_png16", dataset)
   config = root / "entity_tools.yaml"
@@ -325,7 +325,7 @@ def check_entity_tools(binary, root, fixture):
   first, second = [row["id"] for row in rows(dataset / "observations.jsonl")]
 
   def run(name, args, status="ok"):
-    """Call the installed-style JSONL interface in a fresh process."""
+    """在新进程中调用按安装方式使用的 JSONL 接口。"""
     request = json.dumps({"name": name, "arguments": args}) + "\n"
     completed = subprocess.run([str(binary.resolve()), "--config", str(config)], input=request,
                                text=True, capture_output=True, timeout=20, check=False)
@@ -335,20 +335,20 @@ def check_entity_tools(binary, root, fixture):
     return result
 
   def region(label):
-    """Create an area from an explicit interior confirmation."""
+    """根据明确的内部区域确认创建一个区域实体。"""
     return run("create_entity", {"kind": "region", "semantic_label": label,
                "add_observations": [{"observation_id": first, "confirmation_ref": "fixture/interior"}]})["entity"]
 
   def view(observation, column):
-    """Select a valid pixel on the depth grid."""
+    """在深度网格上选取一个有效像素。"""
     return {"observation_id": observation, "selector": {"type": "point", "image": "depth", "pixel_xy": [column, 0]}}
 
   def relation(kind, ids):
-    """Give a relation actual observation evidence."""
+    """为关系关联实际观测证据。"""
     return {"type": kind, "entity_ids": ids, "evidence_observation_ids": [first]}
 
   def spatial(kind, ids):
-    """Check one relation in the engine's view of the database."""
+    """按引擎读取数据库的方式检查一条关系。"""
     return run("spatial_query", {"operation": kind, "entity_ids": ids})
 
   room, hall = region("room"), region("hall")
@@ -435,7 +435,7 @@ def check_entity_tools(binary, root, fixture):
 
 
 def main():
-  """Check happy path, bad depth, empty selection, atomic failure, and overwrite refusal."""
+  """覆盖正常流程、无效深度、空选择、失败时的原子性和拒绝覆盖。"""
   parser = argparse.ArgumentParser()
   parser.add_argument("--binary", type=Path, required=True)
   parser.add_argument("--reader", type=Path, required=True)
@@ -474,7 +474,7 @@ def main():
   first = rows(damaged / "rgbd_pairs.jsonl")[0]
   frame = next(f for f in rows(damaged / "frames.jsonl") if f["source"]["message_id"] == first["depth_message_id"])
   media = damaged / frame["media_path"]
-  # Keep the complete header so only the full depth read detects the truncation.
+  # 保留完整文件头，使截断问题只在完整读取深度数据时被检测到。
   media.write_bytes(media.read_bytes()[:26])
   damaged_output = root / "damaged"
   code, result = call(args.binary, damaged, damaged_output)

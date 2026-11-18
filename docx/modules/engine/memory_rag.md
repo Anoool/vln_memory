@@ -4,37 +4,69 @@
 
 ## 安装和模型
 
-使用 Python 3.10 或更新版本。以下命令从仓库根目录执行。示例权重是 [E5-small 官方 ONNX 导出](https://huggingface.co/intfloat/multilingual-e5-small/tree/ccc66d3/onnx) 中的 INT8 CPU 版本，当前验证环境支持 AVX-512 VNNI。第一次下载模型，之后编码在本地执行。
+使用 Python 3.10 或更新版本。以下命令从仓库根目录执行。桌面和 Jetson 共用 [Xenova 的 E5-small INT8 ONNX 导出](https://huggingface.co/Xenova/multilingual-e5-small/tree/761b726dd34fb83930e26aab4e9ac3899aa1fa78/onnx)，下载权重后在本地编码。
 
 ~~~bash
 python3 -m venv build/rag/venv
 build/rag/venv/bin/python -m pip install -r tools/requirements-rag.txt
 
-mkdir -p build/rag/e5-small
-model_url=https://huggingface.co/intfloat/multilingual-e5-small/resolve/ccc66d3bcd826f577e26b9a4072cc5fe3a7ad6a3/onnx
-curl -fL "$model_url/tokenizer.json" -o build/rag/e5-small/tokenizer.json
-curl -fL "$model_url/model_qint8_avx512_vnni.onnx" -o build/rag/e5-small/model_qint8_avx512_vnni.onnx
+mkdir -p build/rag/e5-small-arm64
+model_url=https://huggingface.co/Xenova/multilingual-e5-small/resolve/761b726dd34fb83930e26aab4e9ac3899aa1fa78
+curl -fL "$model_url/tokenizer.json" -o build/rag/e5-small-arm64/tokenizer.json
+curl -fL "$model_url/onnx/model_quantized.onnx" -o build/rag/e5-small-arm64/model_quantized.onnx
 ~~~
 
-系统未提供 `venv` 的 pip 支持时，可安装 Ubuntu 的 `python3-venv`。模型搬到其他位置时，在 YAML 的 `model_dir` 填写包含这两个同版文件的目录。
+系统未提供 `venv` 的 pip 支持时，可安装 Ubuntu 的 `python3-venv`。YAML 中的 `model_path` 和 `tokenizer_path` 分别指向 ONNX 文件与同版 `tokenizer.json`。
 
 ## 建索引和查询
 
-默认读取 [config/memory_rag.yaml](../../../config/memory_rag.yaml)，其中 `release`、`index_dir`、`model_dir` 和 `top_k` 分别设置发布目录、索引目录、模型目录和候选数量。相对路径从 YAML 所在目录解析。默认指向本地中文标注验收版本；换数据时修改配置或使用另一份配置。新建索引时，`index_dir` 应尚不存在且位于发布目录之外。
+CLI 和 ROS 检索服务默认共读 [config/memory_rag.yaml](../../../config/memory_rag.yaml)。相对路径以 YAML 所在目录为基准。
+
+| 配置 | 当前值 |
+| --- | --- |
+| `release` | `../build/rag/e2e-200-20261118/site_s4-bag217-deepseek-v1`，包含实体、关系、观测及双图证据。 |
+| `index_dir` | `../build/rag/e2e-200-20261118/index`，包含 53 个实体的 384 维向量。 |
+| `environment` | `desktop` 用于当前桌面环境，批大小 16，CPU 线程数 4。部署到 Jetson Nano 时选 `jetson`，批大小和线程数均为 2。 |
+| `model_id`、`model_revision`、`model_path`、`tokenizer_path` | 两个环境共享 E5-small INT8 ONNX 及其分词器，由这组字段指定。 |
+
+**有匹配的索引时直接查询。** 当前版本可用英文实体标签精确查证关系，中文描述可走向量召回。通过 `--config /path/to/rag.yaml` 可读取另一份配置，参数放在 `query` 或 `build-index` 前。
+
+~~~bash
+build/rag/venv/bin/python tools/memory_rag.py query \
+  --text "black backpack hung on chair backrest" --relation hanging_on
+build/rag/venv/bin/python tools/memory_rag.py query --vector-only --text "黑色背包"
+~~~
+
+**首次构建或编码配置变更时，建一次索引。** 更换发布版本、模型、分词器、编码长度、ONNX 输出、池化或文本前缀时，将 `index_dir` 指向发布目录之外的一个新目录，再运行：
 
 ~~~bash
 build/rag/venv/bin/python tools/memory_rag.py build-index
-build/rag/venv/bin/python tools/memory_rag.py query --text "黑色背包" --relation hanging_on
-build/rag/venv/bin/python tools/memory_rag.py --config /path/to/rag.yaml query --text "黑色背包"
 ~~~
 
-索引包含 `vectors.npy`、`entity_ids.json` 和 `index.json`。发布清单或模型修订变更后，使用新目录生成对应索引。发布文件摘要、实体 ID 顺序、索引行数和向量维度会在读取时校验。
+`index_dir` 内有 `vectors.npy`、`entity_ids.json` 和 `index.json`。`memory_rag/2` 清单记录发布摘要、模型与分词器摘要和编码设置，查询启动时会校验。**切换 `environment` 只会改变推理参数，直接复用这三个文件。** `top_k` 可独立调整。
+
+更换 ONNX 模型时，在同一 YAML 设置输出名、维数、池化、填充词元和查询前缀。兼容的模型使用自包含的 ONNX 文件与可独立加载的 `tokenizer.json`，接收 int32 或 int64 的 `input_ids`，可选 `attention_mask` 和 `token_type_ids`。池化可以是 `mean`、`cls` 或 `none`，分别对应按掩码求均值、取首词元和使用二维句向量。向量会统一归一化。
+
+旧配置中的 `model_dir` 需要改成显式的 `model_path` 和 `tokenizer_path`，缺少的参数可从默认 YAML 补齐。旧版 `memory_rag/1` 索引可从原发布目录重建，发布数据可直接复用。
 
 | 查询状态 | 含义 |
 | --- | --- |
 | `exact` | 在名称、别名和原语义标签中找到唯一的精确匹配。 |
 | `candidates` | 同一模型编码查询，按余弦相似度排序。得分用于比较候选。 |
 | `empty` | 该发布版本没有实体。 |
+
+## Jetson Nano 部署
+
+原版 Jetson Nano 使用 Cortex-A57 ARM64。NVIDIA 的 JetPack 4 基于 Ubuntu 18.04，ROS 2 Humble 的官方目标平台为 Ubuntu 22.04 ARM64。以下配置面向具备 Python 3.10、兼容 ARM64 CPU 的 ONNX Runtime，以及与 Agent 匹配的 ROS 2 运行环境。板上先检查 `uname -m`、`python3 --version` 及本机依赖导入，再启动服务。[NVIDIA JetPack 说明](https://developer.nvidia.com/embedded/faq) · [ROS 2 Humble 目标平台](https://github.com/ros-infrastructure/rep/blob/master/rep-2000.rst#humble-hawksbill-may-2022---may-2027) · [ONNX Runtime ARM64 安装包](https://pypi.org/project/onnxruntime/1.22.1/#files)
+
+将 [统一 YAML](../../../config/memory_rag.yaml) 中的 `environment` 改成 `jetson`。共同的编码长度限制为 128 词元，Jetson 环境的批大小和线程数均为 2。部署时使用桌面已构建的同一份索引。
+
+~~~bash
+build/rag/venv/bin/python -c 'import onnxruntime, tokenizers; print(onnxruntime.get_available_providers())'
+build/rag/venv/bin/python tools/memory_rag.py query --text "肩带放在椅背的随身包"
+~~~
+
+部署时把整个发布目录、单份 `index/`、ONNX 文件和分词器复制到目标机，按实际目录填写 YAML 的 `release`、`index_dir`、`model_path`、`tokenizer_path`。先在板上运行查询示例，再启动检索服务。板端联调时测量首次语义查询和常驻内存，再按实测延迟配置 Agent 的 `timeout_sec`。
 
 ## 坐标、关系和观测
 
@@ -48,12 +80,19 @@ build/rag/venv/bin/python tools/memory_rag.py --config /path/to/rag.yaml query -
 
 原版 `site_s4-model-v1` 的纯向量检索将「黑色背包」排第 1，将「灰棕色背包」排第 3。通过 [`memory_annotate`](memory_annotate.md) 在工作库副本补上中文名称和别名，重新发布并建索引后，「黑色背包」「灰棕色背包」「灰褐色背包」分别精确命中对应实体。
 
-本地验收产物在 `build/rag/r2/`。已用 `site_s4-model-zh-v1` 和同级的 `index/` 验证 `--text "黑色背包" --relation hanging_on`，查到灰色转椅和两条支持观测。黑色背包的定位证据为 RGB 1607、Depth 1575，可回读双图并复算出相同代表点。
+本地验收产物在 `build/rag/r2/`。已用 `site_s4-model-zh-v1` 及对应索引验证 `--text "黑色背包" --relation hanging_on`，查到灰色转椅和两条支持观测。黑色背包的定位证据为 RGB 1607、Depth 1575，可回读双图并复算出相同代表点。
 
 
 ## 接入 vln_agent
 
-先构建并安装 `vln_agent`，启用其 YAML 中的 `memory` 工具组。Agent 和检索进程使用同一 ROS domain，两个 YAML 的 `service_name` 保持一致。启动检索服务时，先 source Agent 的 ROS 工作空间，Python 才能导入 `vln_agent/srv/SearchMemory`。
+先构建并安装 `vln_agent`。Agent 和检索进程使用同一 ROS domain。启动检索服务时，先 source Agent 的 ROS 工作空间，Python 才能导入 `vln_agent/srv/SearchMemory`。一个 RAG 进程提供两个使用同一协议的 ROS 服务。
+
+| 路径 | 触发方式 | 配置对接 |
+| --- | --- | --- |
+| `search_memory` | 模型根据问题发出工具调用。精确名称先匹配，其他描述走向量检索。可带 `relation` 核对关系。 | Agent 工具组的 `service_name` 对应 RAG 的 `service_name`。 |
+| `retrieve_context` | Agent 在发送用户消息前对完整文字做向量检索，即使文字恰好等于实体名称也返回相似候选。 | Agent `memory_context.service_name` 对应 RAG 的 `context_service_name`。 |
+
+自动路径附加 `{"source":"memory_rag","data":{...}}` 到同一条用户消息。`data` 包含发布版本、地图、候选相似度与定位证据引用，候选数量由 RAG YAML 的 `top_k` 控制。模型可忽略无关候选或进一步主动查证。设置 `memory_context.enabled: false` 可关闭自动路径。检索失败或达到该组的 `timeout_sec` 时，Agent 继续处理原消息。
 
 ~~~bash
 source /opt/ros/humble/setup.bash
@@ -64,4 +103,4 @@ build/rag/venv/bin/python tools/memory_rag_server.py
 
 服务默认使用 `config/memory_rag.yaml`。启动时校验发布和索引，首个向量查询加载模型，后续重用。查询工具参数为 `text` 和 `relation`，只查实体时给 `relation: null`。服务返回实体、坐标、关系和观测引用，以 JSON 放入 `ToolResult.data`。Agent 的 YAML 配置等待超时，换发布版本时重建索引并重启检索进程。
 
-本地验收使用 `site_s4-model-zh-v1`。已验证 ROS 工具服务和模拟 Responses 会话均能通过 `search_memory` 查到黑色背包及灰色转椅，并从 ROS 用户输出话题收到模拟回复。工作区里默认 Fast DDS 的跨进程请求出现超时，该轮验收使用 `rmw_cyclonedds_cpp` 和回环网络。会话模型效果与实车导航分别验收。
+当前正式包 `site_s4-bag217-deepseek-v1` 已通过本地联调。模拟 Responses 会话首轮收到 3 条自动候选，主动调用 `search_memory` 返回黑色背包的精确命中和 `hanging_on` 关系。当前联调使用 x86_64 WSL、`rmw_cyclonedds_cpp` 和回环网络。Jetson 真机运行、线上会话模型效果与实车导航属于后续验收。
