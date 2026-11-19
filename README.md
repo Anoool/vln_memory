@@ -1,6 +1,6 @@
 # vln_memory_RAG
 
-`vln_memory` 是用于视觉语言导航的 ROS 2 Humble / C++17 空间语义记忆包。BagBuilder 从 RGB-D 录包发布可回读的正式观测；MemoryEngine 读取观测、计算地图坐标并把实体和关系写入 SQLite。记忆发布后，由 RAG 检索实体与关系，并向 Agent 提供坐标和观测证据。ROS 包名和现有命令仍为 `vln_memory`。MemoryViewer 处于规划阶段。
+这是用于视觉语言导航的 ROS 2 Humble / C++17 空间语义记忆项目，ROS 包名仍为 `vln_memory`。离线流程是 **RGB-D 录包 → BagBuilder 导出观测 → MemoryEngine 识别和定位实体 → 发布记忆包**。RAG 从发布包建立本地向量索引，供 `vln_agent` 查询实体、地图坐标、关系和观测证据。SQLite 用于离线建库和纠错，RAG 查询读取发布文件和向量索引。
 
 | 模块 | 入口与文档 |
 | --- | --- |
@@ -52,23 +52,43 @@ ros2 run vln_memory bag_builder --config config/vln_memory.yaml
 ros2 run vln_memory memory_engine --config config/vln_memory.yaml --build
 ~~~
 
-第二条命令需要配置兼容 Responses 的视觉模型。服务密钥填同目录的本地 `config/api_key.yaml`。BagBuilder 输出 `observations.jsonl` 和 `evidence/`，MemoryEngine 在同一目录写 `entities.sqlite3`。单条工具请求和旧入口见 [MemoryEngine 文档](docx/modules/engine/memory_engine.md#快速开始与典型示例)。
+`bag_builder` 生成 `observations.jsonl` 和 `evidence/`。`memory_engine --build` 调用配置中的视觉 API（217 条观测验收使用 DeepSeek），将实体和关系写入同目录的 `entities.sqlite3`；服务密钥放在本地 `config/api_key.yaml`。RAG 的文本编码使用本地 ONNX 模型，无需调用视觉 API。更多操作见 [MemoryEngine 文档](docx/modules/engine/memory_engine.md#快速开始与典型示例)。
 
-工作库可用 `ros2 run vln_memory memory_engine --config config/vln_memory.yaml --publish OUTPUT_DIR` 发布为独立的记忆版本，参见[记忆版本发布](docx/modules/engine/memory_publication.md)。
+建库完成后，用新目录发布记忆：
+
+~~~bash
+ros2 run vln_memory memory_engine --config config/vln_memory.yaml --publish OUTPUT_DIR
+~~~
+
+发布目录包含 `manifest.json`、`entities.jsonl`、`relations.jsonl`、`observations.jsonl` 和 `evidence/`，可独立回读实体、关系及 RGB-D 证据。完整结构见[记忆版本发布](docx/modules/engine/memory_publication.md)。
 
 ## RAG 查询
 
-[config/memory_rag.yaml](config/memory_rag.yaml) 当前指向 `site_s4-bag217-deepseek-v1` 正式包及其共享索引，包含 217 条观测、53 个已定位实体和 27 条关系。编码使用本地 E5-small INT8 ONNX。
+[config/memory_rag.yaml](config/memory_rag.yaml) 统一指定发布目录 `release`、索引目录 `index_dir`、模型 `model_path` 和分词器 `tokenizer_path`。当前配置指向正式包 `site_s4-bag217-deepseek-v1` 和同级的 `index/`，默认使用 E5-small INT8 ONNX 编码为 384 维向量。发布包、模型权重和索引属于本地产物，新检出仓库后需准备这些文件并配置路径。首次建索引或更换发布包、模型、分词器、编码设置时，运行 `build/rag/venv/bin/python tools/memory_rag.py build-index`。安装与建索引步骤见 [RAG 使用说明](docx/modules/engine/memory_rag.md#安装和模型)。
 
-从仓库根目录，直接用现有索引查询：
+已有索引时，从项目根目录查询：
 
 ~~~bash
+# 主动查证：查询黑色背包及挂在椅背上的关系
 build/rag/venv/bin/python tools/memory_rag.py query \
   --text "black backpack hung on chair backrest" --relation hanging_on
+
+# 自动召回：查看发给模型前会附加的候选
+build/rag/venv/bin/python tools/memory_rag.py query --context --text "实验室里的绿帘"
 ~~~
 
-当前环境为 `desktop`。部署到 Jetson Nano 时，将同一份 YAML 的 `environment` 改为 `jetson`，即可用该环境的批大小和 CPU 线程数读取现有索引。发布版本或编码配置变更时，再按[建索引与部署说明](docx/modules/engine/memory_rag.md#建索引和查询)构建索引。
+Agent 通过同一个 RAG 进程使用两条路径：模型主动调用 `search_memory` 查实体或关系；Agent 在发出用户消息前调用 `retrieve_context`，先用目标名称和词表筛选，再对原句编码排序。自动入口没有候选、超时或出错时，Agent 继续处理原消息。服务启动和配置见 [Agent 接入](docx/modules/engine/memory_rag.md#接入-vln_agent)。
 
-`vln_agent` 通过同一个检索进程使用两条只读路径。模型可主动调用 `search_memory` 查证实体或关系，Agent 也可在发送用户指令前通过 `retrieve_context` 附上相似候选。参见 [Agent 接入](docx/modules/engine/memory_rag.md#接入-vln_agent)和 [217 条观测验收](docx/reviews/verification.md#217-条观测与共享索引验收)。
+在 YAML 中设置 `environment: desktop` 或 `environment: jetson` 即可切换批大小和 CPU 线程数。两种环境复用同一份 `vectors.npy`、`entity_ids.json` 和 `index.json`，切换环境无需重建索引。目标机还需准备相同的发布包、模型和分词器。
+
+## 当前验收与待完善
+
+真实录包的 217 条观测已完成 DeepSeek 建库，发布包包含 **53 个已定位实体、27 条关系和 11 条待定位记录**。在 x86_64 WSL 上，两个环境配置读取同一份索引；本地模拟 Responses 会话验证了 Agent 的自动召回和主动查证。优化后，同一录包、同组选帧设置的导出耗时约从 158 秒降到 59 秒，217 条观测记录及引用图像摘要一致。四帧本地回环测试中，同尺寸 JPEG 请求体减少约 90%；真实 API 效果仍需对照。详见 [217 条观测与共享索引验收](docx/reviews/verification.md#217-条观测与共享索引验收)。
+
+自动召回已支持「座椅」等常用别名，并在常见空间句式中按目标筛选。例如问「白色设备柜旁边的紫色直升机」时，参照物「设备柜」不会单独成为自动候选。
+
+- **Jetson Nano 与会话：** 上板验证模型可加载，测首次查询、后续查询延迟及内存，再用真实会话模型验证两条检索路径和超时回退。
+- **视觉请求压缩：** 用同一批帧对照 PNG 和 JPEG 的 DeepSeek 结果，比较标签、定位选区、关系和整轮耗时。
+- **坐标可靠性：** 当前观测的物理同步与配准仍标为 `unknown`。把历史坐标用于实车导航前，需要用受控实拍验证坐标误差。
 
 开发约定见 [AGENTS.md](AGENTS.md)。项目采用 [Apache License 2.0](LICENSE)。

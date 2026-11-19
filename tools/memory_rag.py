@@ -18,6 +18,20 @@ ENCODER_FIELDS = (
     "pooling", "pad_token", "passage_prefix", "query_prefix",
 )
 RELATION_TYPES = ("inside", "near", "on", "hanging_on", "connects_regions")
+CONTEXT_ENGLISH_RELATION = re.compile(
+    r" (?:next to|close to|in front of|with|near|beside|by|against|at|in|on|under|"
+    r"behind|above|below|inside|hung|hanging|leaning) "
+)
+CONTEXT_LOCATION = (
+    r"(?:旁边|边上|附近|里面|外面|上面|下面|前面|后面|上方|下方|门口|入口|出口|旁|里|内|外|上|下|前|后)"
+)
+CONTEXT_LEADING_LANDMARK = re.compile(
+    rf"{CONTEXT_LOCATION}\s*(?:的|有)|(?:靠近|挨着|紧邻)[^的，。！？；,.!?;]+的"
+)
+CONTEXT_TRAILING_LANDMARK = re.compile(
+    rf"(?<![现正存])在[^在，。！？；,.!?;]*{CONTEXT_LOCATION}(?=\s*(?:[吗么呢吧？?，,。.!！；;]|$))"
+    r"|(?:靠近|挨着|紧邻)(?=\s*[^\s，。！？；,.!?;])"
+)
 
 
 class OnnxEncoder:
@@ -250,13 +264,19 @@ def context_topics(text, aliases):
     return {i for i, group in enumerate(aliases) if any(context_has_term(text, alias) for alias in group)}
 
 
+def context_target(text):
+    """从规范化的查询或名称中提取常见空间描述的目标，用于筛选实体。"""
+    # ponytail: 只识别常用空间句式，复合指代需要另行理解句意。
+    target = CONTEXT_LEADING_LANDMARK.split(text)[-1].strip()
+    trailing = CONTEXT_TRAILING_LANDMARK.search(target)
+    if trailing and trailing.start() > 0:
+        target = target[:trailing.start()].rstrip()
+    return CONTEXT_ENGLISH_RELATION.split(target, maxsplit=1)[0]
+
+
 def context_entity_topics(names, aliases):
     """只用名称主体确定实体类别，避免把名称中提到的周边物体归为该实体。"""
-    subjects = []
-    for name in names:
-        subject = re.split(r" (?:with|near|beside|by|against|on|under|hung|hanging|leaning) ", name, maxsplit=1)
-        subjects.append(subject[0])
-    return context_topics(" ".join(subjects), aliases)
+    return context_topics(" ".join(context_target(name) for name in names), aliases)
 
 
 def rank_entities(
@@ -492,14 +512,16 @@ class MemorySearch:
         return self.encoder.encode([text], self.settings["query_prefix"])[0]
 
     def relevant_context_ids(self, text):
-        """只接受命中实体名称或同义类的自动候选，缺少匹配时返回空集。"""
+        """用查询目标的名称或同义类筛选自动候选，缺少匹配时返回空集。"""
         query = normalize_name(text)
-        topics = context_topics(query, self.context_aliases)
-        return {
-            entity_id for entity_id, names in self.context_names.items()
-            if topics & self.context_entity_topics[entity_id]
-            or any(context_has_term(query, name) for name in names)
-        }
+        target = context_target(query)
+        topics = context_topics(target, self.context_aliases)
+        relevant_ids = set()
+        for entity_id, names in self.context_names.items():
+            if (query in names or topics & self.context_entity_topics[entity_id]
+                    or any(context_has_term(target, name) for name in names)):
+                relevant_ids.add(entity_id)
+        return relevant_ids
 
     def query(self, text, relation=None, *, vector_only=False, context=False):
         """返回排序后的匹配及证据，自动上下文可拒绝低相关输入。"""

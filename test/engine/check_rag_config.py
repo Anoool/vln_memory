@@ -10,7 +10,10 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from memory_rag import DEFAULT_CONFIG, MemorySearch, build_index, check_encoder_files, load_config, load_release, rank_entities
+from memory_rag import (
+    DEFAULT_CONFIG, MemorySearch, build_index, check_encoder_files, context_target,
+    load_config, load_release, rank_entities,
+)
 
 
 def check(root):
@@ -118,7 +121,24 @@ def check_retrieval_modes():
     assert [row["entity_id"] for row in result["matches"]] == ["chair"]
 
 
+def check_context_targets():
+    """覆盖参照物在目标前后、短方位和非空间用法，防止筛掉真正目标。"""
+    cases = {
+        "白色设备柜旁边的亮紫色直升机在哪里": "亮紫色直升机",
+        "亮紫色直升机在白色设备柜旁边吗": "亮紫色直升机",
+        "白色设备柜旁边有亮紫色直升机吗": "亮紫色直升机吗",
+        "靠近门口的扫把": "扫把",
+        "扫把在门口吗": "扫把",
+        "挂在椅背上的黑色背包": "黑色背包",
+        "现在想找带滚轮的座椅": "现在想找带滚轮的座椅",
+        "black backpack hung on chair backrest": "black backpack",
+    }
+    for text, target in cases.items():
+        assert context_target(text) == target, text
+
+
 if __name__ == "__main__":
     with TemporaryDirectory() as directory:
         check(Path(directory))
     check_retrieval_modes()
+    check_context_targets()

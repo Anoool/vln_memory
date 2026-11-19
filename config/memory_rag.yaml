@@ -29,7 +29,7 @@ context_service_name: /vln_memory/retrieve_context
 # 自动给 Agent 附加上下文时使用的中英文同义词组。
 context_aliases:
   - [backpack, backpacks, bag, bags, 背包, 随身包, 书包, 挎包]
-  - [chair, chairs, stool, stools, 椅子, 椅背, 办公椅, 转椅]
+  - [chair, chairs, stool, stools, 椅子, 椅背, 办公椅, 转椅, 座椅, 滚轮椅]
   - [cabinet, cabinets, cupboard, cupboards, 设备柜, 柜子, 橱柜]
   - [workbench, table, tables, desk, desks, 桌子, 桌面, 工作台]
   - [monitor, monitors, screen, screens, 显示器, 屏幕]

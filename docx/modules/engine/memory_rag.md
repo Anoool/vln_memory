@@ -91,13 +91,13 @@ build/rag/venv/bin/python tools/memory_rag.py query --text "肩带放在椅背�
 | 路径 | 触发方式 | 配置对接 |
 | --- | --- | --- |
 | `search_memory` | 模型根据问题发出工具调用。精确名称先匹配，其他描述走向量检索。可带 `relation` 核对关系。 | Agent 工具组的 `service_name` 对应 RAG 的 `service_name`。 |
-| `retrieve_context` | Agent 在发送用户消息前先用名称、别名和 YAML `context_aliases` 筛选相关实体，再按向量相似度排序。 | Agent `memory_context.service_name` 对应 RAG 的 `context_service_name`。 |
+| `retrieve_context` | Agent 在发送用户消息前先用目标名称、别名和 YAML `context_aliases` 筛选实体，再对原句编码排序。 | Agent `memory_context.service_name` 对应 RAG 的 `context_service_name`。 |
 
-自动路径附加 `{"source":"memory_rag","data":{...}}` 到同一条用户消息。`data` 包含发布版本、地图、候选相似度与定位证据引用，候选数量由 RAG YAML 的 `top_k` 控制。`context_aliases` 中每一组是同类实体的中英文近义词。词表随场景扩充。没有可靠词项时自动路径保留原用户消息，模型仍可主动查证。`--context` 可本地复现自动入口，例如：
+自动路径附加 `{"source":"memory_rag","data":{...}}` 到同一条用户消息。`data` 包含发布版本、地图、候选相似度与定位证据引用，候选数量由 RAG YAML 的 `top_k` 控制。`context_aliases` 中每一组是同类实体的中英文近义词，例如「座椅」和 `chair`。筛选支持「参照物旁边的目标」「目标在参照物旁边」等常见句式；参照物单独命中时不会成为自动候选。没有目标匹配时，自动路径保留原用户消息，模型仍可主动查证。`--context` 可本地复现自动入口，例如：
 
 ~~~bash
 build/rag/venv/bin/python tools/memory_rag.py query --context --text "实验室里的绿帘"
-build/rag/venv/bin/python tools/memory_rag.py query --context --text "一架亮紫色直升机"
+build/rag/venv/bin/python tools/memory_rag.py query --context --text "白色设备柜旁边的亮紫色直升机在哪里"
 ~~~
 
 设置 `memory_context.enabled: false` 可关闭自动路径。检索失败或达到该组的 `timeout_sec` 时，Agent 继续处理原消息。
