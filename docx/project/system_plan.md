@@ -11,7 +11,7 @@
 | B2 · 实体与关系 | 已实现 `search_entities`、`create_entity`、`update_entity`、`spatial_query`。验收永久 ID、观测证据、修订冲突、归属、距离定义和事务。 |
 | B3 · 模型批次 | 已实现 Responses 工具循环、跨帧冲突拒写和同 ID 补定位。用固定录包四帧从空库验收定位实体、带观测依据的关系和跨批次追加。另以实际帧验证旧证据保留和位置冲突回滚。 |
 | B4 · 纠错、标注、发布 | 已实现 [`memory_engine --publish`](../modules/engine/memory_publication.md)，从工作库原子发布版本。已实现 [`memory_annotate`](../modules/engine/memory_annotate.md) 保存和发布人工标注。已实现 [`correct_memory`](../modules/engine/correct_memory.md) 的 update/merge/split/retract，保留证据和修改理由。 |
-| C · [MemoryViewer](../modules/viewer/memory_viewer.md) | 待实现。验收从同一真实录包构建、检查地图、按实体/关系/时间回查原图和选区、提交标注再重开回读。 |
+| C · [MemoryViewer](../modules/viewer/memory_viewer.md) | 可点选实体，查看定位、其他观测和关系证据，也可分页查看全部图片。网页支持保存和重读显示名称、别名和备注。底图与轨迹待实现。 |
 
 BagBuilder 和 MemoryEngine 共用 [vln_memory.yaml](../../config/vln_memory.yaml)，以 `dataset.memory_dir` 交接。项目录包固定包含彩色和深度图。地图、时钟段、深度比例和几何版本应明确，采样时间相近不能作为物理配准或曝光同步的证据。
 

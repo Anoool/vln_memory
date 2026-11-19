@@ -1,0 +1,11 @@
+# MemoryViewer 的页面主题；从项目根目录启动 Streamlit 时生效。
+[client]
+toolbarMode = "viewer"
+
+[theme]
+base = "light"
+primaryColor = "#2f6f8f"
+backgroundColor = "#f6f8fa"
+secondaryBackgroundColor = "#eef2f6"
+textColor = "#1f2328"
+borderColor = "#d8dee4"

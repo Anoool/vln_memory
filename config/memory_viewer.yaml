@@ -1,0 +1,5 @@
+# 路径相对于本配置文件。省略 annotations 段即可关闭网页编辑。
+release: ../build/rag/e2e-200-20261118/site_s4-bag217-deepseek-v1
+annotations:
+  engine: ../build/realbag-200-ros/memory_engine
+  engine_config: ../build/rag/e2e-200-20261118/offline-deepseek.yaml

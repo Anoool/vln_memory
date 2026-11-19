@@ -7,7 +7,7 @@ flowchart LR
   B -->|"双图 Observation + evidence"| E["MemoryEngine"]
   E -->|"实体、关系、证据、回执"| W["SQLite 工作库"]
   W -->|"版本发布"| R["已发布记忆"]
-  R -.-> V["MemoryViewer：规划"]
+  R --> V["MemoryViewer：地图和证据"]
   R --> Q["本地 RAG 实体检索"]
   Q --> A2["vln_agent 搜索工具"]
 ~~~
@@ -18,7 +18,7 @@ flowchart LR
 | --- | --- |
 | BagBuilder | [录包、配置、观测编号与 RGB-D 验收](modules/bag/bag_builder.md) |
 | MemoryEngine | [手动工具、深度定位与自动写入批次](modules/engine/memory_engine.md) · [人工标注](modules/engine/memory_annotate.md) · [实体纠错](modules/engine/correct_memory.md) · [记忆版本发布](modules/engine/memory_publication.md) |
-| MemoryViewer | [检查界面和标注交接（规划）](modules/viewer/memory_viewer.md) |
+| MemoryViewer | [图库、有限标注和启动](modules/viewer/memory_viewer.md) |
 | RAG 查询 | [统一索引配置与查询](modules/engine/memory_rag.md) · [Agent 双路径检索与目标筛选](modules/engine/memory_rag.md#接入-vln_agent) · [Jetson 部署](modules/engine/memory_rag.md#jetson-nano-部署) · [实施与验收](project/rag_plan.md) |
 | Memory | [正式观测、实体与 SQLite 契约](modules/memory/memory.md) |
 | RGB | [彩色解码与 ROS 适配](modules/rgb/rgb.md) |

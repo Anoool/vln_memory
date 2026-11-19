@@ -6,7 +6,7 @@
 | --- | --- |
 | BagBuilder | `bag_builder`，[录包配置、配对与产物](docx/modules/bag/bag_builder.md) |
 | MemoryEngine | `memory_engine`，[JSONL 工具、模型批次与恢复](docx/modules/engine/memory_engine.md) |
-| MemoryViewer | [地图检查与人工标注（规划）](docx/modules/viewer/memory_viewer.md) |
+| MemoryViewer | [启动地图、图库和人工标注](docx/modules/viewer/memory_viewer.md) |
 | RAG 查询 | [本地建索引与查询](docx/modules/engine/memory_rag.md) · [实施规划](docx/project/rag_plan.md) |
 
 基础模块、系统架构及验收记录见[文档导航](docx/README.md)。
