@@ -82,6 +82,12 @@ def check():
   assert not app.exception and not app.error
   assert sum(last in item.value for item in app.caption) == 2
 
+  app.segmented_control(key="section").set_value("实体与标注").run()
+  assert not app.exception and app.selectbox(key="selected_entity").value == multiple
+  app.segmented_control(key="section").set_value("全部图片").run()
+  assert not app.exception and app.number_input(key="gallery_page").value == last_page
+  assert any(last in item.value for item in app.caption)
+
 
 if __name__ == "__main__":
   check()

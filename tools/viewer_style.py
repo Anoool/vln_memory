@@ -32,6 +32,15 @@ PAGE_STYLE = """
   }
   .mv-relation-kind { white-space: nowrap; }
   div[data-testid="stColumn"]:has(.st-key-mv_map_panel) { position: sticky; top: 2.4rem; align-self: flex-start; }
+  @media (max-width: 960px) {
+    [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-mv_map_panel) {
+      flex-direction: column;
+    }
+    [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-mv_map_panel) > [data-testid="stColumn"] {
+      flex: 0 0 auto; width: 100%;
+    }
+    div[data-testid="stColumn"]:has(.st-key-mv_map_panel) { position: static; }
+  }
   .st-key-mv_evidence_images [data-testid="stImage"] img {
     max-height: max(170px, calc((100vh - 400px) / 2)); width: auto !important; max-width: 100%;
     display: block; margin: 0 auto; object-fit: contain;

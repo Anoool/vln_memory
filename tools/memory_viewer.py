@@ -232,7 +232,8 @@ def gallery_controls(observations):
   pages = (count + GALLERY_PAGE_SIZE - 1) // GALLERY_PAGE_SIZE
   st.markdown(section_html("图库"), unsafe_allow_html=True)
   page = st.number_input(
-    f"图库页码（共 {pages} 页）", min_value=1, max_value=pages, value=1, step=1, key="gallery_page",
+    f"图库页码（共 {pages} 页）", min_value=1, max_value=pages, value=1, step=1,
+    key="gallery_page", persist_state="session",
   )
   start = (page - 1) * GALLERY_PAGE_SIZE
   items = list(islice(observations.items(), start, start + GALLERY_PAGE_SIZE))
@@ -300,7 +301,7 @@ def show_annotation_form(editor, entity, annotation):
   revision = annotation["annotation_revision"]
   st.caption(f"仅编辑以下三个字段 · 模型原标签：{markdown_text(entity['semantic_label'])}")
   if st.session_state.pop("saved_annotation", None) == entity_id:
-    st.success("标注已保存。")
+    st.success("标注已保存并在 Viewer 生效。Agent 要查到新标注，需发布新版记忆并重建索引。")
   with st.form(f"annotation_{entity_id}_{revision}", border=False):
     name = st.text_input("显示名称", value=annotation["display_name"] or "")
     alias_column, note_column = st.columns(2)
@@ -382,7 +383,7 @@ def entity_controls(entities, option_names):
   st.markdown(section_html("实体"), unsafe_allow_html=True)
   selected = st.selectbox(
     "选择实体", list(entities), format_func=option_names.__getitem__, key="selected_entity",
-    help="可输入名称筛选，也可直接在地图上点选。",
+    persist_state="session", help="可输入名称筛选，也可直接在地图上点选。",
   )
   return selected
 
