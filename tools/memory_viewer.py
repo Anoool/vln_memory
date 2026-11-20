@@ -2,6 +2,7 @@
 
 import argparse
 from collections import Counter
+from html import escape
 from itertools import islice
 import json
 from pathlib import Path
@@ -130,15 +131,19 @@ def jump_to_entity(entity_id):
 
 
 def relation_sentence(relation, names, selected):
-  """把关系按原始方向写成 Markdown 句子；选中实体加粗，类型原文保留在代码样式中。"""
+  """按原始方向渲染已转义的关系；实体名可换行，关系短语保持完整。"""
   parts = []
   for entity_id in relation["entity_ids"]:
-    name = markdown_text(names[entity_id])
+    name = escape(names[entity_id])
     if entity_id == selected:
-      name = f"**{name}**"
+      name = f"<strong>{name}</strong>"
     parts.append(name)
-  label = RELATION_LABELS.get(relation["type"], relation["type"])
-  return f"{' → '.join(parts)} · {markdown_text(label)} `{relation['type']}`"
+  relation_type = relation["type"]
+  label = escape(RELATION_LABELS.get(relation_type, relation_type))
+  return (
+    f'<div>{" → ".join(parts)} <span class="mv-relation-kind">'
+    f'· {label} <code>{escape(relation_type)}</code></span></div>'
+  )
 
 
 def observation_caption(obs_id, observation):
@@ -215,9 +220,10 @@ def show_evidence(release, entity, observations, relations, names):
   if zoom_clicked:
     show_observation_dialog(release, obs_id, observations[obs_id], selector=selector)
   if relation:
-    st.markdown(relation_sentence(relation, names, entity["entity_id"]))
+    st.markdown(relation_sentence(relation, names, entity["entity_id"]), unsafe_allow_html=True)
     st.caption(f"关系依据：{relation['basis']}")
-  show_observation(release, obs_id, observations[obs_id], selector, stacked=True)
+  with st.container(key="mv_evidence_images"):
+    show_observation(release, obs_id, observations[obs_id], selector, stacked=True)
 
 
 def gallery_controls(observations):
@@ -239,7 +245,7 @@ def gallery_controls(observations):
 
 
 def show_gallery_card(release, number, obs_id, observation):
-  """渲染一张图库卡片：序号、放大按钮和 RGB-D 缩略图；读取失败时在卡片内提示。"""
+  """在当前列显示图库卡片；读取失败时在卡片内提示。"""
   with st.container(border=True):
     with st.container(horizontal=True, wrap=False, vertical_alignment="center"):
       st.markdown(f"**#{number}**", width="content")
@@ -267,10 +273,11 @@ def show_gallery(release, observations):
       except (OSError, ValueError, TypeError, KeyError) as error:
         st.warning(f"无法读取这组图像：{error}")
   start = (page - 1) * GALLERY_PAGE_SIZE
-  columns = st.columns(2)
-  for index, (obs_id, observation) in enumerate(items):
-    with columns[index % len(columns)]:
-      show_gallery_card(release, start + index + 1, obs_id, observation)
+  for offset in range(0, len(items), 2):
+    columns = st.columns(2, gap="medium")
+    for index, (obs_id, observation) in enumerate(items[offset:offset + 2]):
+      with columns[index]:
+        show_gallery_card(release, start + offset + index + 1, obs_id, observation)
 
 
 def load_annotation_editor(config_path, manifest):
@@ -336,7 +343,7 @@ def show_relation_list(selected, relations, names):
         break
     with st.container(border=True):
       with st.container(horizontal=True, wrap=False, vertical_alignment="center"):
-        st.markdown(relation_sentence(relation, names, selected), width="stretch")
+        st.markdown(relation_sentence(relation, names, selected), unsafe_allow_html=True, width="stretch")
         st.button(
           "查看", key=f"jump_{selected}_{index}", on_click=jump_to_entity, args=(other,),
           disabled=other == selected, width="content", icon=":material/arrow_forward:",
@@ -413,12 +420,13 @@ def show_entities(release, manifest, entities, annotations, observations, relati
   related = related_entity_ids(selected, entity_relations)
   map_column, inspector_column = st.columns([1.12, 1], gap="large")
   with map_column:
-    st.markdown(map_legend_html(), unsafe_allow_html=True)
-    st.plotly_chart(
-      entity_figure(entities, names, selected, related, manifest["memory_version"], MAP_HEIGHT_PX),
-      key="entity_map", on_select=select_map_entity, selection_mode="points",
-      config={"displaylogo": False, "scrollZoom": False},
-    )
+    with st.container(key="mv_map_panel"):
+      st.markdown(map_legend_html(), unsafe_allow_html=True)
+      st.plotly_chart(
+        entity_figure(entities, names, selected, related, manifest["memory_version"], MAP_HEIGHT_PX),
+        key="entity_map", on_select=select_map_entity, selection_mode="points",
+        config={"displaylogo": False, "scrollZoom": False},
+      )
   with inspector_column:
     show_entity_inspector(
       release, entities[selected], observations, entity_relations, names, (editor, working, readonly_reason),

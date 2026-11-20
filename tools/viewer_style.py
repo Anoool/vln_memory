@@ -26,9 +26,17 @@ PAGE_STYLE = """
   [data-testid="stImageCaption"] { color: #4b5563; margin-top: .2rem; }
   [data-testid="stTabs"] [data-baseweb="tab-list"] { gap: 1.2rem; }
   [data-testid="stTabs"] [data-baseweb="tab-panel"] { padding-top: .6rem; }
+  body:has(.st-key-selected_entity input[role="combobox"][aria-expanded="true"])
   [data-testid="stSelectboxVirtualDropdown"] {
-    min-width: 440px !important; max-width: min(560px, 90vw) !important;
+    width: min(26rem, calc(100vw - 2rem)) !important;
   }
+  .mv-relation-kind { white-space: nowrap; }
+  div[data-testid="stColumn"]:has(.st-key-mv_map_panel) { position: sticky; top: 2.4rem; align-self: flex-start; }
+  .st-key-mv_evidence_images [data-testid="stImage"] img {
+    max-height: max(170px, calc((100vh - 400px) / 2)); width: auto !important; max-width: 100%;
+    display: block; margin: 0 auto; object-fit: contain;
+  }
+  .st-key-mv_evidence_images [data-testid="stImageContainer"] { align-items: center; }
   .mv-section { font-size: .78rem; font-weight: 600; letter-spacing: .04em; color: #6b7280; margin: .4rem 0 .2rem 0; }
   .mv-entity-name { font-size: 1.3rem; font-weight: 650; color: #1f2328; margin: 0 0 .3rem 0; line-height: 1.3; }
   .mv-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .1rem; }

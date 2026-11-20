@@ -12,7 +12,7 @@ CALLOUT_MAX_CHARS = 28
 CALLOUT_HEIGHT_PX = 26.0
 CALLOUT_CLEARANCE_PX = 13.0
 LEADER_CLEARANCE_PX = 14.0
-ESTIMATED_PLOT_WIDTH_PX = 480.0
+CANDIDATE_PLOT_WIDTHS_PX = (360.0, 520.0, 760.0)
 PLOT_VERTICAL_CHROME_PX = 72.0
 HOVER_TEMPLATE = "<b>%{text}</b><br>X %{x:.2f} m · Y %{y:.2f} m<extra></extra>"
 CALLOUT_CANDIDATES = (
@@ -25,6 +25,8 @@ CALLOUT_CANDIDATES = (
   (22.0, -26.0, "left", "bottom"),
   (-22.0, -26.0, "right", "bottom"),
 )
+FAR_CALLOUT_SCALE = 2.0
+FAR_CALLOUT_COST = 4.0
 
 
 def related_entity_ids(selected, relations):
@@ -125,16 +127,16 @@ def callout_score(ax_px, ay_px, box, plot_limits, neighbor_offsets, related_offs
   return penalty
 
 
-def choose_callout_placement(entities, located, selected, related, x_range, y_range, label, height_px):
-  """在 8 个方向中挑选最不遮挡邻近点和边界的标签位置，返回 (ax, ay, xanchor, yanchor)。"""
+def screen_layout(entities, located, selected, related, x_range, y_range, plot_width_px, height_px):
+  """按假设的绘图宽度（像素）把邻近实体换算为相对选中点的屏幕偏移；返回（图框边界, 普通点偏移, 关联点偏移）。"""
   origin = entities[selected]["position_map"]
   plot_height_px = max(120.0, height_px - PLOT_VERTICAL_CHROME_PX)
   span_x = max(1e-3, x_range[1] - x_range[0])
   span_y = max(1e-3, y_range[1] - y_range[0])
-  meters_per_px = max(span_x / ESTIMATED_PLOT_WIDTH_PX, span_y / plot_height_px)
+  meters_per_px = max(span_x / plot_width_px, span_y / plot_height_px)
   center_x = 0.5 * (x_range[0] + x_range[1])
   center_y = 0.5 * (y_range[0] + y_range[1])
-  half_vis_x = 0.5 * ESTIMATED_PLOT_WIDTH_PX * meters_per_px
+  half_vis_x = 0.5 * plot_width_px * meters_per_px
   half_vis_y = 0.5 * plot_height_px * meters_per_px
   plot_limits = (
     ((center_x - half_vis_x) - origin[0]) / meters_per_px + 6.0,
@@ -155,15 +157,39 @@ def choose_callout_placement(entities, located, selected, related, x_range, y_ra
       related_offsets.append((px_x, px_y))
     else:
       neighbor_offsets.append((px_x, px_y))
+  return plot_limits, neighbor_offsets, related_offsets
+
+
+def callout_candidates():
+  """返回候选标签位置：8 个近距离方向，加上引线加长 FAR_CALLOUT_SCALE 倍的同方向备选；每项附带固定偏好代价。"""
+  candidates = []
+  for index, (ax_px, ay_px, xanchor, yanchor) in enumerate(CALLOUT_CANDIDATES):
+    candidates.append((ax_px, ay_px, xanchor, yanchor, index * 0.1))
+  for index, (ax_px, ay_px, xanchor, yanchor) in enumerate(CALLOUT_CANDIDATES):
+    far_cost = FAR_CALLOUT_COST + index * 0.1
+    candidates.append((ax_px * FAR_CALLOUT_SCALE, ay_px * FAR_CALLOUT_SCALE, xanchor, yanchor, far_cost))
+  return candidates
+
+
+def choose_callout_placement(entities, located, selected, related, x_range, y_range, label, height_px):
+  """在近、远两圈共 16 个候选中挑选最不遮挡邻近点和边界的标签位置，返回 (ax, ay, xanchor, yanchor)。
+
+  服务端无法得知浏览器里的实际绘图宽度，因此对 CANDIDATE_PLOT_WIDTHS_PX 中的窄、中、宽三种宽度
+  分别评分后求和，使标签在笔记本和大屏上都尽量不压住邻近点。
+  """
+  layouts = []
+  for plot_width_px in CANDIDATE_PLOT_WIDTHS_PX:
+    layouts.append(screen_layout(entities, located, selected, related, x_range, y_range, plot_width_px, height_px))
   width_px = label_width_px(label)
   best = CALLOUT_CANDIDATES[0]
   best_score = None
-  for index, candidate in enumerate(CALLOUT_CANDIDATES):
-    ax_px, ay_px, xanchor, yanchor = candidate
+  for ax_px, ay_px, xanchor, yanchor, preference_cost in callout_candidates():
     box = callout_box_px(ax_px, ay_px, xanchor, yanchor, width_px)
-    score = callout_score(ax_px, ay_px, box, plot_limits, neighbor_offsets, related_offsets) + index * 0.1
+    score = preference_cost
+    for plot_limits, neighbor_offsets, related_offsets in layouts:
+      score += callout_score(ax_px, ay_px, box, plot_limits, neighbor_offsets, related_offsets)
     if best_score is None or score < best_score:
-      best = candidate
+      best = (ax_px, ay_px, xanchor, yanchor)
       best_score = score
   return best
 
@@ -221,7 +247,7 @@ def add_selected_callout(figure, entities, names, located, selected, related, x_
     x=position[0], y=position[1], text=escape(label), showarrow=True,
     ax=ax_px, ay=ay_px, xanchor=xanchor, yanchor=yanchor,
     arrowcolor=SELECTED_COLOR, arrowwidth=1.5, arrowhead=0, standoff=10,
-    bgcolor="rgba(255,255,255,0.94)", bordercolor=SELECTED_COLOR, borderwidth=1, borderpad=4,
+    bgcolor="rgba(255,255,255,0.78)", bordercolor=SELECTED_COLOR, borderwidth=1, borderpad=4,
     font=dict(color=SELECTED_COLOR, size=12),
   )
 
